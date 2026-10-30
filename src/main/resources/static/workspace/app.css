@@ -11,7 +11,7 @@
 .workspace-app .ws-pane { min-width:0; }
 .workspace-app .ws-load-status { margin:24px 50px; padding:18px; background:#fff; border:1px solid #e3e8df; color:#6e7b7c; font-size:13px; }
 .workspace-app .ws-content, .workspace-app .workspace-record-search .page, .workspace-app .workspace-record-detail .page { max-width:1560px; width:auto; margin:0 auto; padding:38px 50px 50px; }
-.workspace-app .workspace-kv .container { max-width:1560px; margin:0 auto; }
+.workspace-app .workspace-kv .container { max-width:none; margin:0 auto; }
 .workspace-app .workspace-config .kv-page-heading { margin-bottom:28px; }
 .workspace-app .workspace-config h1, .workspace-app .workspace-record-search h1 { margin:12px 0 10px; font-size:30px; line-height:1.35; }
 .workspace-app .workspace-config h1 span, .workspace-app .workspace-record-search h1 span { color:#4669e8; }

@@ -34,11 +34,13 @@ class BrowserLoginIntegrationTest {
  @Test void rememberedCookieIsSecureAndRevocable() throws Exception {
   String header=login(true);Cookie cookie=cookie(header);
   assertTrue(header.contains("HttpOnly"));assertTrue(header.contains("Secure"));assertTrue(header.contains("SameSite=Lax"));
-  assertTrue(header.contains("Max-Age=2592000"));
+  assertTrue(header.contains("Max-Age=34560000"));
   assertFalse(repository.existsById(cookie.getValue()));
   assertTrue(repository.existsById(BrowserSessionService.hash(cookie.getValue())));
+  assertEquals(Instant.parse("9999-12-31T23:59:59Z"), repository.findById(BrowserSessionService.hash(cookie.getValue())).orElseThrow().getExpiresAt());
   mvc().perform(get("/auth/check").cookie(cookie)).andExpect(status().isNoContent());
-  mvc().perform(get("/api/web-collections").cookie(cookie)).andExpect(status().isOk());
+  mvc().perform(get("/api/web-collections").cookie(cookie)).andExpect(status().isOk())
+   .andExpect(header().string("Set-Cookie",org.hamcrest.Matchers.containsString("Max-Age=34560000")));
   mvc().perform(post("/api/simple-kv/delete").cookie(cookie).contentType("application/json").content("{}"))
    .andExpect(status().isForbidden());
   mvc().perform(post("/auth/logout").cookie(cookie).header("Origin","https://evil.test")
@@ -62,7 +64,12 @@ class BrowserLoginIntegrationTest {
  }
 
  @Test void sessionOnlyCookieAndLoginValidation() throws Exception {
-  assertFalse(login(false).contains("Max-Age"));
+  String header=login(false);assertFalse(header.contains("Max-Age"));
+  Cookie cookie=cookie(header);
+  var saved=repository.findById(BrowserSessionService.hash(cookie.getValue())).orElseThrow();
+  assertTrue(saved.getExpiresAt().isBefore(Instant.now().plusSeconds(12 * 60 * 60 + 5)));
+  mvc().perform(get("/api/web-collections").cookie(cookie)).andExpect(status().isOk())
+   .andExpect(header().doesNotExist("Set-Cookie"));
   mvc().perform(post("/auth/login").header("Origin","https://evil.test").header("X-Requested-With","XMLHttpRequest")
    .contentType("application/json").content("{\"token\":\"integration-test-token\",\"remember\":true}")).andExpect(status().isForbidden());
   mvc().perform(post("/auth/login").header("Origin","https://example.test").header("X-Requested-With","XMLHttpRequest")

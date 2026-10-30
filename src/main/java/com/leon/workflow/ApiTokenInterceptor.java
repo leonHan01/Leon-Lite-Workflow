@@ -60,7 +60,11 @@ public class ApiTokenInterceptor implements HandlerInterceptor {
             }
         }
         if (validBrowserSession(request)) {
-            if (isSafeMethod(request.getMethod()) || validAdminWrite(request)) return true;
+            if (isSafeMethod(request.getMethod()) || validAdminWrite(request)) {
+                String cookie = sessions.refreshedCookie(request, fingerprint());
+                if (cookie != null) response.addHeader("Set-Cookie", cookie);
+                return true;
+            }
             response.sendError(HttpServletResponse.SC_FORBIDDEN);
             return false;
         }

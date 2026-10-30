@@ -29,8 +29,8 @@ public class BrowserAuthController {
         sessions.revoke(request);
         var cookie = ResponseCookie.from(BrowserSessionService.COOKIE_NAME, value)
                 .secure(true).httpOnly(true).sameSite("Lax").path("/");
-        if (body.remember()) cookie.maxAge(Duration.ofDays(30));
-        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).header(HttpHeaders.SET_COOKIE, cookie.build().toString())
+        String cookieHeader = body.remember() ? BrowserSessionService.persistentCookie(value) : cookie.build().toString();
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).header(HttpHeaders.SET_COOKIE, cookieHeader)
                 .body(Map.of("success", true));
     }
 

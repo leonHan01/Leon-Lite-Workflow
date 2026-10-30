@@ -13,10 +13,13 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.HexFormat;
+import org.springframework.http.ResponseCookie;
 
 @Service
 public class BrowserSessionService {
     public static final String COOKIE_NAME = "__Host-leon_session";
+    private static final Instant PERMANENT = Instant.parse("9999-12-31T23:59:59Z");
+    private static final Duration COOKIE_LIFETIME = Duration.ofDays(400);
     private final BrowserSessionRepository repository;
     private final SecureRandom random = new SecureRandom();
 
@@ -32,7 +35,7 @@ public class BrowserSessionService {
         BrowserSession session = new BrowserSession();
         session.setId(hash(value));
         session.setTokenFingerprint(fingerprint);
-        session.setExpiresAt(now.plus(remember ? Duration.ofDays(30) : Duration.ofHours(12)));
+        session.setExpiresAt(remember ? PERMANENT : now.plus(Duration.ofHours(12)));
         repository.save(session);
         return value;
     }
@@ -45,6 +48,22 @@ public class BrowserSessionService {
                 .filter(session -> session.getExpiresAt().isAfter(Instant.now()))
                 .filter(session -> MessageDigest.isEqual(session.getTokenFingerprint().getBytes(StandardCharsets.US_ASCII),
                         fingerprint.getBytes(StandardCharsets.US_ASCII))).isPresent();
+    }
+
+    public static String persistentCookie(String value) {
+        return ResponseCookie.from(COOKIE_NAME, value).secure(true).httpOnly(true)
+                .sameSite("Lax").path("/").maxAge(COOKIE_LIFETIME).build().toString();
+    }
+
+    @Transactional(readOnly = true)
+    public String refreshedCookie(HttpServletRequest request, String fingerprint) {
+        String value = cookie(request);
+        if (value == null) return null;
+        return repository.findById(hash(value))
+                .filter(session -> PERMANENT.equals(session.getExpiresAt()))
+                .filter(session -> MessageDigest.isEqual(session.getTokenFingerprint().getBytes(StandardCharsets.US_ASCII),
+                        fingerprint.getBytes(StandardCharsets.US_ASCII)))
+                .map(session -> persistentCookie(value)).orElse(null);
     }
 
     @Transactional

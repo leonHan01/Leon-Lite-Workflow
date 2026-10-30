@@ -2,6 +2,8 @@
 
 Java 21 / Spring Boot 的本地 Alfred 工作流服务。保留原项目的 `/alfred/query` 协议以及快捷项、书签、配置、JSON 记录、计算器、时间、Markdown、代码片段、LeetCode 名称和有道翻译功能；原有 `/hello` 也仍可使用。
 
+Leon Tools Pro 中保存的集合网页和工具网址也可直接在 Alfred 中输入关键词检索，回车打开网页。支持按网页或工具名称、网址，以及网页所属集合、分组和备注匹配；多个关键词可组合使用。结果来自当前服务的数据库，修改或删除后会立即反映在检索中。
+
 ## 启动
 
 需要 Java 21 和 Maven。macOS 可用 `export JAVA_HOME=$(/usr/libexec/java_home -v 21)` 选择 JDK。运行 `mvn spring-boot:run`，默认只监听 `127.0.0.1:8080`，管理首页为 `http://127.0.0.1:8080/`。
@@ -50,7 +52,7 @@ mvn package
 
 可设置 `LEON_AUTH_REQUIRED=true` 和 `LEON_AUTH_TOKEN_SHA256`（访问令牌 UTF-8 字节的 SHA-256 十六进制摘要）启用令牌认证，插件和 Alfred 以 `Authorization: Bearer <令牌>` 请求 `/api/**` 和 `/alfred/**`。认证要求开启但摘要缺失或格式错误时服务拒绝启动；缺失或错误令牌返回 401。两个配置未设置时，本机开发环境沿用原有无认证行为。公网必须使用 HTTPS，并在反向代理限制公开的路径；令牌、摘要和敏感配置不要写入日志或版本库。
 
-管理页面使用同一访问令牌在 `/admin-login.html` 登录。默认勾选“记住登录 30 天”，浏览器通过 `Secure`、`HttpOnly`、`SameSite=Lax` 的 Cookie 保存随机会话凭证，关闭浏览器后仍可登录；不勾选时使用浏览器会话 Cookie，服务端最长保留 12 小时。原始令牌不会写入 localStorage 或 sessionStorage，服务端保存会话摘要及有效期。会话保存在 H2 中，升级重启不会丢失；到期、主动退出、清除 Cookie 或更换访问令牌后需要重新登录。共享设备使用后点击右上角“退出登录”。
+管理页面使用同一访问令牌在 `/admin-login.html` 登录。默认勾选“永久记住登录”，服务端会话不设到期时间，浏览器通过 `Secure`、`HttpOnly`、`SameSite=Lax` 的 Cookie 保存随机会话凭证，关闭浏览器后仍可登录。持久 Cookie 设置为 400 天，使用管理接口时自动续期；浏览器可能限制 Cookie 的保存时间或清除 Cookie。不勾选时使用浏览器会话 Cookie，服务端最长保留 12 小时。原始令牌不会写入 localStorage 或 sessionStorage，服务端保存会话摘要及有效期。会话保存在 H2 中，升级重启不会丢失；主动退出、清除 Cookie 或更换访问令牌后需要重新登录。升级前创建的 30 天会话保持原有效期，重新登录后采用新设置。共享设备使用后点击右上角“退出登录”。
 
 HTTPS 代理通过内部 `/auth/check` 校验管理页面和静态资源的会话，仅公开登录及退出接口。管理接口支持 Cookie 和原有 Bearer 令牌；Cookie（以及兼容的 Basic）写请求必须来自 `LEON_AUTH_ADMIN_ORIGIN` 指定的准确来源，并携带 `X-Requested-With: XMLHttpRequest`。公网 Cookie 仅通过 HTTPS 发送，页面返回 `Cache-Control: no-store`；浏览器缓存不是登录凭证。Alfred 和 Chrome 插件继续使用原有 Bearer 认证。
 
