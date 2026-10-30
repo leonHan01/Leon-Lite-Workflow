@@ -1,0 +1,60 @@
+<div class="page">
+    <div class="topbar">
+        <div>
+            <h1>JSON 记录</h1>
+            <div class="meta" id="meta"></div>
+        </div>
+        <div class="actions">
+            <button data-ws-click="openSearch">搜索记录</button>
+            <button data-ws-click="copyPageUrl">复制 URL</button>
+            <button class="primary" data-ws-click="reloadRecord">刷新</button>
+        </div>
+    </div>
+
+    <div class="toolbar">
+        <input type="text" id="searchKeyword" placeholder="搜索字段名或值..." data-ws-input="scheduleSearchJSON">
+        <button data-ws-click="clearSearch">清空搜索</button>
+    </div>
+
+    <div class="search-results" id="searchResults">
+        <div class="search-results-header">
+            <div>
+                <span class="search-results-title">搜索结果</span>
+                <span class="search-results-count" id="searchCount">0 个匹配</span>
+            </div>
+            <div class="search-results-nav">
+                <button id="prevMatch" data-ws-click="prevMatch">上一</button>
+                <span class="current-match" id="currentMatch">0/0</span>
+                <button id="nextMatch" data-ws-click="nextMatch">下一</button>
+            </div>
+        </div>
+        <div class="search-results-list" id="searchResultsList"></div>
+    </div>
+
+    <section class="layout" id="jsonLayout"></section>
+
+    <section class="panel raw-panel" id="rawPanel" hidden>
+        <div class="panel-header">
+            <span class="panel-title">原始内容</span>
+            <div class="panel-tools">
+                <button data-ws-click="copyRaw">复制</button>
+            </div>
+        </div>
+        <pre id="rawContent"></pre>
+    </section>
+</div>
+
+<div class="modal" id="embeddedJsonModal" data-ws-click="handleModalBackdropClick">
+    <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="embeddedJsonTitle">
+        <div class="modal-header">
+            <div class="modal-title" id="embeddedJsonTitle">内嵌 JSON</div>
+            <div class="modal-actions">
+                <button data-ws-click="copyEmbeddedJSON">复制</button>
+                <button aria-label="关闭弹窗" data-ws-click="closeEmbeddedJSONModal">关闭</button>
+            </div>
+        </div>
+        <div class="modal-body">
+            <pre id="embeddedJsonContent"></pre>
+        </div>
+    </div>
+</div>

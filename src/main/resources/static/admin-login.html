@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>登录 · Leon Workflow</title>
+<style>
+*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f6f5f1;color:#26313c;font:14px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif}.login{width:420px;padding:38px;background:white;border:1px solid #e5e9e1;border-radius:20px;box-shadow:0 12px 40px #26313c08}.brand{font-size:23px;font-weight:750;letter-spacing:-1px}.brand span{color:#4669e8}h1{font-size:24px;margin:27px 0 8px}p{color:#83908a;margin:0 0 24px}label{display:block;color:#64726d;font-size:12px;font-weight:600}input[type=password]{width:100%;margin:8px 0 18px;border:1px solid #dce3da;background:#fbfcfa;border-radius:9px;padding:12px;font-size:14px}input:focus{outline:2px solid #aabcf6}.remember{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:400;margin-bottom:23px}.remember input{accent-color:#4669e8}button{width:100%;padding:12px;border:0;border-radius:9px;background:#4669e8;color:white;font-size:14px;font-weight:650;cursor:pointer}button:disabled{opacity:.6;cursor:wait}.error{color:#b45049;min-height:20px;margin:14px 0 0;font-size:12px}.note{color:#99a39d;font-size:11px;text-align:center;margin-top:22px}
+</style>
+</head>
+<body><main class="login">
+<div class="brand">leon<span>.</span></div>
+<h1>欢迎回到工作空间</h1><p>输入访问令牌，继续你的工作。</p>
+<form id="loginForm">
+<input type="text" name="username" value="leon" autocomplete="username" hidden>
+<label for="loginToken">访问令牌</label><input id="loginToken" name="password" type="password" autocomplete="current-password" required autofocus>
+<label class="remember"><input id="rememberLogin" type="checkbox" checked>记住登录 30 天</label>
+<button id="loginButton" type="submit">进入工作空间</button><p class="error" id="loginError" role="alert"></p>
+</form><div class="note">登录信息仅保存在当前设备的浏览器中</div>
+</main>
+<script>
+const form=document.getElementById('loginForm');
+form.addEventListener('submit',async event=>{
+ event.preventDefault();
+ const button=document.getElementById('loginButton');const error=document.getElementById('loginError');
+ const input=document.getElementById('loginToken');button.disabled=true;error.textContent='';
+ try{
+  const response=await fetch('/auth/login',{method:'POST',headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'},
+   body:JSON.stringify({token:input.value.trim(),remember:document.getElementById('rememberLogin').checked})});
+  input.value='';
+  if(!response.ok){error.textContent=response.status===401?'访问令牌不正确，请重新输入。':'暂时无法登录，请稍后重试。';return;}
+  const current=new URL(location.href);
+  const requested=current.pathname==='/admin-login.html'?(current.searchParams.get('next')||'/'):current.pathname+current.search;
+  const next=new URL(requested,location.origin);
+  const allowed=['/','/index.html','/simple-kv.html','/diamond.html','/json-record-search.html','/json-record.html'];
+  location.replace(next.origin===location.origin&&allowed.includes(next.pathname)?next.pathname+next.search:'/');
+ }catch{error.textContent='连接失败，请检查网络后重试。';}
+ finally{button.disabled=false;}
+});
+</script></body></html>

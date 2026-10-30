@@ -1,0 +1,152 @@
+    <div class="container">
+        <div class="kv-page-heading"><div><div class="lw-eyebrow"><span class="lw-eyebrow-line"></span> YOUR SHORTCUTS</div><h1>快捷项管理<span>.</span></h1><p>把常用的网址和文本，放在触手可及的地方。</p></div><span class="kv-heading-decoration" aria-hidden="true">✳</span></div>
+
+        <div class="kv-layout">
+            <div class="form-section">
+            <div class="kv-form-heading"><div><span class="kv-form-kicker">CREATE NEW</span><h2>新建快捷项</h2><p>为常用内容添加一个顺手的入口。</p></div><span class="kv-form-plus" aria-hidden="true">＋</span></div>
+            <input type="hidden" id="addId" value="">
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="addKey">Key</label>
+                    <input type="text" id="addKey" placeholder="输入 key，如: github">
+                </div>
+                <div class="form-group" style="max-width: 140px;">
+                    <label for="addType">类型</label>
+                    <select id="addType">
+                        <option value="text">文本</option>
+                        <option value="url">网址</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="addValue">Value</label>
+                    <input type="text" id="addValue" placeholder="输入 value，如: https://github.com">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="addTags">Tags（逗号分隔）</label>
+                    <input type="text" id="addTags" placeholder="如: 开发,工具">
+                </div>
+                <div class="form-group" style="max-width: 180px;">
+                    <label for="addCategory">类目</label>
+                    <input type="text" id="addCategory" placeholder="如: 工具">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Action</label>
+                    <div class="action-checkboxes">
+                        <label class="action-checkbox"><input type="checkbox" id="addActionTop" value="置顶"> 置顶</label>
+                        <label class="action-checkbox"><input type="checkbox" id="addActionHome" value="首页"> 首页</label>
+                    </div>
+                </div>
+                <div class="form-group" style="max-width: 200px;">
+                    <label>图标</label>
+                    <div class="icon-picker" id="addIconPicker">
+                        <input type="hidden" id="addIcon" value="">
+                        <div class="icon-picker-trigger" data-ws-click="toggleIconPicker" data-ws-arg="add">
+                            <span class="icon-picker-label">默认</span>
+                            <span class="arrow">▼</span>
+                        </div>
+                        <div class="icon-picker-dropdown" id="addIconDropdown"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="form-row" style="margin-bottom: 0;">
+                <button class="btn kv-add-button" data-ws-click="addKV"><span aria-hidden="true">＋</span> 添加快捷项</button>
+            </div>
+            </div>
+
+            <div class="list-section">
+            <div class="list-header">
+                <div class="kv-list-title"><div><span class="kv-form-kicker">YOUR COLLECTION</span><h2>全部快捷项 <span id="countLabel">0 条</span></h2></div><p>整理和管理你的常用内容</p></div>
+                <div class="list-tools">
+                    <label class="lw-sr-only" for="searchInput">搜索快捷项</label><input type="text" class="search-input" id="searchInput" placeholder="搜索 Key / Value / Tags / 类目..." data-ws-input="filterList">
+                    <input type="file" id="importJsonInput" accept=".json,application/json" style="display:none;" data-ws-change="importKVJson">
+                    <button class="btn btn-secondary" data-ws-click="triggerImportJson">导入 JSON</button>
+                    <button class="btn btn-secondary" data-ws-click="exportKVJson">导出 JSON</button>
+                </div>
+            </div>
+            <div id="kvCategoryGrid" class="category-grid"></div>
+            </div>
+        </div>
+        <footer class="lw-page-footer kv-footer"><span>LEON WORKFLOW</span><span>整理好每个小灵感 <b>✳</b></span></footer>
+    </div>
+    <!-- Edit Modal -->
+    <div class="modal-overlay" id="editModal">
+        <div class="modal">
+            <div class="modal-header">编辑 KV</div>
+            <div class="modal-body">
+                <input type="hidden" id="editId" value="">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="editKey">Key</label>
+                        <input type="text" id="editKey" placeholder="输入 key">
+                    </div>
+                    <div class="form-group" style="max-width: 140px;">
+                        <label for="editType">类型</label>
+                        <select id="editType">
+                            <option value="text">文本</option>
+                            <option value="url">网址</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="editValue">Value</label>
+                        <input type="text" id="editValue" placeholder="输入 value">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="editTags">Tags（逗号分隔）</label>
+                        <input type="text" id="editTags" placeholder="如: 开发,工具">
+                    </div>
+                    <div class="form-group" style="max-width: 180px;">
+                        <label for="editCategory">类目</label>
+                        <input type="text" id="editCategory" placeholder="如: 工具">
+                    </div>
+                </div>
+                <div class="form-row" style="margin-bottom: 0;">
+                    <div class="form-group">
+                        <label>Action</label>
+                        <div class="action-checkboxes">
+                            <label class="action-checkbox"><input type="checkbox" id="editActionTop" value="置顶"> 置顶</label>
+                            <label class="action-checkbox"><input type="checkbox" id="editActionHome" value="首页"> 首页</label>
+                        </div>
+                    </div>
+                    <div class="form-group" style="max-width: 200px;">
+                        <label>图标</label>
+                        <div class="icon-picker" id="editIconPicker">
+                            <input type="hidden" id="editIcon" value="">
+                            <div class="icon-picker-trigger" data-ws-click="toggleIconPicker" data-ws-arg="edit">
+                                <span class="icon-picker-label">默认</span>
+                                <span class="arrow">▼</span>
+                            </div>
+                            <div class="icon-picker-dropdown" id="editIconDropdown"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-cancel" data-ws-click="closeEditModal">取消</button>
+                <button class="btn btn-primary-dark" data-ws-click="saveEditKV">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="deleteModal">
+        <div class="modal confirm-modal">
+            <div class="modal-header">确认删除</div>
+            <div class="modal-body">
+                <div class="confirm-message">删除后不可恢复，请确认是否删除这个 KV。</div>
+                <div class="confirm-target" id="deleteTargetName"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-cancel" data-ws-click="closeDeleteModal">取消</button>
+                <button class="btn-delete" data-ws-click="confirmDeleteKV">确认删除</button>
+            </div>
+        </div>
+    </div>

@@ -1,0 +1,20 @@
+<div class="page">
+    <div class="topbar">
+        <div>
+            <div class="lw-eyebrow"><span class="lw-eyebrow-line"></span>YOUR RECORDS</div><h1>JSON 记录<span>.</span></h1>
+            <div class="hint">模糊搜索保存过的 JSON、req、resp 和原始日志</div>
+        </div>
+        <div class="actions">
+            <button data-ws-click="loadRecentRecords">最近记录</button>
+        </div>
+    </div>
+
+    <div class="search-box">
+        <input id="keywordInput" type="text" placeholder="输入关键字，如 id、traceId、接口名、错误码..." autocomplete="off">
+        <button class="primary" data-ws-click="searchRecords">搜索</button>
+        <button data-ws-click="clearKeyword">清空</button>
+    </div>
+
+    <div class="summary" id="summary">正在加载最近记录...</div>
+    <section class="results" id="results"></section>
+</div>
