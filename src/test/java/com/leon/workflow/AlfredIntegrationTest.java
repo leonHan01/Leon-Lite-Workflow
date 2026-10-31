@@ -17,6 +17,8 @@ import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.web.server.ResponseStatusException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.HexFormat;
 import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
@@ -60,6 +62,16 @@ class AlfredIntegrationTest {
     @Test void calculatorAndTimeCommandsWork() throws Exception {
         assertEquals("3", query("1+2").get(0).getMsgNeedToCopy());
         assertTrue(query("now").stream().anyMatch(r -> r.getTitle().startsWith("北京时间")));
+        assertEquals("2025-01-01 08:00:00", query("1735689600").get(0).getMsgNeedToCopy());
+        assertEquals("2025-01-01 08:00:00", query("1735689600000").get(0).getMsgNeedToCopy());
+        assertEquals("1793419200", query("2026-10-31 12:00:00").get(1).getMsgNeedToCopy());
+        assertEquals("| 列1 | 列2 |\n| --- | --- |\n|  |  |", query("md 表格").get(0).getMsgNeedToCopy());
+        assertEquals(1, query("md 表格").size());
+        LocalDate today = LocalDate.now(ZoneId.of("Asia/Shanghai"));
+        List<AlfredResult> calendar = query("cal");
+        assertEquals("今天：" + today, calendar.get(calendar.size() - 1).getTitle());
+        assertTrue(calendar.stream().anyMatch(result -> result.getTitle().contains(String.format("[%2d]", today.getDayOfMonth()))));
+        assertEquals("3", query("1+2").get(0).getMsgNeedToCopy());
     }
 
     @Test void savedKvIsSearchableAndVisibleOnHome() throws Exception {

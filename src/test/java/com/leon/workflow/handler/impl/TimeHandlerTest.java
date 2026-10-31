@@ -29,6 +29,23 @@ class TimeHandlerTest {
     }
 
     @Test
+    void timestampMatchingRequiresTenOrThirteenDigits() {
+        for (String input : List.of("1735689600", "1735689600000")) {
+            AlfredParam param = new AlfredParam();
+            param.setOriginParams(input);
+            assertTrue(timeHandler.matchEvent(param, false));
+            var results = timeHandler.doHandleAlfredEvent(param);
+            assertEquals("2025-01-01 08:00:00", results.get(0).getMsgNeedToCopy());
+            assertEquals("2025-01-01 00:00:00", results.get(1).getMsgNeedToCopy());
+        }
+        for (String input : List.of("123456789", "12345678901", "17356 89600", "1735689600+1")) {
+            AlfredParam param = new AlfredParam();
+            param.setOriginParams(input);
+            assertFalse(timeHandler.matchEvent(param, false));
+        }
+    }
+
+    @Test
     void shouldReturnBeijingTimeAndTimestampsForNow() {
         AlfredParam alfredParam = new AlfredParam();
         alfredParam.setOriginParams("now");
@@ -67,6 +84,32 @@ class TimeHandlerTest {
 
         assertTrue(timeHandler.matchEvent(validParam, false));
         assertFalse(timeHandler.matchEvent(invalidParam, false));
+    }
+
+    @Test
+    void shouldConvertBeijingDateTimeToTimestamps() {
+        AlfredParam alfredParam = new AlfredParam();
+        alfredParam.setOriginParams(" 2026-10-31 12:00:00 ");
+
+        assertTrue(timeHandler.matchEvent(alfredParam, false));
+        List<AlfredResult> results = timeHandler.doHandleAlfredEvent(alfredParam);
+
+        assertEquals(3, results.size());
+        assertEquals("北京时间：2026-10-31 12:00:00", results.get(0).getTitle());
+        assertEquals("2026-10-31 12:00:00", results.get(0).getMsgNeedToCopy());
+        assertEquals("秒级时间戳：1793419200", results.get(1).getTitle());
+        assertEquals("1793419200", results.get(1).getMsgNeedToCopy());
+        assertEquals("毫秒时间戳：1793419200000", results.get(2).getTitle());
+        assertEquals("1793419200000", results.get(2).getMsgNeedToCopy());
+    }
+
+    @Test
+    void shouldRejectIncompleteOrImpossibleDateTimes() {
+        for (String input : List.of("2026-10-31", "2026-10-31 12:00", "2026-02-31 12:00:00", "2026-10-31 24:00:00")) {
+            AlfredParam alfredParam = new AlfredParam();
+            alfredParam.setOriginParams(input);
+            assertFalse(timeHandler.matchEvent(alfredParam, false), input);
+        }
     }
 
     private void assertTimeResults(List<AlfredResult> results, ZonedDateTime expectedDateTime, String expectedBeijingTime) {

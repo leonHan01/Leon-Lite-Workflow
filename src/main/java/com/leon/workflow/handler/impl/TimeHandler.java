@@ -7,12 +7,17 @@ import org.apache.commons.lang3.StringUtils;
 import org.springframework.stereotype.Component;
 
 import java.time.Clock;
+import java.time.Instant;
+import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
+import java.time.format.ResolverStyle;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -23,8 +28,12 @@ public class TimeHandler extends AbstractEventHandler {
 
     private static final ZoneId BEIJING_ZONE = ZoneId.of("Asia/Shanghai");
     private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+    private static final DateTimeFormatter BEIJING_DATE_TIME_INPUT = DateTimeFormatter.ofPattern("uuuu-MM-dd HH:mm:ss")
+            .withResolverStyle(ResolverStyle.STRICT);
     private static final Pattern NOW_EXPRESSION_PATTERN = Pattern.compile("^now((?:[+-]\\d+[smhd])*)$");
     private static final Pattern OFFSET_PATTERN = Pattern.compile("([+-])(\\d+)([smhd])");
+    private static final Pattern TIMESTAMP_PATTERN = Pattern.compile("(?:\\d{10}|\\d{13})");
+    private static final Pattern BEIJING_DATE_TIME_PATTERN = Pattern.compile("\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}");
 
     private Clock clock = Clock.system(BEIJING_ZONE);
 
@@ -32,15 +41,42 @@ public class TimeHandler extends AbstractEventHandler {
     public List<AlfredResult> doHandleAlfredEvent(AlfredParam alfredParam) {
         List<AlfredResult> results = new ArrayList<>();
         String input = normalizeInput(alfredParam.getOriginParams());
+        if (TIMESTAMP_PATTERN.matcher(StringUtils.trimToEmpty(alfredParam.getOriginParams())).matches()) {
+            long timestamp = Long.parseLong(input);
+            Instant instant = input.length() == 10 ? Instant.ofEpochSecond(timestamp) : Instant.ofEpochMilli(timestamp);
+            String beijing = instant.atZone(BEIJING_ZONE).format(DATE_TIME_FORMATTER);
+            String utc = instant.atZone(ZoneId.of("UTC")).format(DATE_TIME_FORMATTER);
+            results.add(buildTimeResult("北京时间：" + beijing, "点击复制北京时间", beijing));
+            results.add(buildTimeResult("UTC：" + utc, "点击复制 UTC 时间", utc));
+            return results;
+        }
+        Optional<ZonedDateTime> beijingDateTime = parseBeijingDateTime(StringUtils.trimToEmpty(alfredParam.getOriginParams()));
+        if (beijingDateTime.isPresent()) {
+            return copyTimestampResults(beijingDateTime.get());
+        }
         if (!isNowExpression(input)) {
             return results;
         }
 
-        ZonedDateTime dateTime = applyOffsets(ZonedDateTime.now(clock), input);
+        return copyTimestampResults(applyOffsets(ZonedDateTime.now(clock), input));
+    }
+
+    private Optional<ZonedDateTime> parseBeijingDateTime(String input) {
+        if (!BEIJING_DATE_TIME_PATTERN.matcher(input).matches()) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(LocalDateTime.parse(input, BEIJING_DATE_TIME_INPUT).atZone(BEIJING_ZONE));
+        } catch (DateTimeParseException e) {
+            return Optional.empty();
+        }
+    }
+
+    private List<AlfredResult> copyTimestampResults(ZonedDateTime dateTime) {
         long millis = dateTime.toInstant().toEpochMilli();
         long seconds = millis / 1000;
         String beijingTime = dateTime.format(DATE_TIME_FORMATTER);
-
+        List<AlfredResult> results = new ArrayList<>();
         results.add(buildTimeResult("北京时间：" + beijingTime, "点击复制北京时间", beijingTime));
         results.add(buildTimeResult("秒级时间戳：" + seconds, "点击复制秒级时间戳", String.valueOf(seconds)));
         results.add(buildTimeResult("毫秒时间戳：" + millis, "点击复制毫秒时间戳", String.valueOf(millis)));
@@ -88,7 +124,15 @@ public class TimeHandler extends AbstractEventHandler {
 
     @Override
     public Boolean matchEvent(AlfredParam alfredParam, Boolean alreadyHaveResult) {
-        return isNowExpression(normalizeInput(alfredParam.getOriginParams()));
+        String raw = StringUtils.trimToEmpty(alfredParam.getOriginParams());
+        return isNowExpression(normalizeInput(raw))
+                || TIMESTAMP_PATTERN.matcher(raw).matches()
+                || parseBeijingDateTime(raw).isPresent();
+    }
+
+    @Override
+    public Integer getPriority() {
+        return 48;
     }
 
     @Override
