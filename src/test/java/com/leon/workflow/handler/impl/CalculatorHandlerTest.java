@@ -7,10 +7,21 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class CalculatorHandlerTest {
 
     private final CalculatorHandler calculatorHandler = new CalculatorHandler();
+
+    @Test
+    void matchesOnlyExpressionsThatStartWithANumberParenthesisOrMinus() {
+        assertTrue(calculatorHandler.matchEvent(param("1+2"), false));
+        assertTrue(calculatorHandler.matchEvent(param("(1+2)*3"), false));
+        assertFalse(calculatorHandler.matchEvent(param("abc"), false));
+        assertFalse(calculatorHandler.matchEvent(param("  "), false));
+        assertTrue(calculatorHandler.breakNextHandlerIfHaveResult());
+    }
 
     @Test
     void shouldReturnRawResultWhenResultIsNotGreaterThanOneThousand() {
@@ -75,5 +86,11 @@ class CalculatorHandlerTest {
             var results = pool.invokeAll(tasks);
             for (int i = 0; i < results.size(); i++) assertEquals(Integer.toString((i + 1) * 5 - 1), results.get(i).get());
         }
+    }
+
+    private static AlfredParam param(String input) {
+        AlfredParam param = new AlfredParam();
+        param.setOriginParams(input);
+        return param;
     }
 }

@@ -24,6 +24,9 @@ public class CalendarHandler extends AbstractEventHandler {
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ISO_LOCAL_DATE;
     private static final String[] WEEKDAY_LABELS = {"一", "二", "三", "四", "五", "六", "日"};
     private static final String[] WEEKDAY_NAMES = {"星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"};
+    private static final String PAD = "\u3000";
+    private static final String TODAY_LEFT = "\uFF3B";
+    private static final String TODAY_RIGHT = "\uFF3D";
 
     private Clock clock = Clock.system(BEIJING_ZONE);
 
@@ -34,16 +37,18 @@ public class CalendarHandler extends AbstractEventHandler {
         }
         LocalDate today = LocalDate.now(clock);
         LocalDate first = today.withDayOfMonth(1);
+        String monthTitle = first.getYear() + "年" + first.getMonthValue() + "月";
         String header = weekdayHeader();
         List<String> weeks = weeksOf(first, today);
         String todayLine = "今天：" + today.format(DATE_FORMATTER);
-        String calendar = first.getYear() + "年" + first.getMonthValue() + "月\n"
+        String calendar = monthTitle + "\n"
                 + header + "\n"
                 + String.join("\n", weeks) + "\n"
                 + todayLine;
 
         List<AlfredResult> results = new ArrayList<>();
-        results.add(line(first.getYear() + "年" + first.getMonthValue() + "月", header, calendar));
+        results.add(line(monthTitle, "", calendar));
+        results.add(line(header, "", calendar));
         for (String week : weeks) {
             results.add(line(week, "", week));
         }
@@ -54,7 +59,7 @@ public class CalendarHandler extends AbstractEventHandler {
     private static String weekdayHeader() {
         StringBuilder header = new StringBuilder();
         for (String label : WEEKDAY_LABELS) {
-            header.append(' ').append(label).append("  ");
+            header.append(cellText(PAD, label, false));
         }
         return header.toString();
     }
@@ -76,12 +81,27 @@ public class CalendarHandler extends AbstractEventHandler {
 
     private static String cell(LocalDate date, LocalDate month, LocalDate today) {
         if (date.getMonthValue() != month.getMonthValue()) {
-            return "    ";
+            return cellText(PAD, PAD, false);
         }
-        if (date.equals(today)) {
-            return String.format("[%2d]", date.getDayOfMonth());
+        String digits = toFullwidth(date.getDayOfMonth());
+        String tens = digits.length() == 1 ? PAD : digits.substring(0, 1);
+        String ones = digits.substring(digits.length() - 1);
+        return cellText(tens, ones, date.equals(today));
+    }
+
+    private static String cellText(String tens, String ones, boolean today) {
+        String left = today ? TODAY_LEFT : PAD;
+        String right = today ? TODAY_RIGHT : PAD;
+        return left + tens + ones + right;
+    }
+
+    private static String toFullwidth(int day) {
+        String ascii = Integer.toString(day);
+        StringBuilder out = new StringBuilder(ascii.length());
+        for (int i = 0; i < ascii.length(); i++) {
+            out.append((char) ('\uFF10' + ascii.charAt(i) - '0'));
         }
-        return String.format(" %2d ", date.getDayOfMonth());
+        return out.toString();
     }
 
     private static AlfredResult line(String title, String subtitle, String copy) {

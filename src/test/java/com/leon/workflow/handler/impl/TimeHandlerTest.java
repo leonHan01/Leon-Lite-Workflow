@@ -76,6 +76,55 @@ class TimeHandlerTest {
     }
 
     @Test
+    void aliasesUseTheSameNowResults() {
+        for (String input : List.of("time", "TIME", "时间", "shijian", "ShiJian", " time + 1 m ")) {
+            AlfredParam alfredParam = new AlfredParam();
+            alfredParam.setOriginParams(input);
+
+            assertTrue(timeHandler.matchEvent(alfredParam, false), input);
+            ZonedDateTime expected = input.contains("+") ? fixedNow.plusMinutes(1) : fixedNow;
+            String expectedText = input.contains("+") ? "2026-05-30 18:01:00" : "2026-05-30 18:00:00";
+            assertTimeResults(timeHandler.doHandleAlfredEvent(alfredParam), expected, expectedText);
+        }
+    }
+
+    @Test
+    void aliasesSupportTheSameOffsets() {
+        assertTimeResults(handle("时间+1d+1h+1m"), fixedNow.plusDays(1).plusHours(1).plusMinutes(1), "2026-05-31 19:01:00");
+        assertTimeResults(handle("shijian-1h"), fixedNow.minusHours(1), "2026-05-30 17:00:00");
+
+        AlfredParam invalid = new AlfredParam();
+        invalid.setOriginParams("time+abc");
+        assertFalse(timeHandler.matchEvent(invalid, false));
+        invalid.setOriginParams("timeout");
+        assertFalse(timeHandler.matchEvent(invalid, false));
+    }
+
+    @Test
+    void aliasesApplyEachOffsetUnit() {
+        assertTimeResults(handle("time+1s"), fixedNow.plusSeconds(1), "2026-05-30 18:00:01");
+        assertTimeResults(handle("TIME-1S"), fixedNow.minusSeconds(1), "2026-05-30 17:59:59");
+        assertTimeResults(handle("时间+2h"), fixedNow.plusHours(2), "2026-05-30 20:00:00");
+        assertTimeResults(handle("时间 -1d"), fixedNow.minusDays(1), "2026-05-29 18:00:00");
+        assertTimeResults(handle("shijian+30m"), fixedNow.plusMinutes(30), "2026-05-30 18:30:00");
+        assertTimeResults(handle("now+1m-30s"), fixedNow.plusMinutes(1).minusSeconds(30), "2026-05-30 18:00:30");
+        assertTimeResults(handle("time+1d-1d"), fixedNow, "2026-05-30 18:00:00");
+    }
+
+    @Test
+    void rejectsWordsAndUnitsThatAreNotNowExpressions() {
+        for (String input : List.of("times", "时间戳", "shijiann", "now+1w", "now+", "now+1", "now+1mm", "", "  ")) {
+            AlfredParam param = new AlfredParam();
+            param.setOriginParams(input);
+            assertFalse(timeHandler.matchEvent(param, false), input);
+            assertTrue(timeHandler.doHandleAlfredEvent(param).isEmpty(), input);
+        }
+        AlfredParam missing = new AlfredParam();
+        assertFalse(timeHandler.matchEvent(missing, false));
+        assertTrue(timeHandler.doHandleAlfredEvent(missing).isEmpty());
+    }
+
+    @Test
     void shouldOnlyMatchNowExpressions() {
         AlfredParam validParam = new AlfredParam();
         validParam.setOriginParams("now+1d+1h+1m");
@@ -112,16 +161,26 @@ class TimeHandlerTest {
         }
     }
 
+    private List<AlfredResult> handle(String input) {
+        AlfredParam alfredParam = new AlfredParam();
+        alfredParam.setOriginParams(input);
+        assertTrue(timeHandler.matchEvent(alfredParam, false), input);
+        return timeHandler.doHandleAlfredEvent(alfredParam);
+    }
+
     private void assertTimeResults(List<AlfredResult> results, ZonedDateTime expectedDateTime, String expectedBeijingTime) {
         long expectedMillis = expectedDateTime.toInstant().toEpochMilli();
         long expectedSeconds = expectedMillis / 1000;
 
         assertEquals(3, results.size());
         assertEquals("北京时间：" + expectedBeijingTime, results.get(0).getTitle());
+        assertEquals("点击复制北京时间", results.get(0).getSubtitle());
         assertEquals(expectedBeijingTime, results.get(0).getMsgNeedToCopy());
         assertEquals("秒级时间戳：" + expectedSeconds, results.get(1).getTitle());
+        assertEquals("点击复制秒级时间戳", results.get(1).getSubtitle());
         assertEquals(String.valueOf(expectedSeconds), results.get(1).getMsgNeedToCopy());
         assertEquals("毫秒时间戳：" + expectedMillis, results.get(2).getTitle());
+        assertEquals("点击复制毫秒时间戳", results.get(2).getSubtitle());
         assertEquals(String.valueOf(expectedMillis), results.get(2).getMsgNeedToCopy());
     }
 }

@@ -62,15 +62,25 @@ class AlfredIntegrationTest {
     @Test void calculatorAndTimeCommandsWork() throws Exception {
         assertEquals("3", query("1+2").get(0).getMsgNeedToCopy());
         assertTrue(query("now").stream().anyMatch(r -> r.getTitle().startsWith("北京时间")));
+        assertTrue(query("time").stream().anyMatch(r -> r.getTitle().startsWith("北京时间")));
+        assertTrue(query("时间").stream().anyMatch(r -> r.getTitle().startsWith("北京时间")));
+        assertTrue(query("shijian+1m").stream().anyMatch(r -> r.getTitle().startsWith("北京时间")));
         assertEquals("2025-01-01 08:00:00", query("1735689600").get(0).getMsgNeedToCopy());
         assertEquals("2025-01-01 08:00:00", query("1735689600000").get(0).getMsgNeedToCopy());
         assertEquals("1793419200", query("2026-10-31 12:00:00").get(1).getMsgNeedToCopy());
         assertEquals("| 列1 | 列2 |\n| --- | --- |\n|  |  |", query("md 表格").get(0).getMsgNeedToCopy());
+        assertEquals(18, query("help").size());
+        assertEquals("cal", query("help 日历").get(0).getMsgNeedToCopy());
         assertEquals(1, query("md 表格").size());
         LocalDate today = LocalDate.now(ZoneId.of("Asia/Shanghai"));
         List<AlfredResult> calendar = query("cal");
         assertEquals("今天：" + today, calendar.get(calendar.size() - 1).getTitle());
-        assertTrue(calendar.stream().anyMatch(result -> result.getTitle().contains(String.format("[%2d]", today.getDayOfMonth()))));
+        int day = today.getDayOfMonth();
+        String tens = day < 10 ? "\u3000" : String.valueOf((char) ('\uFF10' + day / 10));
+        String ones = String.valueOf((char) ('\uFF10' + day % 10));
+        assertTrue(calendar.stream().anyMatch(result -> result.getTitle().contains("\uFF3B" + tens + ones + "\uFF3D")));
+        int width = calendar.get(1).getTitle().length();
+        assertTrue(calendar.subList(1, calendar.size() - 1).stream().allMatch(result -> result.getTitle().length() == width));
         assertEquals("3", query("1+2").get(0).getMsgNeedToCopy());
     }
 

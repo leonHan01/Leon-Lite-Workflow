@@ -30,7 +30,7 @@ public class TimeHandler extends AbstractEventHandler {
     private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     private static final DateTimeFormatter BEIJING_DATE_TIME_INPUT = DateTimeFormatter.ofPattern("uuuu-MM-dd HH:mm:ss")
             .withResolverStyle(ResolverStyle.STRICT);
-    private static final Pattern NOW_EXPRESSION_PATTERN = Pattern.compile("^now((?:[+-]\\d+[smhd])*)$");
+    private static final Pattern NOW_EXPRESSION_PATTERN = Pattern.compile("^(?:now|time|shijian|时间)((?:[+-]\\d+[smhd])*)$");
     private static final Pattern OFFSET_PATTERN = Pattern.compile("([+-])(\\d+)([smhd])");
     private static final Pattern TIMESTAMP_PATTERN = Pattern.compile("(?:\\d{10}|\\d{13})");
     private static final Pattern BEIJING_DATE_TIME_PATTERN = Pattern.compile("\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}");
@@ -54,11 +54,12 @@ public class TimeHandler extends AbstractEventHandler {
         if (beijingDateTime.isPresent()) {
             return copyTimestampResults(beijingDateTime.get());
         }
-        if (!isNowExpression(input)) {
+        String offsets = nowOffsets(input);
+        if (offsets == null) {
             return results;
         }
 
-        return copyTimestampResults(applyOffsets(ZonedDateTime.now(clock), input));
+        return copyTimestampResults(applyOffsets(ZonedDateTime.now(clock), offsets));
     }
 
     private Optional<ZonedDateTime> parseBeijingDateTime(String input) {
@@ -88,11 +89,16 @@ public class TimeHandler extends AbstractEventHandler {
     }
 
     private boolean isNowExpression(String input) {
-        return NOW_EXPRESSION_PATTERN.matcher(input).matches();
+        return nowOffsets(input) != null;
     }
 
-    private ZonedDateTime applyOffsets(ZonedDateTime dateTime, String input) {
-        Matcher matcher = OFFSET_PATTERN.matcher(input.substring(3));
+    private String nowOffsets(String input) {
+        Matcher matcher = NOW_EXPRESSION_PATTERN.matcher(input);
+        return matcher.matches() ? matcher.group(1) : null;
+    }
+
+    private ZonedDateTime applyOffsets(ZonedDateTime dateTime, String offsets) {
+        Matcher matcher = OFFSET_PATTERN.matcher(offsets);
         ZonedDateTime result = dateTime;
         while (matcher.find()) {
             int sign = "+".equals(matcher.group(1)) ? 1 : -1;
