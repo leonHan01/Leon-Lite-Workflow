@@ -2,9 +2,10 @@ const routes = {
     '/': ['home', '总览', 'workspace-overview'],
     '/index.html': ['home', '总览', 'workspace-overview'],
     '/simple-kv.html': ['kv', '快捷项', 'workspace-kv'],
-    '/diamond.html': ['config', '配置编辑', 'workspace-config'],
     '/json-record-search.html': ['records', 'JSON 记录', 'workspace-record-search'],
     '/json-record.html': ['detail', 'JSON 记录详情', 'workspace-record-detail'],
+    '/monitor.html': ['monitor', '服务器监控', 'workspace-monitor'],
+    '/advanced-settings.html': ['advanced', '高级设置', 'workspace-advanced'],
 };
 const views = new Map();
 const pending = new Map();
@@ -13,6 +14,7 @@ const stack = document.getElementById('workspaceViews');
 const status = document.getElementById('workspaceStatus');
 let active = null;
 let sequence = 0;
+let lastViewedPage = null;
 
 async function getView(definition, url) {
     const [key, , className] = definition;
@@ -59,7 +61,7 @@ function updateNavigation(definition) {
     const key = definition[0] === 'detail' ? 'records' : definition[0];
     document.getElementById('workspaceTitle').textContent = definition[1];
     document.title = definition[1] + ' · Leon Workflow';
-    for (const link of document.querySelectorAll('.lw-nav-link, .ws-tabs a')) {
+    for (const link of document.querySelectorAll('.lw-nav-link')) {
         const target = routes[new URL(link.href).pathname];
         const selected = target?.[0] === key;
         link.classList.toggle('is-active', selected);
@@ -86,11 +88,18 @@ export async function navigate(path, { historyMode = 'push', recall = false } = 
             active.controller.deactivate?.();
         }
         const switching = active !== view;
+        const page = url.pathname + url.search;
+        const pageChanged = page !== lastViewedPage;
         active = view;
         if (historyMode === 'push' && location.href !== url.href) history.pushState(null, '', url.pathname + url.search);
         remembered.set(definition[0], url.pathname + url.search);
         view.pane.hidden = false;
         updateNavigation(definition);
+        if (pageChanged) {
+            lastViewedPage = page;
+            fetch('/api/monitor/page-view', { method: 'POST', keepalive: true })
+                .then(response => { if (response.ok) document.dispatchEvent(new Event('workspace-page-view')); }).catch(() => {});
+        }
         view.controller.activate?.(url.href);
         if (switching) window.scrollTo({ top: view.scroll, behavior: 'instant' });
         status.hidden = true;
@@ -111,7 +120,7 @@ document.addEventListener('click', event => {
     const url = new URL(link.href);
     if (url.origin !== location.origin || !routes[url.pathname]) return;
     event.preventDefault();
-    navigate(url.href, { recall: !!link.closest('.lw-nav, .ws-tabs') });
+    navigate(url.href, { recall: !!link.closest('.lw-nav') });
 });
 window.addEventListener('popstate', () => navigate(location.href, { historyMode: 'none' }));
 navigate(location.href, { historyMode: 'none' });

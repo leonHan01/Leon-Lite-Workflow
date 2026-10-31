@@ -1,0 +1,20 @@
+<div class="monitor-page">
+    <div class="monitor-heading">
+        <div><div class="monitor-kicker"><span></span> SERVER MONITOR</div><h1>服务器监控<span>.</span></h1><p>查看运行状态与工作空间访问趋势。</p></div>
+        <button class="monitor-refresh" type="button">刷新数据</button>
+    </div>
+    <div class="monitor-status" role="status" aria-live="polite">正在加载监控数据…</div>
+    <div class="monitor-cards">
+        <section class="monitor-stat"><div>CPU 使用率 <span>CPU</span></div><strong data-value="cpu">—</strong><small>系统整体负载</small></section>
+        <section class="monitor-stat"><div>内存使用率 <span>MEMORY</span></div><strong data-value="memory">—</strong><small data-detail="memory">—</small></section>
+        <section class="monitor-stat"><div>磁盘使用率 <span>DISK</span></div><strong data-value="disk">—</strong><small data-detail="disk">根文件系统 · —</small></section>
+        <section class="monitor-stat"><div>今日浏览量 <span>PAGE VIEWS</span></div><strong data-value="pv">—</strong><small>工作空间页面浏览次数</small></section>
+    </div>
+    <div class="monitor-charts">
+        <section class="monitor-chart-card"><div class="monitor-chart-heading"><div><h2>CPU 使用趋势</h2><p>每分钟采样 · 最近 24 小时</p></div><span>CPU</span></div><div class="monitor-chart" data-chart="cpu" role="img" aria-label="CPU 使用率趋势图"></div></section>
+        <section class="monitor-chart-card"><div class="monitor-chart-heading"><div><h2>内存使用趋势</h2><p>每分钟采样 · 最近 24 小时</p></div><span>MEMORY</span></div><div class="monitor-chart" data-chart="memory" role="img" aria-label="内存使用率趋势图"></div></section>
+        <section class="monitor-chart-card"><div class="monitor-chart-heading"><div><h2>磁盘使用趋势</h2><p>每分钟采样 · 最近 24 小时</p></div><span>DISK</span></div><div class="monitor-chart" data-chart="disk" role="img" aria-label="根文件系统磁盘使用率趋势图"></div></section>
+        <section class="monitor-chart-card"><div class="monitor-chart-heading"><div><h2>页面浏览量</h2><p>近 30 天 · 北京时间 · 仅统计工作空间页面</p></div><span>DAILY PV</span></div><div class="monitor-chart" data-chart="pv" role="img" aria-label="近 30 天页面浏览量柱状图"></div></section>
+    </div>
+    <p class="monitor-footnote">资源采样数据在服务重启后重新积累。PV 从启用监控后开始记录，包括刷新及页面切换，不包含 API、Alfred 或插件请求。内存使用量为物理总内存减空闲内存，磁盘为根文件系统已用空间。</p>
+</div>

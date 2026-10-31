@@ -16,7 +16,7 @@ H2 默认将数据写入运行目录下的 `data/leon-workflow.mv.db`；该目�
 
 快捷项可在 `/simple-kv.html` 管理，`all` / `all2` 分页，带“首页”动作的项显示在空查询结果。服务内置一组与现有 Alfred workflow 同名的 PNG 图标，并合并当前用户 Alfred workflow 的 `icons` 目录中的图标；可用 `LEON_ALFRED_ICONS_DIR` 修改该目录，同名文件优先使用目录里的版本。管理页面可预览内置图标；Alfred 在客户端读取 workflow 的 `icons` 目录，其他客户端需要将所选 PNG 放入该目录才能显示。
 
-配置编辑页面为 `/diamond.html`，新库可用以下接口创建配置，再在页面修改：
+保留的配置接口可用于创建或修改工作流配置，例如：
 
 ```bash
 curl -X POST http://127.0.0.1:8080/api/diamond -H 'Content-Type: application/json' \
@@ -40,11 +40,15 @@ mvn test
 mvn package
 ```
 
-## 工作空间页签
+## 工作空间导航
 
 管理页面共用一个工作空间外壳，站内切换通过 History API 和 `workspace/app.js` 更新视图。侧边栏与已加载表单保留在当前页面中；刷新和直接打开原有地址仍可用。各视图的内容、事件与样式分别放在 `static/workspace/` 下，避免全局变量和样式互相影响。
 
-部署时应将 `/workspace/` 静态资源纳入与管理页面相同的 HTTPS 登录保护。浏览器回归检查位于 `src/test/browser/workspace-navigation.cjs`，使用模拟数据验证页签状态、快捷项 CRUD、配置保存、JSON 详情和历史导航；运行时通过 `PLAYWRIGHT_MODULE_PATH`、`CHROME_PATH` 指定本机浏览器依赖。
+“高级设置”提供数据库 SQL 备份下载：脚本包含 H2 表结构和业务数据，可导入空的 H2 数据库；数据库用户密码和浏览器登录会话不包含在内，环境变量和服务器配置也不属于数据库备份。备份可能包含私人内容及应用数据中的密钥，请妥善保管。
+
+服务器监控可在工作空间侧栏打开 `/monitor.html`。每分钟采集系统 CPU、物理内存（总量减空闲量）和根文件系统磁盘使用率，内存中最多保留 24 小时，服务重启后重新积累；指标不可用时显示“—”。PV 统计工作空间页面首次打开、刷新和站内切换，按北京时间保存每日汇总到 H2，从启用后开始记录，不包括 API、Alfred 和插件请求。图表使用随服务提供的 ECharts，监控接口沿用现有认证和管理写入来源限制。
+
+部署时应将 `/workspace/` 静态资源纳入与管理页面相同的 HTTPS 登录保护。浏览器回归检查位于 `src/test/browser/workspace-navigation.cjs`，使用模拟数据验证页签状态、快捷项 CRUD、JSON 详情和历史导航；运行时通过 `PLAYWRIGHT_MODULE_PATH`、`CHROME_PATH` 指定本机浏览器依赖。
 
 ## Leon Tools Pro 插件接口
 

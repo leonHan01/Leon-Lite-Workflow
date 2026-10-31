@@ -317,7 +317,6 @@ code,
 .json-output,
 .sql-input,
 #sqlInput,
-#editableText,
 #relationInput,
 #path-display,
 .result-content,
@@ -803,14 +802,13 @@ body.workspace-kv {
 .workspace-home .lw-section-kicker, .workspace-kv .kv-form-kicker { color:#a7aea9; font:700 9px var(--lw-mono); letter-spacing:.12em; }
 .workspace-home .lw-section-heading h2 { margin:8px 0 0; font-size:22px; letter-spacing:-.02em !important; }
 .workspace-home .lw-section-heading p { margin:0 0 3px; color:#a0a8a5 !important; font-size:12px; }
-.workspace-home .lw-module-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:16px; }
+.workspace-home .lw-module-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
 .workspace-home .lw-module-card { min-height:230px; display:flex; flex-direction:column; padding:23px 24px 20px; background:#fff; border:1px solid #eceee9; border-radius:16px; text-decoration:none; color:#202933 !important; box-shadow:0 4px 20px rgba(38,48,58,.025); transition:transform .2s,box-shadow .2s,border-color .2s; }
 .workspace-home .lw-module-card:hover { transform:translateY(-4px); border-color:#d9e0f2; box-shadow:0 14px 30px rgba(38,48,58,.07); }
 .workspace-home .lw-card-top { display:flex; align-items:start; justify-content:space-between; }
 .workspace-home .lw-card-icon { width:44px; height:44px; display:grid; place-items:center; border-radius:12px; }
 .workspace-home .lw-card-icon svg { width:21px; height:21px; }
 .workspace-home .lw-card-blue .lw-card-icon { background:#edf1ff; color:#5774d6; }
-.workspace-home .lw-card-peach .lw-card-icon { background:#fcf0e9; color:#cb8b68; }
 .workspace-home .lw-card-green .lw-card-icon { background:#eaf4ef; color:#76a38b; }
 .workspace-home .lw-card-arrow { color:#bac1be; font-size:17px; }
 .workspace-home .lw-card-number { margin:19px 0 8px; color:#b1b7b4; font:700 9px var(--lw-mono); letter-spacing:.09em; }
@@ -844,6 +842,7 @@ body.workspace-kv {
 .workspace-kv .action-checkbox input[type=checkbox] { accent-color:#4669e8; }
 .workspace-kv .icon-picker-trigger { min-width:0; }
 .workspace-kv .icon-picker-dropdown { z-index:20; border-radius:10px; }
+.workspace-kv .modal .icon-picker-dropdown { position:static; width:100%; min-width:0; max-height:min(240px, 40vh); }
 .workspace-kv .btn, .workspace-kv .btn-delete { border-radius:8px !important; font-size:12px; transition:background .15s,color .15s,border-color .15s; }
 .workspace-kv .kv-add-button { width:100%; min-height:42px; background:#4669e8 !important; border-color:#4669e8 !important; color:#fff !important; }
 .workspace-kv .kv-add-button:hover, .workspace-kv .btn-primary-dark:hover { background:#3658d0 !important; border-color:#3658d0 !important; }

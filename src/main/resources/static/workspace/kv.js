@@ -72,7 +72,10 @@ let currentUrl = new URL(route.url);
                 if (search) {
                     search.value = '';
                     filterIcons(prefix);
-                    setTimeout(() => search.focus(), 0);
+                    setTimeout(() => {
+                        search.focus({ preventScroll: true });
+                        if (dropdown.closest('.modal')) dropdown.scrollIntoView({ block: 'nearest' });
+                    }, 0);
                 }
             }
         }

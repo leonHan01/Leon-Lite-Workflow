@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Leon Workflow 工作空间</title><script src="/admin-auth.js"></script><link rel="stylesheet" href="/workspace/legacy.css"><link rel="stylesheet" href="/geek-theme.css"><link rel="stylesheet" href="/workspace/app.css"><script type="module" src="/workspace/app.js"></script></head>
+<body class="workspace-home workspace-app"><div class="lw-shell">
+    <aside class="lw-sidebar" aria-label="主导航">
+        <a class="lw-brand" href="/index.html" aria-label="Leon Workflow 首页">
+            <span class="lw-brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none"><path d="M8 23V9h4v10h12v4H8Z" fill="currentColor"/><circle cx="22" cy="10" r="4" fill="currentColor" opacity=".65"/></svg></span>
+            <span class="lw-brand-text"><strong>leon<span>.</span></strong><small>WORKFLOW</small></span>
+        </a>
+        <div class="lw-nav-label">工作空间</div>
+        <nav class="lw-nav">
+            <a class="lw-nav-link is-active" aria-current="page" href="/index.html" aria-label="总览"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m3 10 9-7 9 7v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-9Z"/><path d="M9 21v-8h6v8"/></svg><span>总览</span></a>
+            <a class="lw-nav-link " href="/simple-kv.html" aria-label="快捷项"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3" y="4" width="7" height="7" rx="1.5"/><rect x="14" y="4" width="7" height="7" rx="1.5"/><rect x="3" y="15" width="7" height="5" rx="1.5"/><rect x="14" y="15" width="7" height="5" rx="1.5"/></svg><span>快捷项</span></a>
+            <a class="lw-nav-link" href="/json-record-search.html" aria-label="JSON 记录"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M6 3h8l4 4v13H6z"/><path d="M14 3v5h5M9 12h6M9 16h6"/></svg><span>JSON 记录</span></a>
+            <a class="lw-nav-link" href="/monitor.html" aria-label="服务器监控"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M6 14h3l2-5 3 7 2-4h2"/></svg><span>服务器监控</span></a>
+            <a class="lw-nav-link" href="/advanced-settings.html" aria-label="高级设置"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="2" fill="white"/><circle cx="15" cy="17" r="2" fill="white"/></svg><span>高级设置</span></a>
+        </nav>
+        <div class="lw-sidebar-foot"><span class="lw-foot-dot"></span><span>你的工作流，井井有条</span></div>
+    </aside>
+<main class="lw-main"><header class="lw-topbar"><div class="lw-breadcrumb"><span>WORKSPACE</span><i></i><strong id="workspaceTitle">总览</strong></div><div class="ws-account"><span class="ws-shell-note">LEON WORKFLOW</span><button id="workspaceLogout" type="button">退出登录</button></div></header>
+<div id="workspaceStatus" class="ws-load-status" role="status" hidden></div><div id="workspaceViews"></div></main></div></body></html>

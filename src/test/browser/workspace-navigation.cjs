@@ -5,9 +5,21 @@ const path = require('node:path');
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE_PATH || 'playwright');
 const root = path.resolve(__dirname, '../../main/resources/static');
 const record = { id: 7, sourceType: 'JSON', bodyJson: '{"hello":"world"}', rawText: '{"hello":"world"}', createTime:'2026-10-31T10:00:00' };
+let pageViews=0;
 let rows=[{id:1,kvKey:'GitHub',kvValue:'https://github.com',kvType:'url',kvCategory:'开发'}];
 const server = http.createServer((req, res) => {
  const url = new URL(req.url, 'http://localhost');
+ if (url.pathname==='/api/monitor/page-view') { pageViews++; res.writeHead(204); return res.end(); }
+ if (url.pathname==='/api/monitor') {
+  res.setHeader('Content-Type','application/json');
+  const current={time:new Date().toISOString(),cpuPercent:25,memoryPercent:50,memoryUsedBytes:1073741824,memoryTotalBytes:2147483648,diskPercent:40,diskUsedBytes:40,diskTotalBytes:100};
+  return res.end(JSON.stringify({current,samples:[current],pageViews:[{day:'2026-10-31',views:pageViews}]}));
+ }
+ if (url.pathname==='/api/admin/database-backup') {
+  res.setHeader('Content-Type','application/sql; charset=utf-8');
+  res.setHeader('Content-Disposition','attachment; filename=\"test-backup.sql\"');
+  return res.end('-- database backup\n');
+ }
  if (url.pathname.startsWith('/api/')) {
   if(req.method==='POST') {
    let body='';req.on('data',data=>body+=data);req.on('end',()=>{
@@ -22,8 +34,6 @@ const server = http.createServer((req, res) => {
   let value=[];
   if(url.pathname==='/api/simple-kv/list')value=rows;
   if(url.pathname==='/api/simple-kv/icons')value=['github.png','日历.png'];
-  if(url.pathname==='/api/options')value=[{value:'1',text:'测试配置'}];
-  if(url.pathname==='/api/text'){res.setHeader('Content-Type','text/plain');return res.end('保存前的配置');}
   if(url.pathname==='/api/json-record/search')value=[{id:7,sourceType:'JSON',preview:'hello world',createTime:record.createTime}];
   if(url.pathname==='/api/json-record/7')value=record;
   if(req.method==='POST')value={status:'success'};
@@ -43,19 +53,27 @@ const server = http.createServer((req, res) => {
   await page.goto(base+'/simple-kv.html',{waitUntil:'networkidle'});
   await page.evaluate(()=>document.querySelector('.lw-sidebar').dataset.identity='persistent');
   await page.locator('#addKey').fill('未提交的快捷项');
-  await page.locator('.lw-sidebar').getByRole('link',{name:'配置编辑',exact:true}).click();
-  await page.waitForURL('**/diamond.html');
+  assert.equal(await page.locator('a[href="/diamond.html"]').count(),0,'仍存在配置编辑入口');
+  await page.locator('.lw-sidebar').getByRole('link',{name:'JSON 记录',exact:true}).click();
+  await page.waitForURL('**/json-record-search.html');
   assert.equal(await page.locator('.lw-sidebar').getAttribute('data-identity').catch(()=>null),'persistent','切换页签导致工作空间框架丢失');
-  await page.waitForFunction(()=>document.querySelector('#configStatus')?.textContent.includes('已加载'));
-  await page.locator('#editableText').fill('未提交的配置');
   await page.locator('.lw-sidebar').getByRole('link',{name:'快捷项',exact:true}).click();
   assert.equal(await page.locator('#addKey').inputValue(),'未提交的快捷项','切换导致快捷项草稿丢失');
+  await page.setViewportSize({width:800,height:600});
   await page.locator('.kv-item').getByText('编辑',{exact:true}).click();
   await page.locator('#editValue').fill('https://github.com/new');
   await page.locator('#editIconPicker .icon-picker-trigger').click();
+  const bounds=await page.locator('#editIconDropdown').evaluate(menu=>{
+   const dropdown=menu.getBoundingClientRect();const modal=menu.closest('.modal').getBoundingClientRect();
+   return {top:dropdown.top,bottom:dropdown.bottom,left:dropdown.left,right:dropdown.right,
+    modalTop:modal.top,modalBottom:modal.bottom,modalLeft:modal.left,modalRight:modal.right,viewportHeight:window.innerHeight};
+  });
+  assert.ok(bounds.top>=bounds.modalTop && bounds.bottom<=bounds.modalBottom && bounds.left>=bounds.modalLeft &&
+   bounds.right<=bounds.modalRight && bounds.top>=0 && bounds.bottom<=bounds.viewportHeight,'图标选择列表被弹窗裁切');
   await page.locator('#editIconSearch').fill('日历');
   await page.locator('#editIconDropdown .icon-picker-item').getByText('日历').click();
   await page.locator('#editModal [data-ws-click="saveEditKV"]').click();
+  await page.setViewportSize({width:1440,height:1000});
   await page.waitForFunction(()=>document.querySelector('.kv-item-value')?.textContent.includes('github.com/new'));
   assert.equal(rows[0].kvIcon,'日历.png','编辑时未保存图标');
   await page.locator('#addValue').fill('草稿内容');
@@ -68,10 +86,6 @@ const server = http.createServer((req, res) => {
   await page.locator('.kv-item').filter({hasText:'未提交的快捷项'}).getByText('删除',{exact:true}).click();
   await page.locator('#deleteModal [data-ws-click="confirmDeleteKV"]').click();
   await page.waitForFunction(()=>document.querySelector('#countLabel')?.textContent.includes('1'));
-  await page.locator('.lw-sidebar').getByRole('link',{name:'配置编辑',exact:true}).click();
-  assert.equal(await page.locator('#editableText').inputValue(),'未提交的配置','切换导致配置草稿丢失');
-  await page.locator('[data-ws-click="saveText"]').click();
-  await page.waitForFunction(()=>document.querySelector('#configStatus')?.textContent.includes('修改已保存'));
   await page.locator('.lw-sidebar').getByRole('link',{name:'JSON 记录',exact:true}).click();
   await page.locator('.result-item').first().click();await page.waitForURL('**/json-record.html?id=7');
   assert.equal(await page.locator('.lw-sidebar').getAttribute('data-identity'),'persistent');
@@ -83,7 +97,7 @@ const server = http.createServer((req, res) => {
    await page.waitForFunction(()=>document.querySelector('.ws-pane:not([hidden])'));
    await page.waitForTimeout(200);
    await page.screenshot({path:process.env.SCREENSHOT_PATH,fullPage:true});
-   for (const [file,label] of [['config','配置编辑'],['kv','快捷项']]) {
+   for (const [file,label] of [['kv','快捷项']]) {
     await page.locator('.lw-sidebar').getByRole('link',{name:label,exact:true}).click();
     await page.waitForTimeout(200);
     await page.screenshot({path:process.env.SCREENSHOT_PATH.replace('.png','-'+file+'.png'),fullPage:true});
@@ -99,6 +113,47 @@ const server = http.createServer((req, res) => {
    await page.waitForFunction(()=>document.querySelector('#searchCount')?.textContent.includes('1'));
    await page.screenshot({path:process.env.SCREENSHOT_PATH.replace('.png','-detail.png'),fullPage:true});
   }
+  const beforeMonitor=pageViews;
+  await page.locator('.lw-sidebar').getByRole('link',{name:'服务器监控',exact:true}).click();
+  await page.waitForURL('**/monitor.html');
+  await page.waitForFunction(() => ['cpu','memory','disk','pv'].every(name => document.querySelector(`[data-chart="${name}"] canvas`)) && document.querySelector('[data-value="pv"]')?.textContent !== '—');
+  assert.equal(await page.locator('[data-value="cpu"]').textContent(),'25.0%');
+  assert.equal(await page.locator('[data-value="memory"]').textContent(),'50.0%');
+  const chartData = await page.evaluate(() => Object.fromEntries(['cpu', 'memory', 'disk', 'pv'].map(name => {
+   const option = window.echarts.getInstanceByDom(document.querySelector(`[data-chart="${name}"]`)).getOption();
+   return [name, { series: option.series.map(series => ({ name: series.name, value: series.data[0] })) }];
+  })));
+  assert.deepEqual(chartData.cpu.series.map(item => item.name), ['CPU']);
+  assert.deepEqual(chartData.memory.series.map(item => item.name), ['内存']);
+  assert.deepEqual(chartData.disk.series.map(item => item.name), ['磁盘']);
+  assert.equal(chartData.cpu.series[0].value[1], 25);
+  assert.equal(chartData.memory.series[0].value[1], 50);
+  assert.equal(chartData.disk.series[0].value[1], 40);
+  assert.deepEqual(chartData.pv.series.map(item => item.name), ['浏览量']);
+  await page.setViewportSize({width: 1920, height: 1000});
+  const monitorBounds = await page.locator('.monitor-page').evaluate(element => {
+   const page = element.getBoundingClientRect();
+   const main = element.closest('.lw-main').getBoundingClientRect();
+   const cards = element.querySelector('.monitor-cards').getBoundingClientRect();
+   return { mainLeft: main.left, mainRight: main.right, pageLeft: page.left, pageRight: page.right, cardsLeft: cards.left, cardsRight: cards.right };
+  });
+  assert.ok(Math.abs(monitorBounds.pageLeft - monitorBounds.mainLeft) < 1 && Math.abs(monitorBounds.pageRight - monitorBounds.mainRight) < 1, '监控页面未铺满工作区');
+  assert.ok(monitorBounds.cardsLeft - monitorBounds.mainLeft <= 30 && monitorBounds.mainRight - monitorBounds.cardsRight <= 30, '监控内容两侧留白过大');
+  await page.setViewportSize({width: 1440, height: 1000});
+  await page.waitForFunction(previous => document.querySelector('[data-value="pv"]')?.textContent === String(previous+1), beforeMonitor);
+  await page.reload({waitUntil:'networkidle'});
+  await page.waitForFunction(() => document.querySelector('[data-chart="pv"] canvas'));
+  assert.equal(await page.getByRole('heading',{name:'服务器监控.'}).count(),1);
+  await page.locator('.lw-sidebar').getByRole('link',{name:'高级设置',exact:true}).click();
+  await page.waitForURL('**/advanced-settings.html');
+  const [download]=await Promise.all([page.waitForEvent('download'),page.getByRole('button',{name:'下载 SQL 备份'}).click()]);
+  assert.equal(download.suggestedFilename(),'test-backup.sql');
+  await page.reload({waitUntil:'networkidle'});
+  assert.equal(await page.getByRole('heading',{name:'数据库备份'}).count(),1);
+  await page.goto(base+'/diamond.html');
+  await page.waitForURL('**/index.html');
+  assert.equal(await page.locator('a[href="/diamond.html"]').count(),0,'总览仍存在配置编辑入口');
+  assert.equal(await page.locator('.lw-module-card').count(),2);
   console.log('PASS: persistent shell, draft retention, JSON detail, history, refresh, no script collisions');
  }finally{await browser.close();server.close();}
 })().catch(e=>{console.error(e.message);server.close();process.exitCode=1});

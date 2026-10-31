@@ -31,7 +31,7 @@ form.addEventListener('submit',async event=>{
   const current=new URL(location.href);
   const requested=current.pathname==='/admin-login.html'?(current.searchParams.get('next')||'/'):current.pathname+current.search;
   const next=new URL(requested,location.origin);
-  const allowed=['/','/index.html','/simple-kv.html','/diamond.html','/json-record-search.html','/json-record.html'];
+  const allowed=['/','/index.html','/simple-kv.html','/diamond.html','/json-record-search.html','/json-record.html','/advanced-settings.html'];
   location.replace(next.origin===location.origin&&allowed.includes(next.pathname)?next.pathname+next.search:'/');
  }catch{error.textContent='连接失败，请检查网络后重试。';}
  finally{button.disabled=false;}
