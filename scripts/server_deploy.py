@@ -9,8 +9,10 @@ import pathlib
 import pwd
 import re
 import subprocess
+import signal
 import sys
 import time
+import urllib.request
 
 import deploy
 
@@ -49,9 +51,19 @@ def build_command(command, log, cwd=None, timeout=600):
         'JAVA_HOME': JAVA, 'MAVEN_OPTS': '-Xmx384m -XX:MaxMetaspaceSize=192m', 'LANG': 'en_US.UTF-8',
         'GIT_TERMINAL_PROMPT': '0'}
     command = ['runuser', '-u', BUILDER, '--'] + [str(value) for value in command]
-    result = subprocess.run(command, cwd=str(cwd) if cwd else None, env=env,
-        stdout=log, stderr=subprocess.STDOUT, timeout=timeout)
-    if result.returncode:
+    process = subprocess.Popen(command, cwd=str(cwd) if cwd else None, env=env,
+        stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+    try:
+        code = process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGTERM)
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait()
+        raise
+    if code:
         raise RuntimeError('build command failed')
 
 
@@ -59,9 +71,19 @@ def checkout(metadata, log):
     repository = CACHE / 'repository.git'
     if not repository.exists():
         build_command(['git', 'init', '--bare', repository], log)
-    build_command(['git', '--git-dir=' + str(repository), '-c', 'credential.helper=', '-c', 'core.hooksPath=/dev/null',
-        'fetch', '--no-tags', REPOSITORY, '+refs/heads/main:refs/heads/main'], log, timeout=180)
-    metadata['commit'] = deploy.run(['runuser', '-u', BUILDER, '--', 'git', '--git-dir=' + str(repository), 'rev-parse', 'refs/heads/main'])
+    archive_fallback = False
+    try:
+        build_command(['git', '--git-dir=' + str(repository), '-c', 'credential.helper=', '-c', 'core.hooksPath=/dev/null',
+            'fetch', '--no-tags', REPOSITORY, '+refs/heads/main:refs/heads/main'], log, timeout=30)
+        metadata['commit'] = deploy.run(['runuser', '-u', BUILDER, '--', 'git', '--git-dir=' + str(repository), 'rev-parse', 'refs/heads/main'])
+    except Exception:
+        # Some ECS networks block Git smart HTTP while GitHub's official API/codeload work.
+        job(metadata, 'FETCHING', 'Git 协议拉取受限，正在从 GitHub 官方归档按提交获取 main 代码。')
+        request = urllib.request.Request('https://api.github.com/repos/leonHan01/Leon-Lite-Workflow/commits/main',
+            headers={'User-Agent': 'Leon-Workflow-Deploy', 'Accept': 'application/vnd.github+json'})
+        with urllib.request.urlopen(request, timeout=30) as response:
+            metadata['commit'] = json.load(response)['sha']
+        archive_fallback = True
     if not re.fullmatch(r'[0-9a-f]{40}', metadata['commit']):
         raise RuntimeError('invalid Git commit')
     root = CACHE / metadata['id']
@@ -69,11 +91,16 @@ def checkout(metadata, log):
     owner = pwd.getpwnam(BUILDER)
     os.chown(str(root), owner.pw_uid, owner.pw_gid)
     archive = root / 'source.tar'
-    build_command(['git', '--git-dir=' + str(repository), 'archive', '--format=tar', '--output=' + str(archive), metadata['commit']], log)
+    if archive_fallback:
+        url = 'https://codeload.github.com/leonHan01/Leon-Lite-Workflow/tar.gz/' + metadata['commit']
+        download = 'import sys,urllib.request,shutil; r=urllib.request.urlopen(sys.argv[1],timeout=30); f=open(sys.argv[2],"wb"); shutil.copyfileobj(r,f); f.close(); r.close()'
+        build_command(['python3', '-c', download, url, archive], log, timeout=90)
+    else:
+        build_command(['git', '--git-dir=' + str(repository), 'archive', '--format=tar', '--output=' + str(archive), metadata['commit']], log)
     source = root / 'source'
     source.mkdir(mode=0o750)
     os.chown(str(source), owner.pw_uid, owner.pw_gid)
-    build_command(['tar', '-xf', archive, '-C', source], log)
+    build_command(['tar', '-xf', archive, '-C', source] + (['--strip-components=1'] if archive_fallback else []), log)
     return source
 
 

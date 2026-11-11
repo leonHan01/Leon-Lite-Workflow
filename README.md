@@ -107,7 +107,7 @@ curl -X POST http://127.0.0.1:8080/api/diamond -H 'Content-Type: application/jso
 
 正式部署运行 `python3 scripts/deploy.py --description '本次部署说明'`。脚本使用 Java 21 完整构建和测试，通过 Workbench 上传并校验 SHA-256，备份旧程序和 H2，保留配置后重启服务，再使用已有 Alfred 本地令牌验证公网 HTTPS、认证拦截、授权查询及部署记录。验证失败恢复旧程序；不自动回退数据库或清除业务数据。记录位于 `/var/lib/leon-lite-workflow/deployments/`，由 `LEON_DEPLOYMENTS_DIRECTORY` 指定；`LEON_DEPLOYMENT_ID` 标识当前运行部署。时间版本号使用 `yyyy.MM.dd.HHmmss`，精确程序包由提交号、工作区状态和 SHA-256 区分。备份服务器数据时同时备份该目录，H2 SQL 导出不包含这些部署记录。
 
-**网页一键部署。** 管理页登录后，在监控页点击「一键部署」，后台从 `https://github.com/leonHan01/Leon-Lite-Workflow.git` 的 `main` 分支拉取代码，以独立的 `leon-workflow-build` 账户运行 Java 21 / Maven `clean package`（跳过测试执行），完成备份后更新正式服务。页面自动显示排队、拉取、构建、更新、验证及最终结果，部署期间禁止重复触发。构建失败不替换当前服务，部署或验证失败恢复旧程序，保留数据库及私有配置。若远程分支尚未包含部署控制代码，会在替换服务前拒绝发布，避免移除管理功能。
+**网页一键部署。** 管理页登录后，在监控页点击「一键部署」，后台从 `https://github.com/leonHan01/Leon-Lite-Workflow.git` 的 `main` 分支拉取代码，以独立的 `leon-workflow-build` 账户运行 Java 21 / Maven `clean package`（跳过测试执行），完成备份后更新正式服务。Git 协议受限时，通过 GitHub 官方 API 解析 main 提交号，再下载该提交的官方源码归档，全程验证 HTTPS，不使用第三方镜像。页面自动显示排队、拉取、构建、更新、验证及最终结果，部署期间禁止重复触发。构建失败不替换当前服务，部署或验证失败恢复旧程序，保留数据库及私有配置。若远程分支尚未包含部署控制代码，会在替换服务前拒绝发布，避免移除管理功能。
 
 `POST /api/monitor/deploy` 仅接受已登录管理页的 Cookie、准确的 `Origin` 和 `X-Requested-With`，插件 Bearer 令牌不能直接触发部署；客户端不能指定仓库、分支或命令。请求通过持久化目录通知 `leon-workflow-deploy.path`，由独立的 `leon-workflow-deploy.service` 执行 `/opt/leon-workflow-deploy/` 中 root 所有的固定脚本，应用本身不获得任意 sudo 权限。构建日志仅保存在 root 可读的 `/var/log/leon-workflow-deploy/`，页面只展示固定进度信息。新程序使用临时会话验证公网认证和授权 Alfred 查询，会话用完立即撤销，不向构建进程传递应用凭据。首次安装通过 Workbench 上传并校验脚本和 Maven 包，再运行 `scripts/install_deploy_worker.py --staging <临时目录>`；保留已有代理及配置，启用 `LEON_DEPLOY_ENABLED` 和 `LEON_DEPLOY_SELF_VERIFY`。后台被中断时，由 `ExecStopPost` 恢复并记录结果。
 

@@ -2,6 +2,8 @@ import importlib.util
 import json
 import pathlib
 import os
+import io
+import types
 import tempfile
 import unittest
 import sys
@@ -115,6 +117,23 @@ class DeploymentRunnerTest(unittest.TestCase):
         self.assertFalse(request.exists())
         self.assertEqual('FAILED', json.loads((control / 'job.json').read_text())['stage'])
         self.assertIn('先推送', json.loads((control / 'job.json').read_text())['message'])
+
+    def test_git_network_failure_uses_a_commit_pinned_official_archive(self):
+        calls = []
+        def command(args, *unused, **kwargs):
+            calls.append([str(value) for value in args])
+            if 'fetch' in args:
+                raise RuntimeError('Git unavailable')
+        owner = types.SimpleNamespace(pw_uid=os.getuid(), pw_gid=os.getgid())
+        response = io.BytesIO(json.dumps({'sha': 'c' * 40}).encode())
+        with patch.object(worker, 'CACHE', deploy.DATA), patch.object(worker, 'build_command', side_effect=command), \
+                patch.object(worker, 'job'), patch.object(worker.pwd, 'getpwnam', return_value=owner), \
+                patch.object(worker.urllib.request, 'urlopen', return_value=response):
+            source = worker.checkout(self.metadata, io.StringIO())
+        self.assertTrue(source.is_dir())
+        self.assertEqual('c' * 40, self.metadata['commit'])
+        self.assertTrue(any('https://codeload.github.com/leonHan01/Leon-Lite-Workflow/tar.gz/' + 'c' * 40 in args for args in calls))
+        self.assertIn('--strip-components=1', calls[-1])
 
 
 if __name__ == '__main__':
