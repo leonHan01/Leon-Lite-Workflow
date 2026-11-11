@@ -6,14 +6,27 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE_PATH || 'playwright')
 const root = path.resolve(__dirname, '../../main/resources/static');
 const record = { id: 7, sourceType: 'JSON', bodyJson: '{"hello":"world"}', rawText: '{"hello":"world"}', createTime:'2026-10-31T10:00:00' };
 let pageViews=0;
+let deploymentJob=null, deploymentRequests=0;
+let deploymentRecords = [
+ {id:'release-new',startedAt:'2026-11-11T16:00:00Z',finishedAt:'2026-11-11T16:01:05Z',version:'2026.11.12.000000',commit:'bbd8d1f42d7853278c4bda200ec78f0fac430234',dirty:true,description:'<img src=x onerror=alert(1)>',status:'ROLLED_BACK'},
+ {id:'release-current',startedAt:'2026-11-11T15:00:00Z',finishedAt:'2026-11-11T15:00:30Z',version:'2026.11.11.230000',commit:'0fb051e',dirty:false,description:'监控页面更新',status:'SUCCESS'},
+];
 let rows=[{id:1,kvKey:'GitHub',kvValue:'https://github.com',kvType:'url',kvCategory:'开发'}];
 const server = http.createServer((req, res) => {
  const url = new URL(req.url, 'http://localhost');
  if (url.pathname==='/api/monitor/page-view') { pageViews++; res.writeHead(204); return res.end(); }
+ if (url.pathname==='/api/monitor/deploy' && req.method==='POST') {
+  assert.equal(req.headers['x-requested-with'],'XMLHttpRequest');
+  deploymentRequests++;
+  deploymentJob={id:'web-release-test',stage:'QUEUED',message:'部署已排队。',startedAt:new Date().toISOString()};
+  res.writeHead(202,{'Content-Type':'application/json'});res.end(JSON.stringify(deploymentJob));
+  setTimeout(()=>{deploymentJob={...deploymentJob,stage:'SUCCESS',message:'部署成功，服务器已更新。'};},500);
+  return;
+ }
  if (url.pathname==='/api/monitor') {
   res.setHeader('Content-Type','application/json');
   const current={time:new Date().toISOString(),cpuPercent:25,memoryPercent:50,memoryUsedBytes:1073741824,memoryTotalBytes:2147483648,diskPercent:40,diskUsedBytes:40,diskTotalBytes:100};
-  return res.end(JSON.stringify({current,samples:[current],pageViews:[{day:'2026-10-31',views:pageViews}]}));
+  return res.end(JSON.stringify({current,samples:[current],pageViews:[{day:'2026-10-31',views:pageViews}],deployments:{currentId:'release-current',records:deploymentRecords,total:deploymentRecords.length,available:true,unreadable:0},deploymentControl:{enabled:true,busy:deploymentJob?.stage==='QUEUED',job:deploymentJob}}));
  }
  if (url.pathname==='/api/admin/database-backup') {
   res.setHeader('Content-Type','application/sql; charset=utf-8');
@@ -119,6 +132,22 @@ const server = http.createServer((req, res) => {
   await page.waitForFunction(() => ['cpu','memory','disk','pv'].every(name => document.querySelector(`[data-chart="${name}"] canvas`)) && document.querySelector('[data-value="pv"]')?.textContent !== '—');
   assert.equal(await page.locator('[data-value="cpu"]').textContent(),'25.0%');
   assert.equal(await page.locator('[data-value="memory"]').textContent(),'50.0%');
+  assert.equal(await page.locator('[data-deployments] tr').count(),2);
+  assert.equal(await page.locator('[data-deployments] tr').first().locator('td').nth(2).textContent(),'<img src=x onerror=alert(1)>');
+  assert.equal(await page.locator('[data-deployments] img').count(),0,'部署说明应作为文本显示');
+  assert.match(await page.locator('[data-deployments] time').first().textContent(),/2026\/11\/12 00:00:00/,'部署时间应使用北京时间');
+  assert.equal(await page.locator('[data-deployments] tr').first().locator('td').last().textContent(),'1 分 5 秒');
+  assert.equal(await page.locator('[data-deployments] tr').first().locator('.monitor-deployment-result').textContent(),'已回滚');
+  assert.equal(await page.locator('.monitor-current-release').locator('..').locator('strong').textContent(),'2026.11.11.230000','回滚后当前运行版本标记错误');
+  await page.getByRole('button',{name:'一键部署',exact:true}).click();
+  await page.getByText('部署已排队。',{exact:true}).waitFor();
+  assert.equal(await page.locator('.monitor-deploy').isDisabled(),true,'部署期间应禁止重复点击');
+  await page.getByText('部署成功，服务器已更新。',{exact:true}).waitFor({timeout:10000});
+  assert.equal(deploymentRequests,1);
+  assert.equal(await page.locator('.monitor-deploy').isEnabled(),true);
+  await page.setViewportSize({width:800,height:900});
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'部署列表使页面横向溢出');
+  await page.setViewportSize({width:1440,height:1000});
   const chartData = await page.evaluate(() => Object.fromEntries(['cpu', 'memory', 'disk', 'pv'].map(name => {
    const option = window.echarts.getInstanceByDom(document.querySelector(`[data-chart="${name}"]`)).getOption();
    return [name, { series: option.series.map(series => ({ name: series.name, value: series.data[0] })) }];

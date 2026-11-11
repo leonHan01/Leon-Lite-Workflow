@@ -28,6 +28,8 @@ public class MonitoringService {
     private static final ZoneId ZONE = ZoneId.of("Asia/Shanghai");
     private static final int MAX_SAMPLES = 24 * 60;
     private final JdbcTemplate jdbc;
+    private final DeploymentHistoryService deployments;
+    private final DeploymentControlService deploymentControl;
     private final Deque<Sample> samples = new ArrayDeque<>();
     private final ScheduledExecutorService sampler = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread thread = new Thread(r, "monitor-sampler");
@@ -35,7 +37,11 @@ public class MonitoringService {
         return thread;
     });
 
-    public MonitoringService(JdbcTemplate jdbc) { this.jdbc = jdbc; }
+    public MonitoringService(JdbcTemplate jdbc, DeploymentHistoryService deployments, DeploymentControlService deploymentControl) {
+        this.jdbc = jdbc;
+        this.deployments = deployments;
+        this.deploymentControl = deploymentControl;
+    }
 
     @PostConstruct
     void start() { sampler.scheduleWithFixedDelay(this::sampleSafely, 0, 1, TimeUnit.MINUTES); }
@@ -89,11 +95,12 @@ public class MonitoringService {
         for (LocalDate day = first; !day.isAfter(today); day = day.plusDays(1)) {
             days.add(new DailyViews(day, totals.getOrDefault(day, 0L)));
         }
-        return new Dashboard(samples.peekLast(), List.copyOf(samples), days);
+        return new Dashboard(samples.peekLast(), List.copyOf(samples), days, deployments.history(), deploymentControl.control());
     }
 
     public record Sample(Instant time, Double cpuPercent, Double memoryPercent, Long memoryUsedBytes,
                          Long memoryTotalBytes, Double diskPercent, Long diskUsedBytes, Long diskTotalBytes) { }
     public record DailyViews(LocalDate day, long views) { }
-    public record Dashboard(Sample current, List<Sample> samples, List<DailyViews> pageViews) { }
+    public record Dashboard(Sample current, List<Sample> samples, List<DailyViews> pageViews,
+                            DeploymentHistoryService.History deployments, DeploymentControlService.Control deploymentControl) { }
 }

@@ -69,6 +69,11 @@ public class BrowserSessionService {
     @Transactional
     public void revoke(HttpServletRequest request) {
         String value = cookie(request);
+        revokeValue(value);
+    }
+
+    @Transactional
+    public void revokeValue(String value) {
         if (value != null) repository.deleteById(hash(value));
     }
 
