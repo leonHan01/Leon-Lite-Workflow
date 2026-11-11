@@ -1,0 +1,30 @@
+import importlib.util
+import pathlib
+import tempfile
+import unittest
+import zipfile
+
+spec = importlib.util.spec_from_file_location('deploy', pathlib.Path(__file__).parents[1] / 'deploy.py')
+deploy = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(deploy)
+
+
+class MusicReleaseTest(unittest.TestCase):
+    def test_old_release_cannot_remove_radio(self):
+        with tempfile.TemporaryDirectory() as folder:
+            jar = pathlib.Path(folder) / 'app.jar'
+            with zipfile.ZipFile(jar, 'w') as archive:
+                archive.writestr('BOOT-INF/classes/com/leon/workflow/controller/MusicController.class', b'/audio')
+            with self.assertRaisesRegex(RuntimeError, 'radio endpoint'):
+                deploy.verify_music_routes(jar)
+
+    def test_radio_release_passes_guard(self):
+        with tempfile.TemporaryDirectory() as folder:
+            jar = pathlib.Path(folder) / 'app.jar'
+            with zipfile.ZipFile(jar, 'w') as archive:
+                archive.writestr('BOOT-INF/classes/com/leon/workflow/controller/MusicController.class', b'/audio /radio')
+            deploy.verify_music_routes(jar)
+
+
+if __name__ == '__main__':
+    unittest.main()

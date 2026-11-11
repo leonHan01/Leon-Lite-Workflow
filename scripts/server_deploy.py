@@ -169,13 +169,14 @@ def main():
                 job(metadata, stage, '代码拉取完成，正在使用 Java 21 和 Maven 打包。')
                 build_command([INSTALL / 'maven/bin/mvn', '-B', '-DskipTests', 'clean', 'package'], log, cwd=source, timeout=900)
                 metadata['stagedJar'] = str(source / 'target/hello-service-0.0.1-SNAPSHOT.jar')
+                deploy.verify_music_routes(pathlib.Path(metadata['stagedJar']))
                 metadata['jarSha256'] = deploy.sha256(pathlib.Path(metadata['stagedJar']))
                 deploy.atomic_json(metadata_file, metadata)
             stage = 'DEPLOYING'
             job(metadata, stage, '构建完成，正在备份数据并更新服务。')
             deploy.apply(metadata)
             stage = 'VERIFYING'
-            job(metadata, stage, '服务已启动，正在验证 HTTPS、认证及 Alfred 查询。')
+            job(metadata, stage, '服务已启动，正在验证 HTTPS、认证、Alfred 查询和音乐电台。')
             wait_for_verification(metadata)
             deploy.services()
             deploy.record(metadata, 'SUCCESS')

@@ -70,9 +70,26 @@ public class DeploymentVerificationService {
                     .POST(HttpRequest.BodyPublishers.ofString(body)).build();
             var response = client.send(authorized, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() != 200) throw new IllegalStateException();
+            boolean calculatorPassed = false;
             for (var item : mapper.readTree(response.body())) {
-                if (item.path("title").asText().equals("3") || item.path("msgNeedToCopy").asText().equals("3")) success = true;
+                if (item.path("title").asText().equals("3") || item.path("msgNeedToCopy").asText().equals("3")) calculatorPassed = true;
             }
+            if (!calculatorPassed) throw new IllegalStateException();
+            for (String path : new String[]{"/api/music/tracks", "/api/music/tracks/radio"}) {
+                var publicRequest = HttpRequest.newBuilder(URI.create(origin + path)).timeout(Duration.ofSeconds(15)).GET().build();
+                if (client.send(publicRequest, HttpResponse.BodyHandlers.discarding()).statusCode() != 401) throw new IllegalStateException();
+                var privateRequest = HttpRequest.newBuilder(URI.create(origin + path)).timeout(Duration.ofSeconds(15))
+                        .header("Cookie", BrowserSessionService.COOKIE_NAME + "=" + cookie).GET().build();
+                var music = client.send(privateRequest, HttpResponse.BodyHandlers.ofString());
+                if (path.endsWith("/radio") && music.statusCode() == 204) continue;
+                if (music.statusCode() != 200) throw new IllegalStateException();
+                var json = mapper.readTree(music.body());
+                if (path.endsWith("/radio")) {
+                    java.util.UUID.fromString(json.path("id").asText());
+                    if (json.path("size").asLong() <= 0 || json.path("sha256").asText().length() != 64) throw new IllegalStateException();
+                } else if (!json.isArray()) throw new IllegalStateException();
+            }
+            success = true;
         } catch (Exception ignored) { /* Receipt contains only the result, never credentials or response bodies. */ }
         finally { if (cookie != null) sessions.revokeValue(cookie); }
         try {

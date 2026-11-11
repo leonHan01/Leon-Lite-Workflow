@@ -21,6 +21,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+import zipfile
 
 INSTANCE = 'i-bp1dc1ow687ogmpmxc87'
 BASE_URL = 'https://121.40.254.112'
@@ -47,6 +48,16 @@ def sha256(path):
         for chunk in iter(lambda: stream.read(1024 * 1024), b''):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+
+def verify_music_routes(jar):
+    # The installed worker runs this before replacing the service, even when
+    # Git main contains an older self-verification implementation.
+    with zipfile.ZipFile(str(jar)) as archive:
+        controller = archive.read('BOOT-INF/classes/com/leon/workflow/controller/MusicController.class')
+        if b'/radio' not in controller:
+            raise RuntimeError('release is missing the music radio endpoint')
 
 
 def now():
@@ -259,7 +270,23 @@ def public_checks(metadata):
         history = json.load(response).get('deployments', {})
         if history.get('currentId') != metadata['id'] or not any(item['id'] == metadata['id'] for item in history.get('records', [])):
             raise RuntimeError('current deployment history is missing')
-    print('PUBLIC_HTTPS_AUTH_ALFRED_AND_HISTORY=passed', flush=True)
+    for path in ['/api/music/tracks', '/api/music/tracks/radio']:
+        with request(path) as response:
+            if response.getcode() != 401:
+                raise RuntimeError('public music authentication interception failed')
+    with request('/api/music/tracks', True) as response:
+        if response.getcode() != 200 or not isinstance(json.load(response), list):
+            raise RuntimeError('authorized music catalog failed')
+    with request('/api/music/tracks/radio', True) as response:
+        code = response.getcode()
+        if code not in (200, 204):
+            raise RuntimeError('authorized music radio failed')
+        if code == 200:
+            song = json.load(response)
+            uuid.UUID(song['id'])
+            if not song.get('sha256') or not song.get('size'):
+                raise RuntimeError('invalid radio response')
+    print('PUBLIC_HTTPS_AUTH_ALFRED_HISTORY_AND_MUSIC=passed', flush=True)
 
 
 def local(description):
@@ -275,6 +302,7 @@ def local(description):
     # Maven test output stays local; it is never copied into deployment history.
     subprocess.run(['mvn', '-B', 'clean', 'verify'], env=env, check=True)
     jar = root / 'target/hello-service-0.0.1-SNAPSHOT.jar'
+    verify_music_routes(jar)
     commit = run(['git', 'rev-parse', 'HEAD'])
     dirty = bool(run(['git', 'status', '--porcelain']))
     stamp = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).strftime('%Y.%m.%d.%H%M%S')

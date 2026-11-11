@@ -16,6 +16,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.*;
+import java.util.concurrent.ThreadLocalRandom;
 
 @Service
 public class MusicLibraryService {
@@ -30,6 +31,27 @@ public class MusicLibraryService {
     }
 
     public List<MusicTrack> list() { return tracks.findAllByOrderByUploadedAtDesc(); }
+
+    public Optional<MusicTrack> radio(UUID excluded) {
+        List<String> candidates = new ArrayList<>(tracks.findRadioCandidates(excluded == null ? null : excluded.toString()));
+        // A library with one song can keep playing that song.
+        if (candidates.isEmpty() && excluded != null) candidates = new ArrayList<>(tracks.findRadioCandidates(null));
+        // Skip removed/missing files, including songs deleted during selection.
+        while (!candidates.isEmpty()) {
+            int index = ThreadLocalRandom.current().nextInt(candidates.size());
+            String id = candidates.remove(index);
+            Optional<MusicTrack> track = tracks.findById(id);
+            if (track.isPresent()) {
+                Path file = root.resolve(id + "." + track.get().getExtension());
+                if (Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) return track;
+            }
+        }
+        if (excluded != null) {
+            Optional<MusicTrack> last = tracks.findById(excluded.toString());
+            if (last.isPresent() && Files.isRegularFile(root.resolve(last.get().getId() + "." + last.get().getExtension()), LinkOption.NOFOLLOW_LINKS)) return last;
+        }
+        return Optional.empty();
+    }
 
     public MusicTrack get(String id) {
         if (id == null || !id.matches("[0-9a-f-]{36}")) throw missing();

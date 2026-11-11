@@ -102,4 +102,36 @@ class MusicIntegrationTest {
         mvc.perform(get("/api/music/tracks/not-a-uuid/audio").header("Authorization", AUTH)).andExpect(status().isNotFound());
         try (var files = Files.list(ROOT)) { assertFalse(files.anyMatch(file -> file.getFileName().toString().startsWith(".upload-"))); }
     }
+
+    @Test void radioReturnsOneSongAndAvoidsPreviousWhenPossible() throws Exception {
+        var mvc = mvc();
+        mvc.perform(get("/api/music/tracks/radio")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/api/music/tracks/radio").header("Authorization", AUTH)).andExpect(status().isNoContent());
+        var first = library.upload(audio("first.wav"), "First", "", "", 0);
+        try {
+            mvc.perform(get("/api/music/tracks/radio").header("Authorization", AUTH).param("exclude", first.getId()))
+                    .andExpect(status().isOk()).andExpect(header().string("Cache-Control", "no-store"))
+                    .andExpect(jsonPath("$.id").value(first.getId())).andExpect(jsonPath("$.sha256").isString());
+            var second = library.upload(audio("second.wav"), "Second", "", "", 0);
+            try {
+                for (int i = 0; i < 8; i++) {
+                    mvc.perform(get("/api/music/tracks/radio").header("Authorization", AUTH).param("exclude", first.getId()))
+                            .andExpect(status().isOk()).andExpect(jsonPath("$.id").value(second.getId()));
+                }
+                mvc.perform(get("/api/music/tracks/radio").header("Authorization", AUTH).param("exclude", "invalid"))
+                        .andExpect(status().isBadRequest());
+                Files.delete(ROOT.resolve(second.getId() + ".wav"));
+                mvc.perform(get("/api/music/tracks/radio").header("Authorization", AUTH).param("exclude", first.getId()))
+                        .andExpect(status().isOk()).andExpect(jsonPath("$.id").value(first.getId()));
+            } finally { library.delete(second.getId()); }
+        } finally { library.delete(first.getId()); }
+    }
+
+    @Test void radioIgnoresMissingAudioFiles() throws Exception {
+        var song = library.upload(audio("missing.wav"), "Missing", "", "", 0);
+        try {
+            Files.delete(ROOT.resolve(song.getId() + ".wav"));
+            mvc().perform(get("/api/music/tracks/radio").header("Authorization", AUTH)).andExpect(status().isNoContent());
+        } finally { library.delete(song.getId()); }
+    }
 }

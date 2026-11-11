@@ -23,6 +23,13 @@ public class MusicController {
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(library.list());
     }
 
+    @GetMapping("/radio")
+    public ResponseEntity<MusicTrack> radio(@RequestParam(required = false) java.util.UUID exclude) {
+        return library.radio(exclude)
+                .map(track -> ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(track))
+                .orElseGet(() -> ResponseEntity.noContent().cacheControl(CacheControl.noStore()).build());
+    }
+
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<MusicTrack> upload(@RequestParam("file") MultipartFile file,
             @RequestParam(defaultValue = "") String title, @RequestParam(defaultValue = "") String artist,
