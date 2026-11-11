@@ -1,0 +1,11 @@
+<div class="music-content">
+    <div class="music-heading"><div><div class="lw-section-kicker">SONORA · MUSIC LIBRARY</div><h1>把喜欢的歌，放在一起。</h1><p>上传后可在声屿的在线模式中收听，播放过的歌曲也能离线听。</p></div><button type="button" data-refresh>刷新曲库</button></div>
+    <form class="music-upload" data-upload>
+        <h2>上传歌曲</h2><p>支持 MP3、M4A、AAC、WAV、AIFF、CAF 和 FLAC，单首不超过 128 MB。多首歌曲会依次上传。</p>
+        <label class="music-files">选择歌曲 <input type="file" name="files" accept=".mp3,.m4a,.aac,.wav,.aif,.aiff,.caf,.flac" multiple required></label>
+        <div class="music-fields"><label>艺术家（可选）<input name="artist" maxlength="240" placeholder="未知艺术家"></label><label>专辑（可选）<input name="album" maxlength="240" placeholder="未知专辑"></label><button type="submit">上传到曲库 ↗</button></div>
+        <p class="music-status" data-status role="status" aria-live="polite"></p>
+    </form>
+    <div class="music-toolbar"><h2>在线曲库 <span data-count></span></h2><input type="search" data-search placeholder="搜索歌曲、艺术家、专辑" aria-label="搜索歌曲"></div>
+    <p data-list-status role="status"></p><div class="music-table-wrap"><table class="music-table"><thead><tr><th>歌曲 / 艺术家</th><th>专辑</th><th>大小</th><th>试听</th><th>管理</th></tr></thead><tbody data-tracks></tbody></table></div>
+</div>

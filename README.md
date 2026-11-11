@@ -48,6 +48,7 @@ H2 把数据写到运行目录下的 `data/leon-workflow.mv.db`。该目录不�
 | `LEON_AUTH_TOKEN_SHA256` | 访问令牌 UTF-8 字节的 SHA-256 十六进制摘要。设置合法摘要后即启用令牌认证 |
 | `LEON_AUTH_REQUIRED` | 设为 `true` 时，摘要缺失或格式错误会拒绝启动 |
 | `LEON_AUTH_ADMIN_ORIGIN` | 管理页写请求必须匹配的准确 `Origin` |
+| `LEON_MUSIC_DIRECTORY` | 歌曲音频目录，默认 `./data/music`。正式部署应设为 `/var/lib/leon-lite-workflow/music` 并给予服务用户读写权限 |
 | `LEON_PLUGIN_DIGEST_SCHEDULING_ENABLED` | `true` 时启用定时统计和日结，默认 `false` |
 | `PLAYWRIGHT_MODULE_PATH` / `CHROME_PATH` | 浏览器回归测试使用的本机依赖 |
 
@@ -94,6 +95,7 @@ curl -X POST http://127.0.0.1:8080/api/diamond -H 'Content-Type: application/jso
 | `/simple-kv.html` | 快捷项 |
 | `/json-record-search.html`、`/json-record.html` | JSON 记录与详情 |
 | `/monitor.html` | 服务器监控 |
+| `/music.html` | 声屿歌曲管理，支持多首上传、搜索、试听和删除 |
 | `/advanced-settings.html` | 高级设置，含数据库 SQL 备份 |
 | `/admin-login.html` | 访问令牌登录 |
 
@@ -104,6 +106,25 @@ curl -X POST http://127.0.0.1:8080/api/diamond -H 'Content-Type: application/jso
 **登录。** 管理页与插件、Alfred 使用同一个访问令牌。默认勾选「永久记住登录」：服务端会话不设到期时间；浏览器通过 `Secure`、`HttpOnly`、`SameSite=Lax` 的 Cookie 保存随机会话凭证，关闭浏览器后仍然有效。持久 Cookie 为 400 天，调用管理接口时自动续期。浏览器可能限制 Cookie 的保存时间，或清除 Cookie。取消勾选时使用浏览器会话 Cookie，服务端最长保留 12 小时。原始令牌不写入 localStorage 或 sessionStorage；服务端保存会话摘要和有效期。会话保存在 H2 中，升级重启不会丢失。主动退出、清除 Cookie 或更换访问令牌后需要重新登录。升级前创建的 30 天会话保持原有效期，重新登录后采用新设置。共享设备使用后点击右上角「退出登录」。
 
 部署时，将 `/workspace/` 静态资源与其它管理页面放在同一套 HTTPS 登录保护之后。
+
+### 声屿在线歌曲
+
+在 `/music.html` 上传 MP3、M4A、AAC、WAV、AIFF、CAF 或 FLAC，单首最多 128 MB，多首依次上传。歌曲名默认取文件名，艺术家和专辑可在上传时填写。浏览器读取可识别格式的时长；声屿客户端下载后补充音频标签、封面和实际时长。管理页提供搜索、试听及确认后删除。删除同时移除服务器音频文件，客户端已缓存的离线副本保留。
+
+接口沿用现有认证：客户端使用 Bearer 令牌，管理页使用 HttpOnly Cookie；Cookie 写请求仍验证准确 Origin 和 `X-Requested-With`，不会公开未认证的音乐接口。
+
+| 接口 | 行为 |
+| --- | --- |
+| `GET /api/music/tracks` | 返回歌曲 JSON 数组，含稳定 UUID、标题、艺术家、专辑、格式、时长、字节数、SHA-256 和上传时间 |
+| `POST /api/music/tracks` | multipart 上传单个 `file`，可附带 `title`、`artist`、`album`、`duration`；成功返回 201 |
+| `GET /api/music/tracks/{id}/audio` | 认证后下载音频，支持 Range 请求和浏览器试听 |
+| `DELETE /api/music/tracks/{id}` | 删除元数据及服务器文件，成功返回 204 |
+
+元数据保存在 H2 的 `music_track` 表，音频使用 UUID 文件名保存在 `LEON_MUSIC_DIRECTORY`。上传验证后缀、文件头、大小和元数据；文件先写临时路径，校验成功后原子移动，数据库保存失败时清理文件。SQL 备份包含歌曲元数据，**不包含音频文件**，恢复时同时恢复对应音频目录。
+
+上线时在现有 HTTPS 代理保护下加入 `/music.html`，并允许已认证的 `/api/music/**`。反向代理请求体限制至少为 130 MB，上传超时应覆盖大文件传输。保留现有 Cookie 登录、内部 `/auth/check`、Origin 校验及数据库目录。客户端默认地址仍是 `https://121.40.254.112`，无需调整公网端口。
+
+新增 `MusicIntegrationTest` 验证上传、列表、Range 下载、删除、认证、写入来源及坏文件拒绝；`src/test/browser/music-management.cjs` 使用本机模拟数据验证管理页上传、搜索、删除及窄屏布局。
 
 ## 认证与公网
 

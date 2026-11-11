@@ -1,4 +1,5 @@
 const routes = {
+    '/music.html': ['music', '歌曲管理', 'workspace-music'],
     '/': ['home', '总览', 'workspace-overview'],
     '/index.html': ['home', '总览', 'workspace-overview'],
     '/simple-kv.html': ['kv', '快捷项', 'workspace-kv'],
