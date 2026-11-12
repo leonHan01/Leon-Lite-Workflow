@@ -10,6 +10,8 @@ let playlists = [];
 let playlistWrites = 0;
 let nextPlaylist = 1;
 const id = '00000000-0000-0000-0000-000000000001';
+const secondId = '00000000-0000-0000-0000-000000000002';
+let failNextAddition = false;
 const server = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://localhost');
     if (url.pathname === '/api/monitor/page-view') { res.writeHead(204); return res.end(); }
@@ -26,7 +28,10 @@ const server = http.createServer((req, res) => {
                 playlists.push(list); res.statusCode = 201;
             } else if (!list) { res.statusCode = 404; return res.end('{}'); }
             else if (req.method === 'PUT') list.name = body.name;
-            else if (req.method === 'POST' && parts[4] === 'tracks') list.trackIds = [...new Set([...list.trackIds, ...body.trackIds])];
+            else if (req.method === 'POST' && parts[4] === 'tracks') {
+                if (failNextAddition) { failNextAddition = false; res.statusCode = 503; return res.end(JSON.stringify({ message: '临时失败，请重试。' })); }
+                list.trackIds = [...new Set([...list.trackIds, ...body.trackIds])];
+            }
             else if (req.method === 'DELETE' && parts[4] === 'tracks') list.trackIds = list.trackIds.filter(id => id !== parts[5]);
             else if (req.method === 'DELETE') playlists = playlists.filter(item => item !== list);
             playlistWrites++; res.end(JSON.stringify(list));
@@ -46,10 +51,11 @@ const server = http.createServer((req, res) => {
         });
         return;
     }
-    if (url.pathname === `/api/music/tracks/${id}` && req.method === 'DELETE') {
+    if (url.pathname.startsWith('/api/music/tracks/') && req.method === 'DELETE') {
+        const removedId = url.pathname.split('/').pop();
         assert.equal(req.headers['x-requested-with'], 'XMLHttpRequest');
-        tracks = [];
-        playlists.forEach(list => { list.trackIds = list.trackIds.filter(track => track !== id); });
+        tracks = tracks.filter(track => track.id !== removedId);
+        playlists.forEach(list => { list.trackIds = list.trackIds.filter(track => track !== removedId); });
         writes++;
         res.writeHead(204); return res.end();
     }
@@ -92,13 +98,79 @@ const server = http.createServer((req, res) => {
         assert.equal(await page.locator('audio').getAttribute('preload'), 'none');
         assert.deepEqual(playlists[0].trackIds, [id], 'upload can join a server playlist');
         const secondList = await createPlaylist('通勤');
-        await page.locator('[data-playlist-filter]').selectOption('');
+        const card = value => page.locator(`[data-playlist-id="${value}"]`);
+        const handle = value => page.locator(`[data-track-id="${value}"] .music-drag-handle`);
+        async function finishWrite() { await page.waitForFunction(() => !document.querySelector('[data-refresh]').disabled && !document.querySelector('[data-playlist-cards] button:disabled')); }
+        async function drag(value, target) { await handle(value).dragTo(card(target)); await finishWrite(); }
+        assert.equal(await page.locator('[data-tracks] tr').count(), 1, 'new playlists keep the source library visible');
+        assert.equal(await card(secondList).getAttribute('aria-pressed'), 'false');
+        assert.equal(await page.locator('[data-uploader]').getAttribute('open'), null, 'successful upload collapses its controls so songs and drop targets stay visible');
+        const sourceBox = await handle(id).boundingBox(), targetBox = await card(secondList).boundingBox();
+        await page.mouse.move(sourceBox.x + sourceBox.width / 2, sourceBox.y + sourceBox.height / 2); await page.mouse.down();
+        await page.mouse.move(targetBox.x + targetBox.width / 2, targetBox.y + targetBox.height / 2, { steps: 12 });
+        await card(secondList).locator('small').filter({ hasText: '松开加入 1 首歌曲' }).waitFor();
+        assert.match(await card(secondList).getAttribute('class'), /is-drag-over/, 'drop target highlights before release');
+        await page.waitForFunction(id => getComputedStyle(document.querySelector(`[data-playlist-id="${id}"]`)).borderTopColor === 'rgb(68, 134, 99)', secondList);
+        assert.notEqual(await card(secondList).evaluate(node => getComputedStyle(node).boxShadow), 'none', 'drag highlight remains visible under the global theme');
+        if (process.env.SCREENSHOT_PATH) await page.screenshot({ path: process.env.SCREENSHOT_PATH.replace('.png', '-hover.png') });
+        await page.mouse.up(); await finishWrite();
+        await page.getByText('已将 1 首歌曲加入「通勤」。').waitFor();
+        assert.deepEqual(playlists[1].trackIds, [id]);
+        const beforeDuplicate = playlistWrites;
+        await drag(id, secondList);
+        await page.getByText('所选 1 首歌曲已在「通勤」中，无需重复加入。').waitFor();
+        assert.equal(playlistWrites, beforeDuplicate, 'duplicate drops do not create redundant writes');
+
+        tracks.push({ id: secondId, title: 'Second song', artist: '第二位歌手', album: 'Album', size: 88 });
+        await page.getByRole('button', { name: '刷新曲库', exact: true }).click(); await finishWrite();
+        const thirdList = await createPlaylist('多选拖拽');
         await page.getByRole('checkbox', { name: '全选当前列表' }).check();
-        await page.locator('[data-destination]').selectOption(secondList);
-        await page.getByRole('button', { name: '将所选歌曲加入歌单' }).click();
-        await page.getByText('所选歌曲已加入在线歌单，重复歌曲会自动跳过。').waitFor();
-        await page.waitForFunction(() => !document.querySelector('[data-refresh]').disabled);
-        assert.deepEqual(playlists[1].trackIds, [id], 'one song joins multiple playlists');
+        await drag(id, thirdList);
+        await page.getByText('已将 2 首歌曲加入「多选拖拽」。').waitFor();
+        assert.deepEqual(playlists.find(list => list.id === thirdList).trackIds, [id, secondId]);
+        assert.equal(await page.locator('[data-selection-count]').innerText(), '已选 0 首');
+        assert.equal(await page.locator('.is-dragging, .is-drag-over, .is-drag-source').count(), 0, 'drop clears drag visuals');
+
+        failNextAddition = true;
+        await drag(secondId, secondList);
+        await page.locator('[data-playlist-status].is-error').filter({ hasText: '临时失败，请重试。' }).waitFor();
+        assert.deepEqual(playlists[1].trackIds, [id], 'failed drops keep membership unchanged');
+        assert.equal(await page.locator('[data-tracks] tr').count(), 2, 'failed drops retain source songs');
+        await drag(secondId, secondList);
+        await page.getByText('已将 1 首歌曲加入「通勤」。').waitFor();
+        assert.deepEqual(playlists[1].trackIds, [id, secondId]);
+
+        const beforeForeign = playlistWrites;
+        const foreign = await page.evaluateHandle(() => { const data = new DataTransfer(); data.setData('application/x-sonora-tracks', '["00000000-0000-0000-0000-000000000002"]'); return data; });
+        await card(firstList).dispatchEvent('drop', { dataTransfer: foreign }); await foreign.dispose();
+        assert.equal(playlistWrites, beforeForeign, 'external payloads cannot add arbitrary songs');
+        const start = await handle(id).boundingBox();
+        await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2); await page.mouse.down();
+        await page.mouse.move(start.x + 45, start.y + 15, { steps: 8 });
+        await page.locator('.is-dragging').waitFor();
+        await page.keyboard.press('Escape'); await page.mouse.up();
+        await page.waitForFunction(() => !document.querySelector('.is-dragging, .is-drag-over, .is-drag-source'));
+        assert.equal(playlistWrites, beforeForeign, 'cancelled drags do not write');
+
+        for (const width of [1440, 800, 390]) {
+            await page.setViewportSize({ width, height: 900 });
+            assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'drag layout should not overflow');
+        }
+        await page.setViewportSize({ width: 1440, height: 1000 });
+        await page.evaluate(() => scrollTo(0, 0));
+        if (process.env.SCREENSHOT_PATH) await page.screenshot({ path: process.env.SCREENSHOT_PATH, fullPage: true });
+        page.once('dialog', dialog => dialog.accept());
+        await page.locator(`[data-track-id="${secondId}"]`).getByRole('button', { name: '删除', exact: true }).click(); await finishWrite();
+        await page.locator('[data-playlist-filter]').selectOption(thirdList);
+        page.once('dialog', dialog => dialog.accept()); await page.getByRole('button', { name: '删除歌单', exact: true }).click(); await finishWrite();
+        // Keep the existing select-and-add path as a keyboard/touch alternative.
+        await page.locator('[data-playlist-filter]').selectOption(firstList);
+        await page.locator('[data-tracks]').getByRole('button', { name: '移出歌单', exact: true }).click(); await finishWrite();
+        await page.locator('[data-all-tracks]').click();
+        await page.getByRole('checkbox', { name: '全选当前列表' }).check();
+        await page.locator('[data-destination]').selectOption(firstList);
+        await page.getByRole('button', { name: '将所选歌曲加入歌单' }).click(); await finishWrite();
+        assert.deepEqual(playlists[0].trackIds, [id], 'batch add remains available');
         await page.locator('[data-playlist-filter]').selectOption(firstList);
         page.once('dialog', dialog => dialog.accept('夜间'));
         await page.getByRole('button', { name: '重命名歌单', exact: true }).click();
@@ -122,16 +194,17 @@ const server = http.createServer((req, res) => {
             assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'page should not overflow');
         }
         await page.setViewportSize({ width: 1440, height: 1000 });
+        await page.evaluate(() => scrollTo(0, 0));
         if (process.env.SCREENSHOT_PATH) await page.screenshot({ path: process.env.SCREENSHOT_PATH, fullPage: true });
         page.on('dialog', dialog => dialog.accept());
         await page.locator('[data-tracks]').getByRole('button', { name: '删除', exact: true }).click();
         await page.getByText('曲库还是空的，上传第一首歌曲吧。').waitFor();
-        assert.equal(writes, 2);
+        assert.equal(writes, 3);
         assert.ok(playlistWrites >= 6);
         assert.deepEqual(playlists[0].trackIds, [], 'deleting a song clears memberships');
         await page.reload();
         await page.getByText('曲库还是空的，上传第一首歌曲吧。').waitFor();
         assert.deepEqual(errors, []);
-        console.log('Music management browser checks passed.');
+        console.log('Music management checks passed: single/multi drag, duplicates, errors/retry, cancellation, external payloads, batch alternative and responsive layout.');
     } finally { await browser.close(); server.close(); }
 })().catch(error => { console.error(error); server.close(); process.exitCode = 1; });

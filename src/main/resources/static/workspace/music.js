@@ -14,6 +14,118 @@ export function mount(root) {
     const destination = find('[data-destination]');
     const endpoint = id => `/api/music/playlists/${encodeURIComponent(id)}`;
     const json = value => ({ headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) });
+    const cards = new Map();
+    const dragType = 'application/x-sonora-tracks';
+    const dragHint = find('[data-drag-hint]');
+    const defaultDragHint = dragHint.textContent;
+    let draggedIds = [];
+    let dragPreview = null;
+    let newPlaylistId = null;
+    let pendingPlaylistId = null;
+    let lastDropResult = null;
+
+    function report(message, error = false) {
+        playlistStatus.textContent = message;
+        playlistStatus.classList.toggle('is-error', error);
+    }
+    function selectPlaylist(id) {
+        playlistFilter.value = id;
+        selected.clear(); renderPlaylists(); render();
+    }
+    function acceptsDrag(event) {
+        return !writing && draggedIds.length > 0 && [...(event.dataTransfer?.types || [])].includes(dragType);
+    }
+    function clearDrag() {
+        draggedIds = [];
+        root.classList.remove('is-dragging');
+        root.querySelectorAll('.is-drag-source').forEach(row => row.classList.remove('is-drag-source'));
+        cards.forEach(card => card.classList.remove('is-drag-over'));
+        dragPreview?.remove(); dragPreview = null;
+        dragHint.textContent = defaultDragHint;
+        renderPlaylistCards();
+    }
+    function renderPlaylistCards() {
+        const container = find('[data-playlist-cards]');
+        for (const [id, card] of cards) {
+            if (!playlists.some(list => list.id === id)) { card.remove(); cards.delete(id); }
+        }
+        for (const list of playlists) {
+            let card = cards.get(list.id);
+            if (!card) {
+                card = document.createElement('button'); card.type = 'button'; card.className = 'music-playlist-card';
+                card.dataset.playlistId = list.id;
+                card.append(document.createElement('strong'), document.createElement('small'));
+                card.addEventListener('click', () => selectPlaylist(list.id));
+                card.addEventListener('dragover', event => {
+                    if (!acceptsDrag(event)) {
+                        if ([...(event.dataTransfer?.types || [])].includes('Files')) { event.preventDefault(); event.dataTransfer.dropEffect = 'none'; }
+                        return;
+                    }
+                    event.preventDefault(); event.dataTransfer.dropEffect = 'copy';
+                    card.classList.add('is-drag-over');
+                    card.querySelector('small').textContent = `松开加入 ${draggedIds.length} 首歌曲`;
+                });
+                card.addEventListener('dragleave', event => {
+                    if (!card.contains(event.relatedTarget)) { card.classList.remove('is-drag-over'); renderPlaylistCards(); }
+                });
+                card.addEventListener('drop', event => {
+                    event.preventDefault(); event.stopPropagation();
+                    const ids = acceptsDrag(event) ? [...draggedIds] : [];
+                    clearDrag();
+                    if (ids.length) addTracksToPlaylist(list.id, ids);
+                    else if (!writing) report('请从曲库拖入已上传的歌曲；也可以勾选歌曲后批量加入。');
+                });
+                cards.set(list.id, card); container.append(card);
+            }
+            card.querySelector('strong').textContent = list.name;
+            const feedback = lastDropResult?.id === list.id ? lastDropResult.message : null;
+            card.querySelector('small').textContent = pendingPlaylistId === list.id ? '正在加入…' : feedback ? `${list.trackIds.length} 首歌曲 · ${feedback}` : (newPlaylistId === list.id ? '新建歌单 · 拖入歌曲' : `${list.trackIds.length} 首歌曲 · 拖入添加`);
+            card.disabled = writing;
+            card.setAttribute('aria-pressed', String(playlistFilter.value === list.id));
+            card.setAttribute('aria-busy', String(pendingPlaylistId === list.id));
+            card.setAttribute('aria-label', `${list.name}，${list.trackIds.length} 首歌曲，拖入歌曲加入`);
+            card.classList.toggle('is-new', newPlaylistId === list.id);
+        }
+        find('[data-playlist-empty]').hidden = playlists.length > 0;
+        find('[data-all-tracks]').setAttribute('aria-pressed', String(!playlistFilter.value));
+        find('[data-library-count]').textContent = String(tracks.length);
+    }
+
+    async function addTracksToPlaylist(id, trackIds) {
+        if (writing) return;
+        const list = playlists.find(item => item.id === id);
+        if (!list) { report('目标歌单已移除，请刷新后重试。', true); return; }
+        const valid = new Set(tracks.map(track => track.id));
+        const ids = [...new Set(trackIds)].filter(track => valid.has(track));
+        if (!ids.length) { report('这些歌曲已不在曲库中，请刷新后重试。', true); return; }
+        const existing = new Set(list.trackIds);
+        const incoming = ids.filter(track => !existing.has(track));
+        if (!incoming.length) {
+            lastDropResult = { id, message: '这些歌曲已在歌单中' };
+            report(`所选 ${ids.length} 首歌曲已在「${list.name}」中，无需重复加入。`);
+            renderPlaylistCards(); return;
+        }
+        pendingPlaylistId = id; lastDropResult = null;
+        let added = 0;
+        const success = await writePlaylist(async () => {
+            for (let offset = 0; offset < incoming.length; offset += 1000) {
+                const chunk = incoming.slice(offset, offset + 1000);
+                const updated = await (await checked(await fetch(`${endpoint(id)}/tracks`, { method: 'POST', ...json({ trackIds: chunk }) }))).json();
+                playlists = playlists.map(item => item.id === id ? updated : item);
+                chunk.forEach(track => selected.delete(track)); added += chunk.length;
+            }
+            ids.forEach(track => selected.delete(track));
+            if (newPlaylistId === id) newPlaylistId = null;
+            lastDropResult = { id, message: `已加入 ${added} 首` };
+            report(`已将 ${added} 首歌曲加入「${list.name}」。${ids.length > incoming.length ? `已跳过 ${ids.length - incoming.length} 首重复歌曲。` : ''}`);
+        });
+        pendingPlaylistId = null;
+        if (!success) {
+            lastDropResult = { id, message: '加入未完成 · 可重试' };
+            if (added) report(`已加入 ${added} 首，其余歌曲加入失败，请重试。`, true);
+        }
+        renderPlaylists();
+    }
     function selectionChanged() {
         find('[data-selection-count]').textContent = `已选 ${selected.size} 首`;
         find('[data-add-selected]').disabled = writing || !selected.size || !destination.value;
@@ -34,13 +146,16 @@ export function mount(root) {
         options(form.elements.playlistId, '仅上传到曲库');
         find('[data-rename-playlist]').disabled = !playlistFilter.value || writing;
         find('[data-delete-playlist]').disabled = !playlistFilter.value || writing;
+        find('[data-create-playlist] button').disabled = writing;
+        renderPlaylistCards();
         selectionChanged();
     }
     async function writePlaylist(action) {
-        if (writing) return;
+        if (writing) return false;
         writing = true; renderPlaylists();
-        try { await action(); await refresh(); }
-        catch (error) { playlistStatus.textContent = error.message; }
+        playlistStatus.classList.remove('is-error');
+        try { await action(); await refresh(); return true; }
+        catch (error) { report(error.message, true); return false; }
         finally { writing = false; renderPlaylists(); }
     }
 
@@ -62,15 +177,35 @@ export function mount(root) {
         const byId = new Map(tracks.map(track => [track.id, track]));
         const songs = list ? list.trackIds.map(id => byId.get(id)).filter(Boolean) : tracks;
         visible = songs.filter(track => `${track.title} ${track.artist} ${track.album}`.toLocaleLowerCase().includes(query));
-        find('[data-count]').textContent = `· ${tracks.length} 首`;
+        find('[data-library-title]').textContent = list?.name || '在线曲库';
+        find('[data-count]').textContent = `· ${songs.length} 首`;
         if (!visible.length) listStatus.textContent = !list && !tracks.length ? '曲库还是空的，上传第一首歌曲吧。' : query ? '没有匹配的歌曲。' : list ? '这张在线歌单还没有歌曲。从全部曲库勾选歌曲后加入。' : '没有匹配的歌曲。';
         else listStatus.textContent = '';
         for (const track of visible) {
             const row = document.createElement('tr');
+            row.dataset.trackId = track.id; row.draggable = true;
+            let dragBlocked = false;
+            row.addEventListener('pointerdown', event => { dragBlocked = Boolean(event.target.closest('audio, input, button, select, a')); });
+            row.addEventListener('dragstart', event => {
+                if (dragBlocked || writing || loading || !event.dataTransfer) { event.preventDefault(); return; }
+                draggedIds = selected.has(track.id) ? [...selected] : [track.id];
+                event.dataTransfer.effectAllowed = 'copy';
+                event.dataTransfer.setData(dragType, JSON.stringify(draggedIds));
+                event.dataTransfer.setData('text/plain', draggedIds.length === 1 ? track.title : `${draggedIds.length} 首歌曲`);
+                dragPreview = document.createElement('div'); dragPreview.className = 'music-drag-preview';
+                dragPreview.textContent = `♫ ${draggedIds.length === 1 ? track.title : `${draggedIds.length} 首歌曲`}  ＋`;
+                document.body.append(dragPreview); event.dataTransfer.setDragImage(dragPreview, 16, 16);
+                root.classList.add('is-dragging');
+                rows.querySelectorAll('tr').forEach(item => item.classList.toggle('is-drag-source', draggedIds.includes(item.dataset.trackId)));
+                dragHint.textContent = `正在拖动 ${draggedIds.length} 首歌曲，松开到目标歌单即可加入。`;
+            });
+            row.addEventListener('dragend', clearDrag);
             const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = selected.has(track.id);
             checkbox.setAttribute('aria-label', `选择 ${track.title}`);
             checkbox.addEventListener('change', () => { if (checkbox.checked) selected.add(track.id); else selected.delete(track.id); selectionChanged(); });
-            row.insertCell().append(checkbox);
+            const selectionCell = row.insertCell(); selectionCell.className = 'music-track-select';
+            const handle = document.createElement('span'); handle.className = 'music-drag-handle'; handle.textContent = '⠿'; handle.setAttribute('aria-hidden', 'true'); handle.title = '拖动歌曲加入歌单';
+            selectionCell.append(handle, checkbox);
             const song = row.insertCell();
             const title = document.createElement('strong');
             title.textContent = track.title;
@@ -125,6 +260,7 @@ export function mount(root) {
         try {
             const [songs, lists] = await Promise.all(['/api/music/tracks', '/api/music/playlists'].map(async path => (await checked(await fetch(path))).json()));
             tracks = songs; playlists = lists;
+            if (!loaded) find('[data-uploader]').open = tracks.length === 0;
             for (const id of selected) if (!tracks.some(track => track.id === id)) selected.delete(id);
             renderPlaylists();
             loaded = true;
@@ -175,7 +311,7 @@ export function mount(root) {
                     }
                 } catch (error) { failures.push(`${file.name}：${error.message}`); }
             }
-            if (!failures.length) form.reset();
+            if (!failures.length) { form.reset(); find('[data-uploader]').open = false; }
             status.textContent = `已上传 ${uploaded} 首。${failures.join('；')}`;
             await refresh();
         } finally { for (const element of form.elements) element.disabled = false; }
@@ -184,11 +320,14 @@ export function mount(root) {
         event.preventDefault(); const name = event.currentTarget.elements.name.value.trim(); if (!name) return;
         writePlaylist(async () => {
             const list = await (await checked(await fetch('/api/music/playlists', { method: 'POST', ...json({ name }) }))).json();
-            playlists.push(list); renderPlaylists(); playlistFilter.value = list.id;
-            find('[data-create-playlist]').reset(); selected.clear(); playlistStatus.textContent = `已创建「${list.name}」。`;
+            playlists.push(list); newPlaylistId = list.id; renderPlaylists();
+            playlistFilter.value = ''; destination.value = list.id; find('[data-search]').value = '';
+            find('[data-create-playlist]').reset(); selected.clear();
+            report(`已创建「${list.name}」。从曲库拖入歌曲即可加入。`);
         });
     });
-    playlistFilter.addEventListener('change', () => { selected.clear(); renderPlaylists(); render(); });
+    playlistFilter.addEventListener('change', () => selectPlaylist(playlistFilter.value));
+    find('[data-all-tracks]').addEventListener('click', () => selectPlaylist(''));
     destination.addEventListener('change', selectionChanged);
     find('[data-select-all]').addEventListener('change', event => {
         for (const track of visible) { if (event.target.checked) selected.add(track.id); else selected.delete(track.id); }
@@ -196,12 +335,7 @@ export function mount(root) {
     });
     find('[data-add-selected]').addEventListener('click', () => {
         const id = destination.value, trackIds = [...selected]; if (!id || !trackIds.length) return;
-        writePlaylist(async () => {
-            for (let offset = 0; offset < trackIds.length; offset += 1000) {
-                await checked(await fetch(`${endpoint(id)}/tracks`, { method: 'POST', ...json({ trackIds: trackIds.slice(offset, offset + 1000) }) }));
-            }
-            selected.clear(); playlistStatus.textContent = '所选歌曲已加入在线歌单，重复歌曲会自动跳过。';
-        });
+        addTracksToPlaylist(id, trackIds);
     });
     find('[data-rename-playlist]').addEventListener('click', () => {
         const list = playlists.find(item => item.id === playlistFilter.value); if (!list) return;
@@ -215,5 +349,5 @@ export function mount(root) {
     });
     find('[data-refresh]').addEventListener('click', refresh);
     find('[data-search]').addEventListener('input', render);
-    return { activate() { if (!loaded) refresh(); }, deactivate() { root.querySelectorAll('audio').forEach(audio => audio.pause()); } };
+    return { activate() { if (!loaded) refresh(); }, deactivate() { clearDrag(); root.querySelectorAll('audio').forEach(audio => audio.pause()); } };
 }
