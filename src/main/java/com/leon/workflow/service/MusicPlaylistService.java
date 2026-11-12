@@ -31,8 +31,17 @@ public class MusicPlaylistService {
     }
 
     public PlaylistView create(String name) {
+        return create(name, null);
+    }
+
+    public PlaylistView create(String name, UUID requestedId) {
+        String cleanName = validName(name);
+        if (requestedId != null) {
+            var prior = playlists.findById(requestedId.toString());
+            if (prior.isPresent()) return view(prior.get());
+        }
         MusicPlaylist list = new MusicPlaylist();
-        list.setId(UUID.randomUUID().toString()); list.setName(validName(name));
+        list.setId((requestedId == null ? UUID.randomUUID() : requestedId).toString()); list.setName(cleanName);
         list.setCreatedAt(Instant.now()); list.setUpdatedAt(list.getCreatedAt());
         return view(playlists.save(list));
     }

@@ -8,6 +8,7 @@ import java.util.List;
 
 public interface MusicTrackRepository extends JpaRepository<MusicTrack, String> {
     List<MusicTrack> findAllByOrderByUploadedAtDesc();
+    java.util.Optional<MusicTrack> findFirstBySha256AndSizeAndExtensionOrderByUploadedAtAsc(String sha256, long size, String extension);
     @Query("select t.id from MusicTrack t where (:excluded is null or t.id <> :excluded)")
     List<String> findRadioCandidates(@Param("excluded") String excluded);
 }

@@ -65,6 +65,10 @@ public class MusicLibraryService {
     }
 
     public MusicTrack upload(MultipartFile file, String title, String artist, String album, double duration) throws IOException {
+        return upload(file, title, artist, album, duration, false);
+    }
+
+    public synchronized MusicTrack upload(MultipartFile file, String title, String artist, String album, double duration, boolean reuseExisting) throws IOException {
         String name = Optional.ofNullable(file.getOriginalFilename()).orElse("").replace('\\', '/');
         name = name.substring(name.lastIndexOf('/') + 1);
         int dot = name.lastIndexOf('.');
@@ -96,6 +100,10 @@ public class MusicLibraryService {
             }
             track.setSize(size);
             track.setSha256(HexFormat.of().formatHex(hash.digest()));
+            if (reuseExisting) {
+                var existing = tracks.findFirstBySha256AndSizeAndExtensionOrderByUploadedAtAsc(track.getSha256(), size, extension);
+                if (existing.isPresent() && Files.isRegularFile(root.resolve(existing.get().getId() + "." + extension), LinkOption.NOFOLLOW_LINKS)) return existing.get();
+            }
             Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE);
             MusicTrack result = tracks.saveAndFlush(track);
             saved = true;
@@ -106,13 +114,15 @@ public class MusicLibraryService {
         }
     }
 
-    @Transactional
+    @Transactional(rollbackFor = IOException.class)
     public void delete(String id) throws IOException {
         MusicTrack track = get(id);
-        // Keep the row if the filesystem refuses deletion.
+        // Flush constraint checks first; filesystem failures roll the transaction back.
         Path path = root.resolve(track.getId() + "." + track.getExtension());
-        Files.deleteIfExists(path);
+        if (!path.normalize().getParent().equals(root)) throw new IOException("Invalid music path");
         tracks.delete(track);
+        tracks.flush();
+        Files.deleteIfExists(path);
     }
 
     private static String label(String value, String fallback) {

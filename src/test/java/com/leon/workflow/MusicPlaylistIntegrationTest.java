@@ -68,6 +68,38 @@ class MusicPlaylistIntegrationTest {
         mvc.perform(delete("/api/music/tracks/" + track).header("Authorization", AUTH)).andExpect(status().isNoContent()); uploaded.remove(track);
         for (String list : List.of(first, second)) mvc.perform(get(BASE + "/" + list).header("Authorization", AUTH)).andExpect(status().isOk()).andExpect(jsonPath("$.trackIds").isEmpty());
     }
+    @Test void nativeUploadsReuseAudioAndPlaylistIdentityWithoutDuplicatingData() throws Exception {
+        String track = song();
+        byte[] bytes = Files.readAllBytes(ROOT.resolve(track + ".wav"));
+        var uploadedAgain = mvc.perform(multipart("/api/music/tracks").file(new MockMultipartFile("file", "same.wav", "audio/wav", bytes))
+                .param("reuseExisting", "true").header("Authorization", AUTH))
+            .andExpect(status().isCreated()).andExpect(jsonPath("$.id").value(track)).andReturn();
+        String id = UUID.randomUUID().toString(), json = "{\"name\":\"Uploaded\",\"id\":\"" + id + "\"}";
+        for (int attempt = 0; attempt < 2; attempt++) mvc.perform(post(BASE).header("Authorization", AUTH).contentType("application/json").content(json))
+            .andExpect(status().isCreated()).andExpect(jsonPath("$.id").value(id));
+        assertEquals(1, repository.count());
+        assertEquals(1, library.list().size());
+        try (var files = Files.list(ROOT)) { assertEquals(1, files.count()); }
+    }
+    @Test void filesystemDeletionFailureRetainsDatabaseAndPlaylistMemberships() throws Exception {
+        String track = song(), list = create("Keep on error"); add(list, track).andExpect(status().isOk());
+        Path path = ROOT.resolve(track + ".wav"); byte[] original = Files.readAllBytes(path);
+        Files.delete(path); Files.createDirectory(path); Files.writeString(path.resolve("block"), "test");
+        try {
+            mvc.perform(delete("/api/music/tracks/" + track).header("Authorization", AUTH)).andExpect(status().isServiceUnavailable());
+            assertEquals(track, library.get(track).getId());
+            assertEquals(List.of(track), playlists.get(UUID.fromString(list)).trackIds());
+        } finally { Files.delete(path.resolve("block")); Files.delete(path); Files.write(path, original); }
+    }
+    @Test void deletionRequiresNativeTokenOrTrustedCookieWrite() throws Exception {
+        String track = song();
+        mvc.perform(delete("/api/music/tracks/" + track)).andExpect(status().isUnauthorized());
+        mvc.perform(delete("/api/music/tracks/" + track).header("Authorization", "Bearer wrong")).andExpect(status().isUnauthorized());
+        assertTrue(Files.exists(ROOT.resolve(track + ".wav")));
+        mvc.perform(delete("/api/music/tracks/" + track).header("Authorization", AUTH)).andExpect(status().isNoContent()).andExpect(header().string("Cache-Control", "no-store"));
+        uploaded.remove(track);
+        assertFalse(Files.exists(ROOT.resolve(track + ".wav")));
+    }
     private ResultActions order(String list, List<String> ids, List<String> expected) throws Exception {
         return mvc.perform(put(BASE + "/" + list + "/order").header("Authorization", AUTH).contentType("application/json")
                 .content(com.alibaba.fastjson.JSON.toJSONString(Map.of("trackIds", ids, "expectedTrackIds", expected))));

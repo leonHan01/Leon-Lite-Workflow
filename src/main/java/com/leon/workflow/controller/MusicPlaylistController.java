@@ -10,7 +10,7 @@ import java.util.*;
 @RestController
 @RequestMapping("/api/music/playlists")
 public class MusicPlaylistController {
-    public record NameRequest(String name) {}
+    public record NameRequest(String name, UUID id) {}
     public record TracksRequest(List<UUID> trackIds) {}
     public record OrderRequest(List<UUID> trackIds, List<UUID> expectedTrackIds) {}
     private final MusicPlaylistService playlists;
@@ -18,7 +18,7 @@ public class MusicPlaylistController {
     @GetMapping public ResponseEntity<List<PlaylistView>> list() { return ok(playlists.list()); }
     @GetMapping("/{id}") public ResponseEntity<PlaylistView> get(@PathVariable UUID id) { return ok(playlists.get(id)); }
     @PostMapping public ResponseEntity<PlaylistView> create(@RequestBody NameRequest request) {
-        return ResponseEntity.status(HttpStatus.CREATED).cacheControl(CacheControl.noStore()).body(playlists.create(request.name()));
+        return ResponseEntity.status(HttpStatus.CREATED).cacheControl(CacheControl.noStore()).body(playlists.create(request.name(), request.id()));
     }
     @PutMapping("/{id}") public ResponseEntity<PlaylistView> rename(@PathVariable UUID id, @RequestBody NameRequest request) { return ok(playlists.rename(id, request.name())); }
     @PostMapping("/{id}/tracks") public ResponseEntity<PlaylistView> add(@PathVariable UUID id, @RequestBody TracksRequest request) { return ok(playlists.add(id, request.trackIds())); }

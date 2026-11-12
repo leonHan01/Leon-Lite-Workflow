@@ -142,6 +142,10 @@ curl -X POST http://127.0.0.1:8080/api/diamond -H 'Content-Type: application/jso
 | `PUT /api/music/playlists/{id}/order` | JSON `{ "trackIds": ["新完整顺序"], "expectedTrackIds": ["原完整顺序"] }`；只改位置，要求成员完全相同且不重复，原顺序已变化返回 409，成功返回更新后歌单 |
 | `DELETE /api/music/playlists/{id}` | 仅删除歌单及归属，返回 204 |
 
+原生客户端上传时使用 `POST /api/music/tracks?reuseExisting=true`；服务端按 SHA-256、大小及格式复用已有可播放音频，默认普通上传仍创建独立歌曲。创建歌单可传入可选 `id`（UUID），重复请求返回已有歌单；客户端上传后按本地顺序调用完整顺序接口，保留云端额外加入的歌曲。
+
+删除歌曲会清理所有在线歌单引用；原生客户端下一次成功拉取完整曲库后清理对应本机缓存，离线设备联网后同步。本地原文件独立保留。删除先完成数据库约束检查，再清理音频，存储失败时回滚歌曲与歌单引用，返回 503。
+
 歌曲与在线歌单元数据保存在 H2 的 `music_track`、`music_playlist`、`music_playlist_item` 表，音频使用 UUID 文件名保存在 `LEON_MUSIC_DIRECTORY`。上传验证后缀、文件头、大小和元数据；文件先写临时路径，校验成功后原子移动，数据库保存失败时清理文件。SQL 备份包含歌曲元数据，**不包含音频文件**，恢复时同时恢复对应音频目录。
 
 上线时在现有 HTTPS 代理保护下加入 `/music.html`，并允许已认证的 `/api/music/**`。反向代理请求体限制至少为 130 MB，上传超时应覆盖大文件传输。保留现有 Cookie 登录、内部 `/auth/check`、Origin 校验及数据库目录。客户端默认地址仍是 `https://121.40.254.112`，无需调整公网端口。

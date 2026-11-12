@@ -33,9 +33,10 @@ public class MusicController {
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<MusicTrack> upload(@RequestParam("file") MultipartFile file,
             @RequestParam(defaultValue = "") String title, @RequestParam(defaultValue = "") String artist,
-            @RequestParam(defaultValue = "") String album, @RequestParam(defaultValue = "0") double duration) throws IOException {
+            @RequestParam(defaultValue = "") String album, @RequestParam(defaultValue = "0") double duration,
+            @RequestParam(defaultValue = "false") boolean reuseExisting) throws IOException {
         return ResponseEntity.status(HttpStatus.CREATED).cacheControl(CacheControl.noStore())
-                .body(library.upload(file, title, artist, album, duration));
+                .body(library.upload(file, title, artist, album, duration, reuseExisting));
     }
 
     @GetMapping("/{id}/audio")
@@ -60,7 +61,7 @@ public class MusicController {
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> delete(@PathVariable String id) throws IOException {
         library.delete(id);
-        return ResponseEntity.noContent().build();
+        return ResponseEntity.noContent().cacheControl(CacheControl.noStore()).build();
     }
 
     @ExceptionHandler({IllegalArgumentException.class, MultipartException.class})

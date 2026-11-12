@@ -299,10 +299,11 @@ export function mount(root) {
             remove.type = 'button';
             remove.textContent = '删除';
             remove.addEventListener('click', async () => {
-                if (!confirm(`删除《${track.title}》？服务器上的音频也会删除。客户端已缓存的副本仍可离线播放。`)) return;
+                if (!confirm(`删除《${track.title}》？服务器上的音频也会删除。歌曲会从所有在线歌单移除；客户端重新连接后会清理对应缓存。本地导入的原文件会保留。`)) return;
                 remove.disabled = true;
                 try {
                     await checked(await fetch(`/api/music/tracks/${encodeURIComponent(track.id)}`, { method: 'DELETE' }));
+                    audio.pause(); audio.removeAttribute('src'); audio.load();
                     tracks = tracks.filter(item => item.id !== track.id);
                     selected.delete(track.id);
                     await refresh();
