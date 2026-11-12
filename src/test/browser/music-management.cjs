@@ -86,6 +86,9 @@ const server = http.createServer((req, res) => {
         page.on('pageerror', error => errors.push(error.message));
         await page.goto(`http://127.0.0.1:${server.address().port}/music.html`);
         await page.getByText('曲库还是空的，上传第一首歌曲吧。').waitFor();
+        assert.equal(await page.locator('.music-heading, [data-playlist-filter]').count(), 0, 'no hero or redundant playlist dropdown');
+        assert.ok(await page.locator('[data-selection-bar]').isHidden(), 'bulk actions are hidden with no selection');
+        assert.ok(await page.locator('[data-playlist-actions]').isHidden(), 'playlist actions are hidden in full library');
         async function createPlaylist(name) {
             await page.getByRole('textbox', { name: '新歌单名称' }).fill(name);
             await page.getByRole('button', { name: '创建在线歌单', exact: true }).click();
@@ -208,17 +211,23 @@ const server = http.createServer((req, res) => {
         if (process.env.SCREENSHOT_PATH) await page.screenshot({ path: process.env.SCREENSHOT_PATH, fullPage: true });
         page.once('dialog', dialog => dialog.accept());
         await page.locator(`[data-track-id="${secondId}"]`).getByRole('button', { name: '删除', exact: true }).click(); await finishWrite();
-        await page.locator('[data-playlist-filter]').selectOption(thirdList);
+        await page.locator(`[data-playlist-id="${thirdList}"]`).click();
         page.once('dialog', dialog => dialog.accept()); await page.getByRole('button', { name: '删除歌单', exact: true }).click(); await finishWrite();
         // Keep the existing select-and-add path as a keyboard/touch alternative.
-        await page.locator('[data-playlist-filter]').selectOption(firstList);
+        await page.locator(`[data-playlist-id="${firstList}"]`).click();
         await page.locator('[data-tracks]').getByRole('button', { name: '移出歌单', exact: true }).click(); await finishWrite();
         await page.locator('[data-all-tracks]').click();
+        assert.ok(await page.locator('[data-playlist-actions]').isHidden());
+        await page.getByRole('checkbox', { name: '全选本页' }).check();
+        assert.ok(await page.locator('[data-selection-bar]').isVisible());
+        await page.getByRole('button', { name: '取消选择', exact: true }).click();
+        assert.ok(await page.locator('[data-selection-bar]').isHidden());
+        assert.ok(!(await page.getByRole('checkbox', { name: '全选本页' }).isChecked()));
         await page.getByRole('checkbox', { name: '全选本页' }).check();
         await page.locator('[data-destination]').selectOption(firstList);
         await page.getByRole('button', { name: '将所选歌曲加入歌单' }).click(); await finishWrite();
         assert.deepEqual(playlists[0].trackIds, [id], 'batch add remains available');
-        await page.locator('[data-playlist-filter]').selectOption(firstList);
+        await page.locator(`[data-playlist-id="${firstList}"]`).click();
         page.once('dialog', dialog => dialog.accept('夜间'));
         await page.getByRole('button', { name: '重命名歌单', exact: true }).click();
         await page.getByText('歌单已重命名。').waitFor();
@@ -246,11 +255,17 @@ const server = http.createServer((req, res) => {
         page.on('dialog', dialog => dialog.accept());
         await page.locator('[data-tracks]').getByRole('button', { name: '删除', exact: true }).click();
         await page.getByText('曲库还是空的，上传第一首歌曲吧。').waitFor();
+        assert.equal(await page.locator('.music-heading, [data-playlist-filter]').count(), 0, 'no hero or redundant playlist dropdown');
+        assert.ok(await page.locator('[data-selection-bar]').isHidden(), 'bulk actions are hidden with no selection');
+        assert.ok(await page.locator('[data-playlist-actions]').isHidden(), 'playlist actions are hidden in full library');
         assert.equal(writes, 4);
         assert.ok(playlistWrites >= 6);
         assert.deepEqual(playlists[0].trackIds, [], 'deleting a song clears memberships');
         await page.reload();
         await page.getByText('曲库还是空的，上传第一首歌曲吧。').waitFor();
+        assert.equal(await page.locator('.music-heading, [data-playlist-filter]').count(), 0, 'no hero or redundant playlist dropdown');
+        assert.ok(await page.locator('[data-selection-bar]').isHidden(), 'bulk actions are hidden with no selection');
+        assert.ok(await page.locator('[data-playlist-actions]').isHidden(), 'playlist actions are hidden in full library');
         const pageSongs = Array.from({ length: 55 }, (_, index) => ({ id: `20000000-0000-0000-0000-${String(index + 1).padStart(12, '0')}`, title: `分页歌曲 ${String(index + 1).padStart(2, '0')}`, artist: '分页歌手', album: '测试专辑', size: 1024 }));
         tracks = pageSongs;
         await page.getByRole('button', { name: '刷新曲库', exact: true }).click(); await finishWrite();

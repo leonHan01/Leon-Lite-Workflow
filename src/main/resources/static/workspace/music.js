@@ -16,7 +16,7 @@ export function mount(root) {
 
     let writing = false;
     const playlistStatus = find('[data-playlist-status]');
-    const playlistFilter = find('[data-playlist-filter]');
+    let activePlaylistId = '';
     const destination = find('[data-destination]');
     const endpoint = id => `/api/music/playlists/${encodeURIComponent(id)}`;
     const json = value => ({ headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) });
@@ -37,7 +37,7 @@ export function mount(root) {
         playlistStatus.classList.toggle('is-error', error);
     }
     function selectPlaylist(id) {
-        playlistFilter.value = id;
+        activePlaylistId = id;
         currentPage = 1;
         selected.clear(); renderPlaylists(); render();
     }
@@ -59,7 +59,7 @@ export function mount(root) {
         rows.querySelectorAll('.is-sort-before, .is-sort-after').forEach(row => row.classList.remove('is-sort-before', 'is-sort-after'));
     }
     function sortTarget(event) {
-        if (!acceptsDrag(event) || !dragPlaylistId || playlistFilter.value !== dragPlaylistId) return null;
+        if (!acceptsDrag(event) || !dragPlaylistId || activePlaylistId !== dragPlaylistId) return null;
         const row = event.target.closest('tr[data-track-id]');
         if (!row || !rows.contains(row) || draggedIds.includes(row.dataset.trackId)) return null;
         const rect = row.getBoundingClientRect();
@@ -77,7 +77,7 @@ export function mount(root) {
         });
     }
     function moveTrack(id, direction) {
-        const list = playlists.find(item => item.id === playlistFilter.value);
+        const list = playlists.find(item => item.id === activePlaylistId);
         if (!list || writing) return;
         const next = [...list.trackIds], index = next.indexOf(id), target = index + direction;
         if (index < 0 || target < 0 || target >= next.length) return;
@@ -125,13 +125,13 @@ export function mount(root) {
             const feedback = lastDropResult?.id === list.id ? lastDropResult.message : null;
             card.querySelector('small').textContent = pendingPlaylistId === list.id ? '正在加入…' : feedback ? `${list.trackIds.length} 首歌曲 · ${feedback}` : (newPlaylistId === list.id ? '新建歌单 · 拖入歌曲' : `${list.trackIds.length} 首歌曲 · 拖入添加`);
             card.disabled = writing;
-            card.setAttribute('aria-pressed', String(playlistFilter.value === list.id));
+            card.setAttribute('aria-pressed', String(activePlaylistId === list.id));
             card.setAttribute('aria-busy', String(pendingPlaylistId === list.id));
             card.setAttribute('aria-label', `${list.name}，${list.trackIds.length} 首歌曲，拖入歌曲加入`);
             card.classList.toggle('is-new', newPlaylistId === list.id);
         }
         find('[data-playlist-empty]').hidden = playlists.length > 0;
-        find('[data-all-tracks]').setAttribute('aria-pressed', String(!playlistFilter.value));
+        find('[data-all-tracks]').setAttribute('aria-pressed', String(!activePlaylistId));
         find('[data-library-count]').textContent = String(tracks.length);
     }
 
@@ -184,6 +184,8 @@ export function mount(root) {
         clearDrag(); currentPage = Math.max(1, Math.min(pageCount, currentPage + delta)); render();
     }
     function selectionChanged() {
+        find('[data-selection-bar]').hidden = selected.size === 0;
+        find('[data-clear-selection]').disabled = writing;
         find('[data-selection-count]').textContent = `已选 ${selected.size} 首`;
         find('[data-add-selected]').disabled = writing || !selected.size || !destination.value;
         const all = find('[data-select-all]');
@@ -198,11 +200,12 @@ export function mount(root) {
         select.value = playlists.some(list => list.id === prior) ? prior : '';
     }
     function renderPlaylists() {
-        options(playlistFilter, '全部在线曲库');
+        if (!playlists.some(list => list.id === activePlaylistId)) activePlaylistId = '';
+        find('[data-playlist-actions]').hidden = !activePlaylistId;
         options(destination, '选择目标在线歌单');
         options(form.elements.playlistId, '仅上传到曲库');
-        find('[data-rename-playlist]').disabled = !playlistFilter.value || writing;
-        find('[data-delete-playlist]').disabled = !playlistFilter.value || writing;
+        find('[data-rename-playlist]').disabled = !activePlaylistId || writing;
+        find('[data-delete-playlist]').disabled = !activePlaylistId || writing;
         find('[data-create-playlist] button').disabled = writing;
         renderPlaylistCards();
         selectionChanged();
@@ -235,7 +238,7 @@ export function mount(root) {
     function render() {
         const query = find('[data-search]').value.trim().toLocaleLowerCase();
         rows.replaceChildren();
-        const list = playlists.find(item => item.id === playlistFilter.value);
+        const list = playlists.find(item => item.id === activePlaylistId);
         const byId = new Map(tracks.map(track => [track.id, track]));
         const songs = list ? list.trackIds.map(id => byId.get(id)).filter(Boolean) : tracks;
         find('[data-order-hint]').hidden = !list;
@@ -405,14 +408,14 @@ export function mount(root) {
         writePlaylist(async () => {
             const list = await (await checked(await fetch('/api/music/playlists', { method: 'POST', ...json({ name }) }))).json();
             playlists.push(list); newPlaylistId = list.id; renderPlaylists();
-            playlistFilter.value = ''; currentPage = 1; destination.value = list.id; find('[data-search]').value = '';
+            activePlaylistId = ''; currentPage = 1; destination.value = list.id; find('[data-search]').value = '';
             find('[data-create-playlist]').reset(); selected.clear();
             report(`已创建「${list.name}」。从曲库拖入歌曲即可加入。`);
         });
     });
-    playlistFilter.addEventListener('change', () => selectPlaylist(playlistFilter.value));
     find('[data-all-tracks]').addEventListener('click', () => selectPlaylist(''));
     destination.addEventListener('change', selectionChanged);
+    find('[data-clear-selection]').addEventListener('click', () => { if (!writing) { selected.clear(); selectionChanged(); } });
     find('[data-select-all]').addEventListener('change', event => {
         for (const track of visible) { if (event.target.checked) selected.add(track.id); else selected.delete(track.id); }
         render();
@@ -422,12 +425,12 @@ export function mount(root) {
         addTracksToPlaylist(id, trackIds);
     });
     find('[data-rename-playlist]').addEventListener('click', () => {
-        const list = playlists.find(item => item.id === playlistFilter.value); if (!list) return;
+        const list = playlists.find(item => item.id === activePlaylistId); if (!list) return;
         const name = prompt('新的歌单名称', list.name); if (!name?.trim()) return;
         writePlaylist(async () => { await checked(await fetch(endpoint(list.id), { method: 'PUT', ...json({ name: name.trim() }) })); playlistStatus.textContent = '歌单已重命名。'; });
     });
     find('[data-delete-playlist]').addEventListener('click', () => {
-        const list = playlists.find(item => item.id === playlistFilter.value);
+        const list = playlists.find(item => item.id === activePlaylistId);
         if (!list || !confirm(`删除歌单「${list.name}」？歌曲和音频仍保留在曲库中。`)) return;
         writePlaylist(async () => { await checked(await fetch(endpoint(list.id), { method: 'DELETE' })); selected.clear(); playlistStatus.textContent = '歌单已删除，歌曲仍保留在曲库。'; });
     });
