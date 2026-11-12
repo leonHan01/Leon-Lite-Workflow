@@ -18,11 +18,20 @@ class MusicReleaseTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'radio endpoint'):
                 deploy.verify_music_routes(jar)
 
+    def test_radio_only_release_cannot_remove_playlists(self):
+        with tempfile.TemporaryDirectory() as folder:
+            jar = pathlib.Path(folder) / 'app.jar'
+            with zipfile.ZipFile(jar, 'w') as archive:
+                archive.writestr('BOOT-INF/classes/com/leon/workflow/controller/MusicController.class', b'/audio /radio')
+            with self.assertRaisesRegex(RuntimeError, 'online playlists'):
+                deploy.verify_music_routes(jar)
+
     def test_radio_release_passes_guard(self):
         with tempfile.TemporaryDirectory() as folder:
             jar = pathlib.Path(folder) / 'app.jar'
             with zipfile.ZipFile(jar, 'w') as archive:
                 archive.writestr('BOOT-INF/classes/com/leon/workflow/controller/MusicController.class', b'/audio /radio')
+                archive.writestr('BOOT-INF/classes/com/leon/workflow/controller/MusicPlaylistController.class', b'/api/music/playlists')
             deploy.verify_music_routes(jar)
 
 

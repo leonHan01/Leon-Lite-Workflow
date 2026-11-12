@@ -75,7 +75,7 @@ public class DeploymentVerificationService {
                 if (item.path("title").asText().equals("3") || item.path("msgNeedToCopy").asText().equals("3")) calculatorPassed = true;
             }
             if (!calculatorPassed) throw new IllegalStateException();
-            for (String path : new String[]{"/api/music/tracks", "/api/music/tracks/radio"}) {
+            for (String path : new String[]{"/api/music/tracks", "/api/music/tracks/radio", "/api/music/playlists"}) {
                 var publicRequest = HttpRequest.newBuilder(URI.create(origin + path)).timeout(Duration.ofSeconds(15)).GET().build();
                 if (client.send(publicRequest, HttpResponse.BodyHandlers.discarding()).statusCode() != 401) throw new IllegalStateException();
                 var privateRequest = HttpRequest.newBuilder(URI.create(origin + path)).timeout(Duration.ofSeconds(15))

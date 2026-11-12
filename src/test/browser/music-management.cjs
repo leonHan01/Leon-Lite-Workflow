@@ -6,10 +6,32 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE_PATH || 'playwright')
 const root = path.resolve(__dirname, '../../main/resources/static');
 let tracks = [];
 let writes = 0;
+let playlists = [];
+let playlistWrites = 0;
+let nextPlaylist = 1;
 const id = '00000000-0000-0000-0000-000000000001';
 const server = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://localhost');
     if (url.pathname === '/api/monitor/page-view') { res.writeHead(204); return res.end(); }
+    if (url.pathname.startsWith('/api/music/playlists')) {
+        res.setHeader('Content-Type', 'application/json');
+        const parts = url.pathname.split('/').filter(Boolean);
+        if (req.method === 'GET') return res.end(JSON.stringify(playlists));
+        assert.equal(req.headers['x-requested-with'], 'XMLHttpRequest');
+        const chunks = []; req.on('data', value => chunks.push(value)); req.on('end', () => {
+            const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : {};
+            let list = playlists.find(item => item.id === parts[3]);
+            if (req.method === 'POST' && parts.length === 3) {
+                list = { id: `10000000-0000-0000-0000-${String(nextPlaylist++).padStart(12, '0')}`, name: body.name, trackIds: [] };
+                playlists.push(list); res.statusCode = 201;
+            } else if (!list) { res.statusCode = 404; return res.end('{}'); }
+            else if (req.method === 'PUT') list.name = body.name;
+            else if (req.method === 'POST' && parts[4] === 'tracks') list.trackIds = [...new Set([...list.trackIds, ...body.trackIds])];
+            else if (req.method === 'DELETE' && parts[4] === 'tracks') list.trackIds = list.trackIds.filter(id => id !== parts[5]);
+            else if (req.method === 'DELETE') playlists = playlists.filter(item => item !== list);
+            playlistWrites++; res.end(JSON.stringify(list));
+        }); return;
+    }
     if (url.pathname === '/api/music/tracks' && req.method === 'POST') {
         assert.equal(req.headers['x-requested-with'], 'XMLHttpRequest');
         assert.match(req.headers['content-type'], /^multipart\/form-data; boundary=/);
@@ -27,6 +49,7 @@ const server = http.createServer((req, res) => {
     if (url.pathname === `/api/music/tracks/${id}` && req.method === 'DELETE') {
         assert.equal(req.headers['x-requested-with'], 'XMLHttpRequest');
         tracks = [];
+        playlists.forEach(list => { list.trackIds = list.trackIds.filter(track => track !== id); });
         writes++;
         res.writeHead(204); return res.end();
     }
@@ -50,6 +73,15 @@ const server = http.createServer((req, res) => {
         page.on('pageerror', error => errors.push(error.message));
         await page.goto(`http://127.0.0.1:${server.address().port}/music.html`);
         await page.getByText('曲库还是空的，上传第一首歌曲吧。').waitFor();
+        async function createPlaylist(name) {
+            await page.getByRole('textbox', { name: '新歌单名称' }).fill(name);
+            await page.getByRole('button', { name: '创建在线歌单', exact: true }).click();
+            await page.locator('[data-playlist-status]').filter({ hasText: `已创建「${name}」` }).waitFor();
+            await page.waitForFunction(() => !document.querySelector('[data-refresh]').disabled);
+            return playlists.find(list => list.name === name).id;
+        }
+        const firstList = await createPlaylist('<b>放松</b>');
+        await page.locator('select[name=playlistId]').selectOption(firstList);
         await page.locator('input[name=files]').setInputFiles({ name: 'song.wav', mimeType: 'audio/wav', buffer: Buffer.alloc(44) });
         await page.locator('input[name=artist]').fill('测试歌手');
         await page.locator('input[name=album]').fill('测试专辑');
@@ -58,6 +90,29 @@ const server = http.createServer((req, res) => {
         assert.equal(await page.locator('[data-tracks] strong').innerText(), '<b>song</b>');
         assert.equal(await page.locator('[data-tracks] strong b').count(), 0, 'song metadata must be text');
         assert.equal(await page.locator('audio').getAttribute('preload'), 'none');
+        assert.deepEqual(playlists[0].trackIds, [id], 'upload can join a server playlist');
+        const secondList = await createPlaylist('通勤');
+        await page.locator('[data-playlist-filter]').selectOption('');
+        await page.getByRole('checkbox', { name: '全选当前列表' }).check();
+        await page.locator('[data-destination]').selectOption(secondList);
+        await page.getByRole('button', { name: '将所选歌曲加入歌单' }).click();
+        await page.getByText('所选歌曲已加入在线歌单，重复歌曲会自动跳过。').waitFor();
+        await page.waitForFunction(() => !document.querySelector('[data-refresh]').disabled);
+        assert.deepEqual(playlists[1].trackIds, [id], 'one song joins multiple playlists');
+        await page.locator('[data-playlist-filter]').selectOption(firstList);
+        page.once('dialog', dialog => dialog.accept('夜间'));
+        await page.getByRole('button', { name: '重命名歌单', exact: true }).click();
+        await page.getByText('歌单已重命名。').waitFor();
+        await page.waitForFunction(() => !document.querySelector('[data-refresh]').disabled);
+        assert.equal(playlists[0].name, '夜间');
+        await page.locator('[data-tracks]').getByRole('button', { name: '移出歌单', exact: true }).click();
+        await page.getByText('这张在线歌单还没有歌曲。从全部曲库勾选歌曲后加入。').waitFor();
+        assert.equal(tracks.length, 1, 'removing membership keeps audio'); assert.deepEqual(playlists[1].trackIds, [id]);
+        page.once('dialog', dialog => dialog.accept());
+        await page.getByRole('button', { name: '删除歌单', exact: true }).click();
+        await page.getByText('歌单已删除，歌曲仍保留在曲库。').waitFor();
+        await page.waitForFunction(() => !document.querySelector('[data-refresh]').disabled);
+        assert.equal(tracks.length, 1); assert.equal(playlists.length, 1);
         await page.locator('[data-search]').fill('不存在');
         await page.getByText('没有匹配的歌曲。').waitFor();
         await page.locator('[data-search]').fill('测试歌手');
@@ -72,6 +127,8 @@ const server = http.createServer((req, res) => {
         await page.locator('[data-tracks]').getByRole('button', { name: '删除', exact: true }).click();
         await page.getByText('曲库还是空的，上传第一首歌曲吧。').waitFor();
         assert.equal(writes, 2);
+        assert.ok(playlistWrites >= 6);
+        assert.deepEqual(playlists[0].trackIds, [], 'deleting a song clears memberships');
         await page.reload();
         await page.getByText('曲库还是空的，上传第一首歌曲吧。').waitFor();
         assert.deepEqual(errors, []);

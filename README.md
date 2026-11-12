@@ -119,6 +119,10 @@ curl -X POST http://127.0.0.1:8080/api/diamond -H 'Content-Type: application/jso
 
 在 `/music.html` 上传 MP3、M4A、AAC、WAV、AIFF、CAF 或 FLAC，单首最多 128 MB，多首依次上传。歌曲名默认取文件名，艺术家和专辑可在上传时填写。浏览器读取可识别格式的时长；声屿客户端下载后补充音频标签、封面和实际时长。管理页提供搜索、试听及确认后删除。删除同时移除服务器音频文件，客户端已缓存的离线副本保留。
 
+在线歌单由服务端保存，Mac 与 Android 客户端每次刷新曲库时同步。在管理页创建或重命名歌单；上传时可指定歌单，也可在曲库勾选歌曲后批量加入目标歌单。一首歌可属于多张歌单。查看某张歌单后可移出歌曲；删除歌单只删除归属，不删除曲库音频。删除歌曲会自动清理所有歌单中的引用。
+
+客户端在「在线歌单」中选择具体歌单，点击播放全部或某首歌曲，按歌单顺序建立队列。断网后保留上次歌单列表，只有已缓存的歌曲可以播放。在线歌单和各设备原有本地歌单分别保存，沿用同一套 token 权限。
+
 接口沿用现有认证：客户端使用 Bearer 令牌，管理页使用 HttpOnly Cookie；Cookie 写请求仍验证准确 Origin 和 `X-Requested-With`，不会公开未认证的音乐接口。
 
 | 接口 | 行为 |
@@ -127,8 +131,15 @@ curl -X POST http://127.0.0.1:8080/api/diamond -H 'Content-Type: application/jso
 | `POST /api/music/tracks` | multipart 上传单个 `file`，可附带 `title`、`artist`、`album`、`duration`；成功返回 201 |
 | `GET /api/music/tracks/{id}/audio` | 认证后下载音频，支持 Range 请求和浏览器试听 |
 | `DELETE /api/music/tracks/{id}` | 删除元数据及服务器文件，成功返回 204 |
+| `GET /api/music/playlists` | 返回在线歌单数组，每张包含 UUID、名称、有序 `trackIds` 和创建/更新时间 |
+| `GET /api/music/playlists/{id}` | 查看一张在线歌单 |
+| `POST /api/music/playlists` | JSON `{ "name": "通勤" }`，创建歌单并返回 201 |
+| `PUT /api/music/playlists/{id}` | JSON `{ "name": "新名称" }`，重命名歌单 |
+| `POST /api/music/playlists/{id}/tracks` | JSON `{ "trackIds": ["UUID"] }`，按顺序批量加入，自动去重；单次最多 1000 首 |
+| `DELETE /api/music/playlists/{id}/tracks/{trackId}` | 仅移出歌单，返回更新后的歌单 |
+| `DELETE /api/music/playlists/{id}` | 仅删除歌单及归属，返回 204 |
 
-元数据保存在 H2 的 `music_track` 表，音频使用 UUID 文件名保存在 `LEON_MUSIC_DIRECTORY`。上传验证后缀、文件头、大小和元数据；文件先写临时路径，校验成功后原子移动，数据库保存失败时清理文件。SQL 备份包含歌曲元数据，**不包含音频文件**，恢复时同时恢复对应音频目录。
+歌曲与在线歌单元数据保存在 H2 的 `music_track`、`music_playlist`、`music_playlist_item` 表，音频使用 UUID 文件名保存在 `LEON_MUSIC_DIRECTORY`。上传验证后缀、文件头、大小和元数据；文件先写临时路径，校验成功后原子移动，数据库保存失败时清理文件。SQL 备份包含歌曲元数据，**不包含音频文件**，恢复时同时恢复对应音频目录。
 
 上线时在现有 HTTPS 代理保护下加入 `/music.html`，并允许已认证的 `/api/music/**`。反向代理请求体限制至少为 130 MB，上传超时应覆盖大文件传输。保留现有 Cookie 登录、内部 `/auth/check`、Origin 校验及数据库目录。客户端默认地址仍是 `https://121.40.254.112`，无需调整公网端口。
 

@@ -58,6 +58,12 @@ def verify_music_routes(jar):
         controller = archive.read('BOOT-INF/classes/com/leon/workflow/controller/MusicController.class')
         if b'/radio' not in controller:
             raise RuntimeError('release is missing the music radio endpoint')
+        try:
+            playlist = archive.read('BOOT-INF/classes/com/leon/workflow/controller/MusicPlaylistController.class')
+        except KeyError:
+            raise RuntimeError('release is missing online playlists')
+        if b'/api/music/playlists' not in playlist:
+            raise RuntimeError('release is missing online playlists')
 
 
 def now():
@@ -270,7 +276,7 @@ def public_checks(metadata):
         history = json.load(response).get('deployments', {})
         if history.get('currentId') != metadata['id'] or not any(item['id'] == metadata['id'] for item in history.get('records', [])):
             raise RuntimeError('current deployment history is missing')
-    for path in ['/api/music/tracks', '/api/music/tracks/radio']:
+    for path in ['/api/music/tracks', '/api/music/tracks/radio', '/api/music/playlists']:
         with request(path) as response:
             if response.getcode() != 401:
                 raise RuntimeError('public music authentication interception failed')
@@ -286,6 +292,9 @@ def public_checks(metadata):
             uuid.UUID(song['id'])
             if not song.get('sha256') or not song.get('size'):
                 raise RuntimeError('invalid radio response')
+    with request('/api/music/playlists', True) as response:
+        if response.getcode() != 200 or not isinstance(json.load(response), list):
+            raise RuntimeError('authorized music playlists failed')
     print('PUBLIC_HTTPS_AUTH_ALFRED_HISTORY_AND_MUSIC=passed', flush=True)
 
 

@@ -130,4 +130,9 @@
 .music-table th,.music-table td { border-bottom: 1px solid #e3e9e5; padding: 14px 10px; }
 .music-table strong,.music-table small { display: block; max-width: 260px; overflow-wrap: anywhere; }
 .music-table audio { width: 220px; height: 34px; }
+.music-content select { padding: 10px; border: 1px solid #cad8d0; border-radius: 8px; background: white; max-width: 100%; min-width: 0; }
+.music-playlists { padding: 22px; border: 1px solid #dce6df; border-radius: 16px; margin-bottom: 24px; }
+.music-playlist-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 12px 0; }
+.music-playlist-actions select { max-width: 300px; }
+.music-table td:last-child button { margin: 3px; white-space: nowrap; }
 @media (max-width: 800px) { .music-content { padding: 20px; } .music-heading,.music-fields,.music-toolbar { align-items: stretch; flex-direction: column; } }
