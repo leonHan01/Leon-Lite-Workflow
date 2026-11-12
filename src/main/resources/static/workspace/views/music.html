@@ -24,7 +24,13 @@
             <div class="music-playlist-actions"><span data-selection-count>已选 0 首</span><select data-destination aria-label="加入目标歌单"><option value="">选择目标在线歌单</option></select><button type="button" data-add-selected disabled>将所选歌曲加入歌单</button></div>
             <p class="music-playlist-status" data-playlist-status role="status" aria-live="polite"></p>
             <p class="music-order-hint" data-order-hint hidden>上下拖动歌曲调整顺序，松开后自动保存；也可使用 ↑ ↓ 微调。拖到左侧卡片可加入其他歌单。</p>
-            <p data-list-status role="status"></p><div class="music-table-wrap"><table class="music-table"><thead><tr><th><input type="checkbox" data-select-all aria-label="全选当前列表"></th><th>歌曲 / 艺术家</th><th>专辑</th><th>大小</th><th>试听</th><th>管理</th></tr></thead><tbody data-tracks></tbody></table></div>
+            <p data-list-status role="status"></p>
+            <nav class="music-pagination" aria-label="曲库分页">
+                <span data-page-summary role="status" aria-live="polite">共 0 首</span>
+                <div class="music-page-controls"><label>每页 <select data-page-size aria-label="每页歌曲数量"><option value="10">10 条</option><option value="20">20 条</option><option value="50">50 条</option></select></label><button type="button" data-page-prev aria-label="上一页">‹ 上一页</button><span data-page-label>第 1 / 1 页</span><button type="button" data-page-next aria-label="下一页">下一页 ›</button></div>
+            </nav>
+            <div class="music-table-wrap"><table class="music-table"><thead><tr><th><input type="checkbox" data-select-all aria-label="全选本页"></th><th>歌曲 / 艺术家</th><th>专辑</th><th>大小</th><th>试听</th><th>管理</th></tr></thead><tbody data-tracks></tbody></table></div>
+            <p class="music-page-note">勾选可跨页保留；全选仅选择当前页歌曲。</p>
         </section>
     </div>
 </div>

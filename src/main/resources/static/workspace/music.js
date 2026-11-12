@@ -8,6 +8,12 @@ export function mount(root) {
     let playlists = [];
     const selected = new Set();
     let visible = [];
+    let currentPage = 1, pageSize = 10, pageCount = 1, matchingCount = 0;
+    try {
+        const preferred = Number(localStorage.getItem('sonora.music.page-size'));
+        if ([10, 20, 50].includes(preferred)) pageSize = preferred;
+    } catch { /* Browser storage can be unavailable; pagination still works. */ }
+
     let writing = false;
     const playlistStatus = find('[data-playlist-status]');
     const playlistFilter = find('[data-playlist-filter]');
@@ -32,6 +38,7 @@ export function mount(root) {
     }
     function selectPlaylist(id) {
         playlistFilter.value = id;
+        currentPage = 1;
         selected.clear(); renderPlaylists(); render();
     }
     function acceptsDrag(event) {
@@ -163,6 +170,19 @@ export function mount(root) {
         }
         renderPlaylists();
     }
+    function updatePagination() {
+        find('[data-page-size]').value = String(pageSize);
+        find('[data-page-size]').disabled = writing || loading;
+        find('[data-page-prev]').disabled = writing || loading || currentPage <= 1;
+        find('[data-page-next]').disabled = writing || loading || currentPage >= pageCount;
+        find('[data-page-label]').textContent = `第 ${currentPage} / ${pageCount} 页`;
+        const start = matchingCount ? (currentPage - 1) * pageSize + 1 : 0;
+        find('[data-page-summary]').textContent = `共 ${matchingCount} 首 · 第 ${start}–${Math.min(currentPage * pageSize, matchingCount)} 首`;
+    }
+    function changePage(delta) {
+        if (writing || loading) return;
+        clearDrag(); currentPage = Math.max(1, Math.min(pageCount, currentPage + delta)); render();
+    }
     function selectionChanged() {
         find('[data-selection-count]').textContent = `已选 ${selected.size} 首`;
         find('[data-add-selected]').disabled = writing || !selected.size || !destination.value;
@@ -190,7 +210,7 @@ export function mount(root) {
     async function writePlaylist(action) {
         if (writing) return false;
         writing = true; renderPlaylists();
-        updateSortControls();
+        updatePagination(); updateSortControls();
         playlistStatus.classList.remove('is-error');
         try { await action(); await refresh(); return true; }
         catch (error) {
@@ -198,7 +218,7 @@ export function mount(root) {
             if (error.status === 409) await refresh();
             return false;
         }
-        finally { writing = false; renderPlaylists(); updateSortControls(); }
+        finally { writing = false; renderPlaylists(); updateSortControls(); updatePagination(); }
     }
 
     let loading = false;
@@ -219,7 +239,12 @@ export function mount(root) {
         const byId = new Map(tracks.map(track => [track.id, track]));
         const songs = list ? list.trackIds.map(id => byId.get(id)).filter(Boolean) : tracks;
         find('[data-order-hint]').hidden = !list;
-        visible = songs.filter(track => `${track.title} ${track.artist} ${track.album}`.toLocaleLowerCase().includes(query));
+        const matches = songs.filter(track => `${track.title} ${track.artist} ${track.album}`.toLocaleLowerCase().includes(query));
+        matchingCount = matches.length;
+        pageCount = Math.max(1, Math.ceil(matchingCount / pageSize));
+        currentPage = Math.max(1, Math.min(currentPage, pageCount));
+        visible = matches.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+        updatePagination();
         find('[data-library-title]').textContent = list?.name || '在线曲库';
         find('[data-count]').textContent = `· ${songs.length} 首`;
         if (!visible.length) listStatus.textContent = !list && !tracks.length ? '曲库还是空的，上传第一首歌曲吧。' : query ? '没有匹配的歌曲。' : list ? '这张在线歌单还没有歌曲。从全部曲库勾选歌曲后加入。' : '没有匹配的歌曲。';
@@ -312,6 +337,7 @@ export function mount(root) {
         let finish;
         refreshPromise = new Promise(resolve => { finish = resolve; });
         loading = true;
+        updatePagination();
         find('[data-refresh]').disabled = true;
         listStatus.textContent = '正在加载曲库…';
         try {
@@ -323,7 +349,7 @@ export function mount(root) {
             loaded = true;
             render();
         } catch (error) { listStatus.textContent = error.message; }
-        finally { loading = false; find('[data-refresh]').disabled = false; finish(); }
+        finally { loading = false; find('[data-refresh]').disabled = false; updatePagination(); finish(); }
     }
 
     async function duration(file) {
@@ -378,7 +404,7 @@ export function mount(root) {
         writePlaylist(async () => {
             const list = await (await checked(await fetch('/api/music/playlists', { method: 'POST', ...json({ name }) }))).json();
             playlists.push(list); newPlaylistId = list.id; renderPlaylists();
-            playlistFilter.value = ''; destination.value = list.id; find('[data-search]').value = '';
+            playlistFilter.value = ''; currentPage = 1; destination.value = list.id; find('[data-search]').value = '';
             find('[data-create-playlist]').reset(); selected.clear();
             report(`已创建「${list.name}」。从曲库拖入歌曲即可加入。`);
         });
@@ -405,7 +431,16 @@ export function mount(root) {
         writePlaylist(async () => { await checked(await fetch(endpoint(list.id), { method: 'DELETE' })); selected.clear(); playlistStatus.textContent = '歌单已删除，歌曲仍保留在曲库。'; });
     });
     find('[data-refresh]').addEventListener('click', refresh);
-    find('[data-search]').addEventListener('input', render);
+    find('[data-search]').addEventListener('input', () => { currentPage = 1; render(); });
+    find('[data-page-prev]').addEventListener('click', () => changePage(-1));
+    find('[data-page-next]').addEventListener('click', () => changePage(1));
+    find('[data-page-size]').addEventListener('change', event => {
+        const size = Number(event.target.value);
+        if (![10, 20, 50].includes(size)) return;
+        pageSize = size; currentPage = 1;
+        try { localStorage.setItem('sonora.music.page-size', String(size)); } catch { /* Optional preference. */ }
+        clearDrag(); render();
+    });
     rows.addEventListener('dragover', event => {
         const target = sortTarget(event);
         clearSortMarker();

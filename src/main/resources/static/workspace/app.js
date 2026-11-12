@@ -59,10 +59,12 @@ async function getView(definition, url) {
 }
 
 function updateNavigation(definition) {
+    document.body.classList.toggle('is-music-page', definition[0] === 'music');
     const key = definition[0] === 'detail' ? 'records' : definition[0];
     document.getElementById('workspaceTitle').textContent = definition[1];
     document.title = definition[1] + ' · Leon Workflow';
     for (const link of document.querySelectorAll('.lw-nav-link')) {
+        link.title = link.getAttribute('aria-label') || link.textContent.trim();
         const target = routes[new URL(link.href).pathname];
         const selected = target?.[0] === key;
         link.classList.toggle('is-active', selected);
