@@ -12,6 +12,7 @@ let nextPlaylist = 1;
 const id = '00000000-0000-0000-0000-000000000001';
 const secondId = '00000000-0000-0000-0000-000000000002';
 let failNextAddition = false;
+let failNextOrder = false, conflictNextOrder = false, orderWrites = 0;
 const server = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://localhost');
     if (url.pathname === '/api/monitor/page-view') { res.writeHead(204); return res.end(); }
@@ -27,7 +28,13 @@ const server = http.createServer((req, res) => {
                 list = { id: `10000000-0000-0000-0000-${String(nextPlaylist++).padStart(12, '0')}`, name: body.name, trackIds: [] };
                 playlists.push(list); res.statusCode = 201;
             } else if (!list) { res.statusCode = 404; return res.end('{}'); }
-            else if (req.method === 'PUT') list.name = body.name;
+            else if (req.method === 'PUT' && parts[4] === 'order') {
+                if (failNextOrder) { failNextOrder = false; res.statusCode = 503; return res.end(JSON.stringify({ message: '临时排序失败，请重试。' })); }
+                if (conflictNextOrder) { conflictNextOrder = false; list.trackIds.reverse(); res.statusCode = 409; return res.end(JSON.stringify({ message: '歌单已被修改，请刷新后重新排序' })); }
+                assert.deepEqual(body.expectedTrackIds, list.trackIds);
+                assert.deepEqual([...body.trackIds].sort(), [...list.trackIds].sort());
+                list.trackIds = body.trackIds; orderWrites++;
+            } else if (req.method === 'PUT') list.name = body.name;
             else if (req.method === 'POST' && parts[4] === 'tracks') {
                 if (failNextAddition) { failNextAddition = false; res.statusCode = 503; return res.end(JSON.stringify({ message: '临时失败，请重试。' })); }
                 list.trackIds = [...new Set([...list.trackIds, ...body.trackIds])];
@@ -131,6 +138,46 @@ const server = http.createServer((req, res) => {
         assert.equal(await page.locator('[data-selection-count]').innerText(), '已选 0 首');
         assert.equal(await page.locator('.is-dragging, .is-drag-over, .is-drag-source').count(), 0, 'drop clears drag visuals');
 
+        const thirdId = '00000000-0000-0000-0000-000000000003';
+        tracks.push({ id: thirdId, title: 'Filtered track', artist: 'Other', album: 'Album', size: 88 });
+        await page.getByRole('button', { name: '刷新曲库', exact: true }).click(); await finishWrite(); await drag(thirdId, thirdList);
+        await card(thirdList).click();
+        const rowIds = () => page.locator('[data-tracks] tr').evaluateAll(rows => rows.map(row => row.dataset.trackId));
+        async function reorder(source, target, after) {
+            const row = page.locator(`[data-track-id="${target}"]`), bounds = await row.boundingBox();
+            await handle(source).dragTo(row, { targetPosition: { x: 60, y: bounds.height * (after ? .8 : .2) } });
+            await finishWrite();
+        }
+        await reorder(secondId, thirdId, true);
+        assert.deepEqual(await rowIds(), [id, thirdId, secondId]);
+        assert.deepEqual(playlists.find(list => list.id === thirdList).trackIds, [id, thirdId, secondId]);
+        await page.getByText('歌单顺序已保存，客户端刷新歌单后按新顺序播放。').waitFor();
+        const beforeNoop = orderWrites; await handle(id).dragTo(page.locator(`[data-track-id="${id}"]`));
+        assert.equal(orderWrites, beforeNoop, 'dropping on the same song does not save');
+        await page.locator(`[data-track-id="${secondId}"]`).getByRole('button', { name: '上移 Second song', exact: true }).click(); await finishWrite();
+        assert.deepEqual(await rowIds(), [id, secondId, thirdId]);
+        await page.locator('[data-search]').fill('song');
+        await reorder(id, secondId, true);
+        assert.deepEqual(playlists.find(list => list.id === thirdList).trackIds, [secondId, id, thirdId], 'filtered drag retains hidden tracks');
+        await page.locator('[data-search]').fill('');
+        await page.locator(`[data-track-id="${id}"] input[type=checkbox]`).check();
+        await page.locator(`[data-track-id="${thirdId}"] input[type=checkbox]`).check();
+        failNextOrder = true; await reorder(thirdId, secondId, false);
+        await page.locator('[data-playlist-status].is-error').filter({ hasText: '临时排序失败，请重试。' }).waitFor();
+        assert.deepEqual(await rowIds(), [secondId, id, thirdId], 'failed reorder retains saved order');
+        await reorder(thirdId, secondId, false);
+        assert.deepEqual(await rowIds(), [id, thirdId, secondId], 'selected block moves in original playlist order');
+        await page.getByRole('checkbox', { name: '全选当前列表' }).check(); await page.getByRole('checkbox', { name: '全选当前列表' }).uncheck();
+        conflictNextOrder = true; await reorder(id, secondId, true);
+        await page.locator('[data-playlist-status].is-error').filter({ hasText: '歌单已被修改，请刷新后重新排序' }).waitFor();
+        assert.deepEqual(await rowIds(), [secondId, thirdId, id], 'conflict refreshes the server order instead of overwriting it');
+        await page.reload(); await page.locator('[data-tracks] tr').first().waitFor(); await card(thirdList).click();
+        assert.deepEqual(await rowIds(), [secondId, thirdId, id], 'reordered list survives page reload');
+        await drag(thirdId, firstList);
+        assert.deepEqual(playlists.find(list => list.id === thirdList).trackIds, [secondId, thirdId, id], 'copy to another playlist does not reorder its source');
+        await page.locator('[data-all-tracks]').click(); page.once('dialog', dialog => dialog.accept());
+        await page.locator(`[data-track-id="${thirdId}"]`).getByRole('button', { name: '删除', exact: true }).click(); await finishWrite();
+
         failNextAddition = true;
         await drag(secondId, secondList);
         await page.locator('[data-playlist-status].is-error').filter({ hasText: '临时失败，请重试。' }).waitFor();
@@ -199,12 +246,12 @@ const server = http.createServer((req, res) => {
         page.on('dialog', dialog => dialog.accept());
         await page.locator('[data-tracks]').getByRole('button', { name: '删除', exact: true }).click();
         await page.getByText('曲库还是空的，上传第一首歌曲吧。').waitFor();
-        assert.equal(writes, 3);
+        assert.equal(writes, 4);
         assert.ok(playlistWrites >= 6);
         assert.deepEqual(playlists[0].trackIds, [], 'deleting a song clears memberships');
         await page.reload();
         await page.getByText('曲库还是空的，上传第一首歌曲吧。').waitFor();
         assert.deepEqual(errors, []);
-        console.log('Music management checks passed: single/multi drag, duplicates, errors/retry, cancellation, external payloads, batch alternative and responsive layout.');
+        console.log('Music management checks passed (reorder, filtered/multi moves, no-op, failure/conflict, reload and copy): single/multi drag, duplicates, errors/retry, cancellation, external payloads, batch alternative and responsive layout.');
     } finally { await browser.close(); server.close(); }
 })().catch(error => { console.error(error); server.close(); process.exitCode = 1; });

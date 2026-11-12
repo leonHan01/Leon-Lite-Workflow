@@ -72,6 +72,28 @@ public class MusicPlaylistService {
         return view(list);
     }
 
+    public PlaylistView reorder(UUID id, List<UUID> trackIds, List<UUID> expectedTrackIds) {
+        if (trackIds == null || expectedTrackIds == null || trackIds.size() > 10000 || expectedTrackIds.size() > 10000
+                || trackIds.stream().anyMatch(Objects::isNull) || expectedTrackIds.stream().anyMatch(Objects::isNull)
+                || new HashSet<>(trackIds).size() != trackIds.size() || new HashSet<>(expectedTrackIds).size() != expectedTrackIds.size())
+            throw new IllegalArgumentException("请提交完整且不重复的歌曲顺序和原顺序");
+        MusicPlaylist list = locked(id);
+        List<String> current = list.getItems().stream().map(item -> item.getTrack().getId()).toList();
+        List<String> requested = trackIds.stream().map(UUID::toString).toList();
+        // Retrying an already-applied order is safe and does not change membership.
+        if (current.equals(requested)) return view(list);
+        if (!current.equals(expectedTrackIds.stream().map(UUID::toString).toList()))
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "歌单已被修改，请刷新后重新排序");
+        if (!new HashSet<>(current).equals(new HashSet<>(requested)))
+            throw new IllegalArgumentException("排序只能调整歌单现有歌曲的位置，不能增删歌曲");
+        Map<String, Integer> positions = new HashMap<>();
+        for (int i = 0; i < requested.size(); i++) positions.put(requested.get(i), i);
+        list.getItems().forEach(item -> item.setPosition(positions.get(item.getTrack().getId())));
+        list.getItems().sort(Comparator.comparingInt(MusicPlaylistItem::getPosition));
+        list.setUpdatedAt(Instant.now());
+        return view(list);
+    }
+
     public void delete(UUID id) { playlists.delete(locked(id)); }
 
     private MusicPlaylist locked(UUID id) { return playlists.lockById(id.toString()).orElseThrow(MusicPlaylistService::missing); }

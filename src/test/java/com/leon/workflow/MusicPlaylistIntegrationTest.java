@@ -68,6 +68,35 @@ class MusicPlaylistIntegrationTest {
         mvc.perform(delete("/api/music/tracks/" + track).header("Authorization", AUTH)).andExpect(status().isNoContent()); uploaded.remove(track);
         for (String list : List.of(first, second)) mvc.perform(get(BASE + "/" + list).header("Authorization", AUTH)).andExpect(status().isOk()).andExpect(jsonPath("$.trackIds").isEmpty());
     }
+    private ResultActions order(String list, List<String> ids, List<String> expected) throws Exception {
+        return mvc.perform(put(BASE + "/" + list + "/order").header("Authorization", AUTH).contentType("application/json")
+                .content(com.alibaba.fastjson.JSON.toJSONString(Map.of("trackIds", ids, "expectedTrackIds", expected))));
+    }
+    @Test void reorderedSongsPersistAndOtherPlaylistsAndAudioStayUnchanged() throws Exception {
+        String a = song(), b = song(), c = song(), list = create("Order"), other = create("Other");
+        add(list, a, b, c).andExpect(status().isOk()); add(other, a, b).andExpect(status().isOk());
+        order(list, List.of(c, a, b), List.of(a, b, c)).andExpect(status().isOk()).andExpect(jsonPath("$.trackIds[0]").value(c));
+        assertEquals(List.of(c, a, b), playlists.get(UUID.fromString(list)).trackIds());
+        assertEquals(List.of(a, b), playlists.get(UUID.fromString(other)).trackIds());
+        mvc.perform(get(BASE).header("Authorization", AUTH)).andExpect(jsonPath("$[0].trackIds[0]").value(c));
+        // A retried successful write is idempotent even with its original expected order.
+        order(list, List.of(c, a, b), List.of(a, b, c)).andExpect(status().isOk());
+        String d = song(); add(list, d).andExpect(status().isOk());
+        assertEquals(List.of(c, a, b, d), playlists.get(UUID.fromString(list)).trackIds());
+        for (String id : List.of(a, b, c, d)) assertTrue(Files.isRegularFile(ROOT.resolve(id + ".wav")));
+        String empty = create("Empty"); order(empty, List.of(), List.of()).andExpect(status().isOk());
+    }
+    @Test void invalidAndStaleOrdersCannotLoseMembershipOrOverwriteANewerOrder() throws Exception {
+        String a = song(), b = song(), c = song(), list = create("Protected order"); add(list, a, b).andExpect(status().isOk());
+        order(list, List.of(a, a), List.of(a, b)).andExpect(status().isBadRequest());
+        order(list, List.of(b), List.of(a, b)).andExpect(status().isBadRequest());
+        order(list, List.of(c, a), List.of(a, b)).andExpect(status().isBadRequest());
+        add(list, c).andExpect(status().isOk());
+        order(list, List.of(b, a), List.of(a, b)).andExpect(status().isConflict()).andExpect(jsonPath("$.message").value("歌单已被修改，请刷新后重新排序"));
+        order(list, List.of(c, a, b), List.of(a, b, c)).andExpect(status().isOk());
+        order(list, List.of(b, a, c), List.of(a, b, c)).andExpect(status().isConflict());
+        assertEquals(List.of(c, a, b), playlists.get(UUID.fromString(list)).trackIds());
+    }
     @Test void invalidChangesAreRejectedAtomically() throws Exception {
         for (String name : new String[]{"", " ", "x".repeat(81)}) mvc.perform(post(BASE).header("Authorization", AUTH).contentType("application/json").content(com.alibaba.fastjson.JSON.toJSONString(Map.of("name", name)))).andExpect(status().isBadRequest());
         String track = song(), list = create("Valid");
@@ -87,6 +116,10 @@ class MusicPlaylistIntegrationTest {
             .content("{\"token\":\"integration-test-token\",\"remember\":false}")).andExpect(status().isOk()).andReturn().getResponse().getHeader("Set-Cookie");
         Cookie cookie = new Cookie(BrowserSessionService.COOKIE_NAME, header.split(";", 2)[0].split("=", 2)[1]);
         mvc.perform(get(BASE).cookie(cookie)).andExpect(status().isOk());
+        String ordering = "{\"trackIds\":[],\"expectedTrackIds\":[]}";
+        mvc.perform(put(BASE + "/" + list + "/order").contentType("application/json").content(ordering)).andExpect(status().isUnauthorized());
+        mvc.perform(put(BASE + "/" + list + "/order").cookie(cookie).header("Origin", "https://evil.test").contentType("application/json").content(ordering)).andExpect(status().isForbidden());
+        mvc.perform(put(BASE + "/" + list + "/order").cookie(cookie).header("Origin", "https://example.test").header("X-Requested-With", "XMLHttpRequest").contentType("application/json").content(ordering)).andExpect(status().isOk());
         mvc.perform(put(BASE + "/" + list).cookie(cookie).header("Origin", "https://evil.test").contentType("application/json").content("{\"name\":\"No\"}")).andExpect(status().isForbidden());
         mvc.perform(delete(BASE + "/" + list).cookie(cookie)).andExpect(status().isForbidden());
         mvc.perform(post(BASE + "/" + list + "/tracks").cookie(cookie).header("Origin", "https://example.test").header("X-Requested-With", "XMLHttpRequest").contentType("application/json")

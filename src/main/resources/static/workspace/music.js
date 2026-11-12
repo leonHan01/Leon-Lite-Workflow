@@ -19,6 +19,8 @@ export function mount(root) {
     const dragHint = find('[data-drag-hint]');
     const defaultDragHint = dragHint.textContent;
     let draggedIds = [];
+    let dragPlaylistId = '';
+    let dragPlaylistOrder = [];
     let dragPreview = null;
     let newPlaylistId = null;
     let pendingPlaylistId = null;
@@ -37,12 +39,47 @@ export function mount(root) {
     }
     function clearDrag() {
         draggedIds = [];
+        dragPlaylistId = ''; dragPlaylistOrder = [];
         root.classList.remove('is-dragging');
         root.querySelectorAll('.is-drag-source').forEach(row => row.classList.remove('is-drag-source'));
         cards.forEach(card => card.classList.remove('is-drag-over'));
+        clearSortMarker();
         dragPreview?.remove(); dragPreview = null;
         dragHint.textContent = defaultDragHint;
         renderPlaylistCards();
+    }
+    function clearSortMarker() {
+        rows.querySelectorAll('.is-sort-before, .is-sort-after').forEach(row => row.classList.remove('is-sort-before', 'is-sort-after'));
+    }
+    function sortTarget(event) {
+        if (!acceptsDrag(event) || !dragPlaylistId || playlistFilter.value !== dragPlaylistId) return null;
+        const row = event.target.closest('tr[data-track-id]');
+        if (!row || !rows.contains(row) || draggedIds.includes(row.dataset.trackId)) return null;
+        const rect = row.getBoundingClientRect();
+        return { row, after: event.clientY >= rect.top + rect.height / 2 };
+    }
+    async function savePlaylistOrder(id, trackIds, expectedTrackIds) {
+        if (writing || (trackIds.length === expectedTrackIds.length && trackIds.every((track, index) => expectedTrackIds[index] === track))) return;
+        report('正在保存歌单顺序…');
+        await writePlaylist(async () => {
+            const updated = await (await checked(await fetch(`${endpoint(id)}/order`, { method: 'PUT', ...json({ trackIds, expectedTrackIds }) }))).json();
+            playlists = playlists.map(item => item.id === id ? updated : item);
+            renderPlaylists(); render();
+            lastDropResult = { id, message: '顺序已保存' };
+            report('歌单顺序已保存，客户端刷新歌单后按新顺序播放。');
+        });
+    }
+    function moveTrack(id, direction) {
+        const list = playlists.find(item => item.id === playlistFilter.value);
+        if (!list || writing) return;
+        const next = [...list.trackIds], index = next.indexOf(id), target = index + direction;
+        if (index < 0 || target < 0 || target >= next.length) return;
+        [next[index], next[target]] = [next[target], next[index]];
+        savePlaylistOrder(list.id, next, [...list.trackIds]);
+    }
+    function updateSortControls() {
+        rows.setAttribute('aria-busy', String(writing));
+        rows.querySelectorAll('[data-move-track]').forEach(button => { button.disabled = writing || button.dataset.boundary === 'true'; });
     }
     function renderPlaylistCards() {
         const container = find('[data-playlist-cards]');
@@ -153,10 +190,15 @@ export function mount(root) {
     async function writePlaylist(action) {
         if (writing) return false;
         writing = true; renderPlaylists();
+        updateSortControls();
         playlistStatus.classList.remove('is-error');
         try { await action(); await refresh(); return true; }
-        catch (error) { report(error.message, true); return false; }
-        finally { writing = false; renderPlaylists(); }
+        catch (error) {
+            report(error.message, true);
+            if (error.status === 409) await refresh();
+            return false;
+        }
+        finally { writing = false; renderPlaylists(); updateSortControls(); }
     }
 
     let loading = false;
@@ -167,7 +209,7 @@ export function mount(root) {
         if (response.ok) return response;
         let message = response.status === 413 ? '文件超过服务器上传限制，请检查反向代理的上传大小设置。' : '操作失败，请稍后重试。';
         try { message = (await response.json()).message || message; } catch { /* May be a proxy error page. */ }
-        throw new Error(message);
+        const error = new Error(message); error.status = response.status; throw error;
     }
 
     function render() {
@@ -176,6 +218,7 @@ export function mount(root) {
         const list = playlists.find(item => item.id === playlistFilter.value);
         const byId = new Map(tracks.map(track => [track.id, track]));
         const songs = list ? list.trackIds.map(id => byId.get(id)).filter(Boolean) : tracks;
+        find('[data-order-hint]').hidden = !list;
         visible = songs.filter(track => `${track.title} ${track.artist} ${track.album}`.toLocaleLowerCase().includes(query));
         find('[data-library-title]').textContent = list?.name || '在线曲库';
         find('[data-count]').textContent = `· ${songs.length} 首`;
@@ -189,15 +232,16 @@ export function mount(root) {
             row.addEventListener('dragstart', event => {
                 if (dragBlocked || writing || loading || !event.dataTransfer) { event.preventDefault(); return; }
                 draggedIds = selected.has(track.id) ? [...selected] : [track.id];
-                event.dataTransfer.effectAllowed = 'copy';
+                dragPlaylistId = list?.id || ''; dragPlaylistOrder = list ? [...list.trackIds] : [];
+                event.dataTransfer.effectAllowed = list ? 'copyMove' : 'copy';
                 event.dataTransfer.setData(dragType, JSON.stringify(draggedIds));
                 event.dataTransfer.setData('text/plain', draggedIds.length === 1 ? track.title : `${draggedIds.length} 首歌曲`);
                 dragPreview = document.createElement('div'); dragPreview.className = 'music-drag-preview';
-                dragPreview.textContent = `♫ ${draggedIds.length === 1 ? track.title : `${draggedIds.length} 首歌曲`}  ＋`;
+                dragPreview.textContent = `♫ ${draggedIds.length === 1 ? track.title : `${draggedIds.length} 首歌曲`}  ${list ? '↕' : '＋'}`;
                 document.body.append(dragPreview); event.dataTransfer.setDragImage(dragPreview, 16, 16);
                 root.classList.add('is-dragging');
                 rows.querySelectorAll('tr').forEach(item => item.classList.toggle('is-drag-source', draggedIds.includes(item.dataset.trackId)));
-                dragHint.textContent = `正在拖动 ${draggedIds.length} 首歌曲，松开到目标歌单即可加入。`;
+                dragHint.textContent = list ? `正在移动 ${draggedIds.length} 首歌曲，上下拖动排序；拖到歌单卡片则加入该歌单。` : `正在拖动 ${draggedIds.length} 首歌曲，松开到目标歌单即可加入。`;
             });
             row.addEventListener('dragend', clearDrag);
             const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = selected.has(track.id);
@@ -206,6 +250,10 @@ export function mount(root) {
             const selectionCell = row.insertCell(); selectionCell.className = 'music-track-select';
             const handle = document.createElement('span'); handle.className = 'music-drag-handle'; handle.textContent = '⠿'; handle.setAttribute('aria-hidden', 'true'); handle.title = '拖动歌曲加入歌单';
             selectionCell.append(handle, checkbox);
+            if (list) {
+                const index = document.createElement('span'); index.className = 'music-track-index';
+                index.textContent = String(list.trackIds.indexOf(track.id) + 1); selectionCell.append(index);
+            }
             const song = row.insertCell();
             const title = document.createElement('strong');
             title.textContent = track.title;
@@ -237,6 +285,14 @@ export function mount(root) {
             });
             const actions = row.insertCell();
             if (list) {
+                const position = list.trackIds.indexOf(track.id);
+                for (const [direction, symbol, label] of [[-1, '↑', '上移'], [1, '↓', '下移']]) {
+                    const move = document.createElement('button'); move.type = 'button'; move.textContent = symbol;
+                    move.dataset.moveTrack = track.id;
+                    move.dataset.boundary = String(direction < 0 ? position === 0 : position === list.trackIds.length - 1);
+                    move.setAttribute('aria-label', `${label} ${track.title}`); move.title = `${label}一首`;
+                    move.addEventListener('click', () => moveTrack(track.id, direction)); actions.append(move);
+                }
                 const detach = document.createElement('button'); detach.type = 'button'; detach.textContent = '移出歌单';
                 detach.addEventListener('click', () => writePlaylist(async () => {
                     await checked(await fetch(`${endpoint(list.id)}/tracks/${encodeURIComponent(track.id)}`, { method: 'DELETE' }));
@@ -247,6 +303,7 @@ export function mount(root) {
             actions.append(remove);
             rows.append(row);
         }
+        updateSortControls();
         selectionChanged();
     }
 
@@ -349,5 +406,24 @@ export function mount(root) {
     });
     find('[data-refresh]').addEventListener('click', refresh);
     find('[data-search]').addEventListener('input', render);
+    rows.addEventListener('dragover', event => {
+        const target = sortTarget(event);
+        clearSortMarker();
+        if (!target) return;
+        event.preventDefault(); event.dataTransfer.dropEffect = 'move';
+        target.row.classList.add(target.after ? 'is-sort-after' : 'is-sort-before');
+    });
+    rows.addEventListener('dragleave', event => { if (!rows.contains(event.relatedTarget)) clearSortMarker(); });
+    rows.addEventListener('drop', event => {
+        event.preventDefault();
+        const target = sortTarget(event), id = dragPlaylistId, expected = [...dragPlaylistOrder], moving = new Set(draggedIds);
+        clearDrag();
+        if (!target) return;
+        const moved = expected.filter(track => moving.has(track)), remaining = expected.filter(track => !moving.has(track));
+        const index = remaining.indexOf(target.row.dataset.trackId);
+        if (index < 0 || !moved.length) return;
+        remaining.splice(index + (target.after ? 1 : 0), 0, ...moved);
+        savePlaylistOrder(id, remaining, expected);
+    });
     return { activate() { if (!loaded) refresh(); }, deactivate() { clearDrag(); root.querySelectorAll('audio').forEach(audio => audio.pause()); } };
 }

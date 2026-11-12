@@ -121,6 +121,8 @@ curl -X POST http://127.0.0.1:8080/api/diamond -H 'Content-Type: application/jso
 
 在线歌单由服务端保存，Mac 与 Android 客户端每次刷新曲库时同步。管理页左侧歌单卡片支持拖放：拖动一首歌曲，或先勾选多首再拖动其中任意一首，松开到歌单即可加入。新建歌单后继续展示全部曲库；拖动时目标高亮，保存后更新数量并跳过已有歌曲，失败时保留选择以便重试。上传面板可展开收起，空曲库默认展开；键盘和触屏仍可使用勾选后批量加入。在管理页创建或重命名歌单；上传时可指定歌单，也可在曲库勾选歌曲后批量加入目标歌单。一首歌可属于多张歌单。查看某张歌单后可移出歌曲；删除歌单只删除归属，不删除曲库音频。删除歌曲会自动清理所有歌单中的引用。
 
+管理页选中具体歌单后，可将歌曲拖到其他曲目上方或下方排序，也可使用 ↑ ↓ 微调。多选曲目会按原有相对顺序整体移动；搜索时保留未显示的歌曲。松开后自动保存至 H2，保存失败保持原顺序；并发修改返回 409 并刷新，不覆盖其他设备的新顺序。客户端刷新后重新播放歌单，按新顺序建立队列。
+
 客户端在「在线歌单」中选择具体歌单，点击播放全部或某首歌曲，按歌单顺序建立队列。断网后保留上次歌单列表，只有已缓存的歌曲可以播放。在线歌单和各设备原有本地歌单分别保存，沿用同一套 token 权限。
 
 接口沿用现有认证：客户端使用 Bearer 令牌，管理页使用 HttpOnly Cookie；Cookie 写请求仍验证准确 Origin 和 `X-Requested-With`，不会公开未认证的音乐接口。
@@ -137,6 +139,7 @@ curl -X POST http://127.0.0.1:8080/api/diamond -H 'Content-Type: application/jso
 | `PUT /api/music/playlists/{id}` | JSON `{ "name": "新名称" }`，重命名歌单 |
 | `POST /api/music/playlists/{id}/tracks` | JSON `{ "trackIds": ["UUID"] }`，按顺序批量加入，自动去重；单次最多 1000 首 |
 | `DELETE /api/music/playlists/{id}/tracks/{trackId}` | 仅移出歌单，返回更新后的歌单 |
+| `PUT /api/music/playlists/{id}/order` | JSON `{ "trackIds": ["新完整顺序"], "expectedTrackIds": ["原完整顺序"] }`；只改位置，要求成员完全相同且不重复，原顺序已变化返回 409，成功返回更新后歌单 |
 | `DELETE /api/music/playlists/{id}` | 仅删除歌单及归属，返回 204 |
 
 歌曲与在线歌单元数据保存在 H2 的 `music_track`、`music_playlist`、`music_playlist_item` 表，音频使用 UUID 文件名保存在 `LEON_MUSIC_DIRECTORY`。上传验证后缀、文件头、大小和元数据；文件先写临时路径，校验成功后原子移动，数据库保存失败时清理文件。SQL 备份包含歌曲元数据，**不包含音频文件**，恢复时同时恢复对应音频目录。

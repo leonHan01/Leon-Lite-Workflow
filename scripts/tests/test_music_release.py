@@ -26,12 +26,21 @@ class MusicReleaseTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'online playlists'):
                 deploy.verify_music_routes(jar)
 
-    def test_radio_release_passes_guard(self):
+    def test_playlist_release_cannot_remove_saved_ordering(self):
         with tempfile.TemporaryDirectory() as folder:
             jar = pathlib.Path(folder) / 'app.jar'
             with zipfile.ZipFile(jar, 'w') as archive:
                 archive.writestr('BOOT-INF/classes/com/leon/workflow/controller/MusicController.class', b'/audio /radio')
                 archive.writestr('BOOT-INF/classes/com/leon/workflow/controller/MusicPlaylistController.class', b'/api/music/playlists')
+            with self.assertRaisesRegex(RuntimeError, 'playlist ordering'):
+                deploy.verify_music_routes(jar)
+
+    def test_radio_release_passes_guard(self):
+        with tempfile.TemporaryDirectory() as folder:
+            jar = pathlib.Path(folder) / 'app.jar'
+            with zipfile.ZipFile(jar, 'w') as archive:
+                archive.writestr('BOOT-INF/classes/com/leon/workflow/controller/MusicController.class', b'/audio /radio')
+                archive.writestr('BOOT-INF/classes/com/leon/workflow/controller/MusicPlaylistController.class', b'/api/music/playlists /{id}/order')
             deploy.verify_music_routes(jar)
 
 

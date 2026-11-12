@@ -64,6 +64,8 @@ def verify_music_routes(jar):
             raise RuntimeError('release is missing online playlists')
         if b'/api/music/playlists' not in playlist:
             raise RuntimeError('release is missing online playlists')
+        if b'/{id}/order' not in playlist:
+            raise RuntimeError('release is missing playlist ordering')
 
 
 def now():
