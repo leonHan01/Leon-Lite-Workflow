@@ -373,9 +373,12 @@ const server = http.createServer((req, res) => {
         uploadDelay = 400;
         await dropFiles(['slow.mp3']);
         assert.ok(await page.locator('[data-upload] button[type=submit]').isDisabled());
+        await page.locator('[data-status]').filter({ hasText: '等待服务器处理' }).waitFor();
+        assert.ok(await page.locator('[data-upload-progress]').isVisible(), 'upload shows progress until server responds');
+        assert.equal(await page.locator('[data-upload-progress]').getAttribute('value'), '100');
         await dropFiles(['blocked.mp3']);
         assert.match(await page.locator('[data-status]').innerText(), /等待当前任务完成/);
-        await finishUpload(); uploadDelay = 0;
+        await finishUpload(); assert.ok(await page.locator('[data-upload-progress]').isHidden()); uploadDelay = 0;
         assert.equal(droppedUploads.includes('blocked.mp3'), false, 'dropping again during an upload does not start a second batch');
         const abandoned = await filesTransfer(['cancel.mp3']);
         await page.locator('.music-content').dispatchEvent('dragenter', { dataTransfer: abandoned });

@@ -404,6 +404,29 @@ export function mount(root) {
         void uploadFiles([...event.dataTransfer.files], target);
     }, true);
 
+    function sendUpload(body, onProgress) {
+        return new Promise((resolve, reject) => {
+            const request = new XMLHttpRequest();
+            request.open('POST', '/api/music/tracks');
+            request.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+            request.upload.addEventListener('progress', event => onProgress(event.lengthComputable ? event.loaded / event.total : null));
+            request.addEventListener('error', () => reject(new Error('上传连接失败，请稍后重试。')));
+            request.addEventListener('abort', () => reject(new Error('上传已取消。')));
+            request.addEventListener('load', () => {
+                let result = {};
+                try { result = JSON.parse(request.responseText); } catch { /* An upstream proxy may return HTML. */ }
+                if (!result || typeof result !== 'object') result = {};
+                if (request.status < 200 || request.status >= 300) {
+                    const message = result.message || (request.status === 413 ? '文件超过服务器上传限制，请检查反向代理的上传大小设置。' : '操作失败，请稍后重试。');
+                    return reject(new Error(message));
+                }
+                if (!result.id) return reject(new Error('服务器返回的歌曲信息无效。'));
+                resolve(result);
+            });
+            request.send(body);
+        });
+    }
+
     async function uploadFiles(candidates, playlistId) {
         if (writing) { status.textContent = uploading ? '已有歌曲正在上传，请等待当前任务完成后再拖入。' : '正在保存歌单，请稍候再上传。'; return; }
         const failures = [];
@@ -416,6 +439,7 @@ export function mount(root) {
         if (playlistId && !playlists.some(list => list.id === playlistId)) { status.textContent = '目标歌单已不存在，请刷新后重试。'; return; }
         const artist = form.elements.artist.value, album = form.elements.album.value;
         uploading = true; writing = true;
+        const progress = find('[data-upload-progress]'); progress.hidden = false; progress.value = 0;
         find('[data-uploader]').open = true;
         for (const element of form.elements) element.disabled = true;
         find('[data-refresh]').disabled = true;
@@ -423,14 +447,20 @@ export function mount(root) {
         let uploaded = 0;
         try {
             for (const [index, file] of files.entries()) {
-                status.textContent = `正在上传 ${index + 1} / ${files.length}：${file.name}`;
+                progress.value = 0;
+                status.textContent = `准备上传 ${index + 1} / ${files.length}：${file.name}`;
                 try {
                     const body = new FormData();
                     body.append('file', file);
                     body.append('artist', artist);
                     body.append('album', album);
                     body.append('duration', String(await duration(file)));
-                    const song = await (await checked(await fetch('/api/music/tracks', { method: 'POST', body }))).json();
+                    const song = await sendUpload(body, fraction => {
+                        if (fraction === null) { progress.removeAttribute('value'); status.textContent = `正在上传 ${index + 1} / ${files.length}：${file.name}`; return; }
+                        const percent = Math.max(0, Math.min(100, Math.floor(fraction * 100)));
+                        progress.value = percent;
+                        status.textContent = percent === 100 ? `已发送 ${index + 1} / ${files.length}：${file.name}，等待服务器处理…` : `上传 ${index + 1} / ${files.length}：${file.name} · ${percent}%`;
+                    });
                     uploaded++;
                     if (playlistId) {
                         try { await checked(await fetch(`${endpoint(playlistId)}/tracks`, { method: 'POST', ...json({ trackIds: [song.id] }) })); }
@@ -442,7 +472,7 @@ export function mount(root) {
             status.textContent = `已上传 ${uploaded} 首。${failures.join('；')}`;
             await refresh();
         } finally {
-            uploading = false; writing = false;
+            uploading = false; writing = false; progress.hidden = true;
             for (const element of form.elements) element.disabled = false;
             find('[data-refresh]').disabled = loading;
             renderPlaylists(); updatePagination(); updateSortControls();
