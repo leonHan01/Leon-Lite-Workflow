@@ -11,8 +11,9 @@
         <section class="monitor-stat"><div>磁盘使用率 <span>DISK</span></div><strong data-value="disk">—</strong><small data-detail="disk">根文件系统 · —</small></section>
         <section class="monitor-stat"><div>今日浏览量 <span>PAGE VIEWS</span></div><strong data-value="pv">—</strong><small>工作空间页面浏览次数</small></section>
     </div>
-    <section class="monitor-deployments" aria-labelledby="deployment-heading">
-        <div class="monitor-chart-heading"><div><h2 id="deployment-heading">部署记录</h2><p data-deployment-summary>正在加载部署记录…</p></div><span>RELEASE HISTORY</span></div>
+    <details class="monitor-deployments" aria-labelledby="deployment-heading">
+        <summary class="monitor-chart-heading"><div><h2 id="deployment-heading">部署记录</h2><p data-deployment-summary>正在加载部署记录…</p></div><span>RELEASE HISTORY<svg class="monitor-deployment-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg></span></summary>
+        <div class="monitor-deployment-body">
         <p class="monitor-deployment-message" data-deployment-message role="status"></p>
         <div class="monitor-deployment-scroll" tabindex="0" role="region" aria-label="部署记录列表">
             <table class="monitor-deployment-table">
@@ -20,7 +21,8 @@
                 <tbody data-deployments></tbody>
             </table>
         </div>
-    </section>
+        </div>
+    </details>
     <div class="monitor-charts">
         <section class="monitor-chart-card"><div class="monitor-chart-heading"><div><h2>CPU 使用趋势</h2><p>每分钟采样 · 最近 24 小时</p></div><span>CPU</span></div><div class="monitor-chart" data-chart="cpu" role="img" aria-label="CPU 使用率趋势图"></div></section>
         <section class="monitor-chart-card"><div class="monitor-chart-heading"><div><h2>内存使用趋势</h2><p>每分钟采样 · 最近 24 小时</p></div><span>MEMORY</span></div><div class="monitor-chart" data-chart="memory" role="img" aria-label="内存使用率趋势图"></div></section>

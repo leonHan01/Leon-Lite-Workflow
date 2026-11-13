@@ -90,7 +90,15 @@
 .workspace-app .monitor-chart-heading p, .workspace-app .monitor-footnote { margin:0; color:#98a39c; font-size:11px; line-height:1.6; }
 .workspace-app .monitor-chart { width:100%; height:270px; margin-top:12px; }
 .workspace-app .monitor-footnote { margin-top:18px; }
-.workspace-app .monitor-deployments { margin-top:18px; padding:22px 20px 8px; border:1px solid #e5e9e1; border-radius:13px; background:#fff; min-width:0; }
+.workspace-app .monitor-deployments { margin-top:18px; border:1px solid #e5e9e1; border-radius:13px; background:#fff; min-width:0; }
+.workspace-app .monitor-deployments > summary { padding:22px 20px; cursor:pointer; list-style:none; }
+.workspace-app .monitor-deployments > summary::-webkit-details-marker { display:none; }
+.workspace-app .monitor-deployments > summary:focus-visible { outline:2px solid #4669e8; outline-offset:3px; border-radius:13px; }
+.workspace-app .monitor-deployments > summary > span { display:flex; align-items:center; gap:12px; }
+.workspace-app .monitor-deployment-chevron { width:16px; height:16px; flex:none; }
+.workspace-app .monitor-deployments[open] .monitor-deployment-chevron { transform:rotate(180deg); }
+.workspace-app .monitor-deployment-body { padding:0 20px 8px; }
+.workspace-app .monitor-deployment-body .monitor-deployment-scroll { margin-top:0; }
 .workspace-app .monitor-deployment-message { color:#87948d; font-size:12px; line-height:1.6; }
 .workspace-app .monitor-deployment-message:empty { display:none; }
 .workspace-app .monitor-deployment-scroll { overflow-x:auto; margin-top:18px; }

@@ -132,6 +132,9 @@ const server = http.createServer((req, res) => {
   await page.waitForFunction(() => ['cpu','memory','disk','pv'].every(name => document.querySelector(`[data-chart="${name}"] canvas`)) && document.querySelector('[data-value="pv"]')?.textContent !== '—');
   assert.equal(await page.locator('[data-value="cpu"]').textContent(),'25.0%');
   assert.equal(await page.locator('[data-value="memory"]').textContent(),'50.0%');
+  assert.equal(await page.locator('.monitor-deployment-scroll').isVisible(),false,'部署记录应默认折叠');
+  await page.locator('.monitor-deployments > summary').click();
+  assert.equal(await page.locator('.monitor-deployment-scroll').isVisible(),true,'点击标题应展开部署记录');
   assert.equal(await page.locator('[data-deployments] tr').count(),2);
   assert.equal(await page.locator('[data-deployments] tr').first().locator('td').nth(2).textContent(),'<img src=x onerror=alert(1)>');
   assert.equal(await page.locator('[data-deployments] img').count(),0,'部署说明应作为文本显示');
@@ -145,6 +148,7 @@ const server = http.createServer((req, res) => {
   await page.getByText('部署成功，服务器已更新。',{exact:true}).waitFor({timeout:10000});
   assert.equal(deploymentRequests,1);
   assert.equal(await page.locator('.monitor-deploy').isEnabled(),true);
+  assert.equal(await page.locator('.monitor-deployment-scroll').isVisible(),true,'自动刷新不应收起已展开的记录');
   await page.setViewportSize({width:800,height:900});
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'部署列表使页面横向溢出');
   await page.setViewportSize({width:1440,height:1000});
@@ -173,6 +177,7 @@ const server = http.createServer((req, res) => {
   await page.reload({waitUntil:'networkidle'});
   await page.waitForFunction(() => document.querySelector('[data-chart="pv"] canvas'));
   assert.equal(await page.getByRole('heading',{name:'服务器监控.'}).count(),1);
+  assert.equal(await page.locator('.monitor-deployment-scroll').isVisible(),false,'重新打开页面应默认折叠部署记录');
   await page.locator('.lw-sidebar').getByRole('link',{name:'高级设置',exact:true}).click();
   await page.waitForURL('**/advanced-settings.html');
   const [download]=await Promise.all([page.waitForEvent('download'),page.getByRole('button',{name:'下载 SQL 备份'}).click()]);
