@@ -108,7 +108,11 @@
 .workspace-app .monitor-deployment-table td { padding:15px 14px 15px 0; border-top:1px solid #edf0eb; vertical-align:middle; }
 .workspace-app .monitor-deployment-table time { white-space:nowrap; }
 .workspace-app .monitor-deployment-table strong { display:inline-block; color:#2b3845; font:500 12px var(--lw-mono); overflow-wrap:anywhere; }
-.workspace-app .monitor-deployment-table small { display:block; margin-top:6px; color:#96a198; font:10px var(--lw-mono); }
+.workspace-app .monitor-deployment-table small { display:block; margin-top:6px; color:#96a198; font:10px var(--lw-mono); overflow-wrap:anywhere; }
+.workspace-app .monitor-deployment-table small a { color:#6078bd; text-decoration:none; }
+.workspace-app .monitor-deployment-table small a:hover { text-decoration:underline; }
+.workspace-app .monitor-deployment-more { margin:10px 0 14px; padding:8px 12px; border:1px solid #dfe6e0; border-radius:8px; background:#fff; color:#53665e; font-size:12px; cursor:pointer; }
+.workspace-app .monitor-deployment-more[hidden] { display:none; }
 .workspace-app .monitor-deployment-table td:nth-child(3) { max-width:340px; overflow-wrap:anywhere; line-height:1.7; }
 .workspace-app .monitor-current-release { display:inline-block; margin-left:8px; color:#4669e8; font-size:10px; white-space:nowrap; }
 .workspace-app .monitor-deployment-result { display:inline-block; padding:4px 8px; border-radius:5px; white-space:nowrap; font-size:11px; }

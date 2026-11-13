@@ -76,13 +76,16 @@ def checkout(metadata, log):
         build_command(['git', '--git-dir=' + str(repository), '-c', 'credential.helper=', '-c', 'core.hooksPath=/dev/null',
             'fetch', '--no-tags', REPOSITORY, '+refs/heads/main:refs/heads/main'], log, timeout=30)
         metadata['commit'] = deploy.run(['runuser', '-u', BUILDER, '--', 'git', '--git-dir=' + str(repository), 'rev-parse', 'refs/heads/main'])
+        metadata['commitMessage'] = deploy.run(['runuser', '-u', BUILDER, '--', 'git', '--git-dir=' + str(repository), 'log', '-1', '--format=%s', metadata['commit']])[:240]
     except Exception:
         # Some ECS networks block Git smart HTTP while GitHub's official API/codeload work.
         job(metadata, 'FETCHING', 'Git 协议拉取受限，正在从 GitHub 官方归档按提交获取 main 代码。')
         request = urllib.request.Request('https://api.github.com/repos/leonHan01/Leon-Lite-Workflow/commits/main',
             headers={'User-Agent': 'Leon-Workflow-Deploy', 'Accept': 'application/vnd.github+json'})
         with urllib.request.urlopen(request, timeout=30) as response:
-            metadata['commit'] = json.load(response)['sha']
+            info = json.load(response)
+            metadata['commit'] = info['sha']
+            metadata['commitMessage'] = info.get('commit', {}).get('message', '').split('\n', 1)[0][:240]
         archive_fallback = True
     if not re.fullmatch(r'[0-9a-f]{40}', metadata['commit']):
         raise RuntimeError('invalid Git commit')

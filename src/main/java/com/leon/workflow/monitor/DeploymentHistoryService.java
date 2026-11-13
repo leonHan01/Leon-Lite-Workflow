@@ -56,6 +56,6 @@ public class DeploymentHistoryService {
     }
 
     public record Deployment(String id, Instant startedAt, Instant finishedAt, String version, String commit,
-                             boolean dirty, String description, String status, String jarSha256) { }
+                             boolean dirty, String description, String status, String jarSha256, String commitMessage) { }
     public record History(String currentId, List<Deployment> records, int total, boolean available, int unreadable) { }
 }

@@ -11,16 +11,17 @@
         <section class="monitor-stat"><div>磁盘使用率 <span>DISK</span></div><strong data-value="disk">—</strong><small data-detail="disk">根文件系统 · —</small></section>
         <section class="monitor-stat"><div>今日浏览量 <span>PAGE VIEWS</span></div><strong data-value="pv">—</strong><small>工作空间页面浏览次数</small></section>
     </div>
-    <details class="monitor-deployments" aria-labelledby="deployment-heading">
+    <details class="monitor-deployments" aria-labelledby="deployment-heading" open>
         <summary class="monitor-chart-heading"><div><h2 id="deployment-heading">部署记录</h2><p data-deployment-summary>正在加载部署记录…</p></div><span>RELEASE HISTORY<svg class="monitor-deployment-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg></span></summary>
         <div class="monitor-deployment-body">
         <p class="monitor-deployment-message" data-deployment-message role="status"></p>
         <div class="monitor-deployment-scroll" tabindex="0" role="region" aria-label="部署记录列表">
             <table class="monitor-deployment-table">
-                <thead><tr><th scope="col">部署时间（北京时间）</th><th scope="col">版本 / 提交</th><th scope="col">部署说明</th><th scope="col">结果</th><th scope="col">耗时</th></tr></thead>
+                <thead><tr><th scope="col">部署时间（北京时间）</th><th scope="col">版本 / Git commit</th><th scope="col">部署说明</th><th scope="col">结果</th><th scope="col">耗时</th></tr></thead>
                 <tbody data-deployments></tbody>
             </table>
         </div>
+        <button class="monitor-deployment-more" type="button" data-deployment-more hidden>查看全部记录</button>
         </div>
     </details>
     <div class="monitor-charts">

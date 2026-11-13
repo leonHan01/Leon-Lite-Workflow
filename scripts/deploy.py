@@ -146,6 +146,7 @@ def record(metadata, status):
     path = HISTORY / (metadata['id'] + '.json')
     data = json.loads(path.read_text()) if path.exists() else {}
     data.update({key: metadata[key] for key in ['id', 'version', 'commit', 'dirty', 'description', 'jarSha256']})
+    data['commitMessage'] = metadata.get('commitMessage', '')
     data.setdefault('startedAt', now())
     data['status'] = status
     data['finishedAt'] = None if status == 'DEPLOYING' else now()
@@ -474,7 +475,8 @@ def local(description):
     stamp = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).strftime('%Y.%m.%d.%H%M%S')
     identity = 'release-' + stamp + '-' + commit[:8] + '-' + uuid.uuid4().hex[:6]
     metadata = {'id': identity, 'version': stamp, 'commit': commit, 'dirty': dirty,
-        'description': description or ('部署工作区版本' if dirty else run(['git', 'log', '-1', '--format=%s'])), 'jarSha256': sha256(jar)}
+        'description': description or ('部署工作区版本' if dirty else run(['git', 'log', '-1', '--format=%s'])), 'jarSha256': sha256(jar),
+        'commitMessage': run(['git', 'log', '-1', '--format=%s'])[:240]}
     def workbench(command, timeout=30):
         return run(['workbench', 'exec', '--instance-id', INSTANCE, '--command', command, '--timeout', str(timeout)])
     prepare = ('import pathlib,tempfile; p=pathlib.Path(' + repr(str(STAGING_ROOT)) + '); '

@@ -19,20 +19,24 @@ const bytes = value => {
     return value.toFixed(index ? 1 : 0) + ' ' + units[index];
 };
 
-function renderDeployments(pane, history) {
+function renderDeployments(pane, history, showAll) {
     const rows = pane.querySelector('[data-deployments]');
     const message = pane.querySelector('[data-deployment-message]');
     const records = history?.records || [];
     rows.replaceChildren();
-    pane.querySelector('[data-deployment-summary]').textContent = history?.total > records.length
-        ? `共 ${history.total} 次部署 · 展示最近 ${records.length} 次 · 重启不重复记录`
-        : `共 ${records.length} 次部署 · 重启不重复记录`;
+    const visible = showAll ? records : records.slice(0, 5);
+    const total = history?.total ?? records.length;
+    pane.querySelector('[data-deployment-summary]').textContent = `共 ${total} 次部署 · 展示 ${visible.length} 次${total > records.length ? '（最多显示最近 50 次）' : ''} · 重启不重复记录`;
+    const more = pane.querySelector('[data-deployment-more]');
+    more.hidden = records.length <= 5;
+    more.textContent = showAll ? '收起较早记录' : total > records.length ? `查看最近 ${records.length} 条` : `查看全部记录（${records.length}）`;
+    more.setAttribute('aria-expanded', String(showAll));
     message.textContent = history?.available === false ? '部署记录暂时无法读取，请稍后刷新。'
         : history?.unreadable ? `有 ${history.unreadable} 条部署记录无法读取，其余记录正常展示。`
         : records.length ? '' : '暂无部署记录，使用部署脚本发布后会自动记录。';
     const statuses = { DEPLOYING: ['部署中', 'pending'], SUCCESS: ['成功', 'success'],
         ROLLED_BACK: ['已回滚', 'rollback'], FAILED: ['失败', 'failed'], ROLLBACK_FAILED: ['回滚失败', 'failed'] };
-    for (const record of records) {
+    for (const record of visible) {
         const row = document.createElement('tr');
         const time = document.createElement('time');
         time.dateTime = record.startedAt;
@@ -49,9 +53,19 @@ function renderDeployments(pane, history) {
             version.append(badge);
         }
         const commit = document.createElement('small');
-        commit.textContent = `${record.commit?.slice(0, 8) || '未知提交'}${record.dirty ? ' · 含工作区改动' : ''}`;
-        commit.title = record.commit || '';
+        if (/^[0-9a-f]{7,40}$/i.test(record.commit || '')) {
+            const link = document.createElement('a');
+            link.href = `https://github.com/leonHan01/Leon-Lite-Workflow/commit/${record.commit}`;
+            link.target = '_blank'; link.rel = 'noopener noreferrer';
+            link.textContent = `Git commit ${record.commit.slice(0, 8)}`;
+            link.title = record.commit;
+            commit.append(link);
+        } else commit.textContent = 'Git commit 未记录';
+        if (record.dirty) commit.append(' · 含工作区改动');
         version.append(commit);
+        const subject = document.createElement('small');
+        subject.textContent = record.commitMessage || '提交说明未记录';
+        version.append(subject);
         row.insertCell().textContent = record.description || '—';
         const [label, style] = statuses[record.status] || ['未知', 'pending'];
         const result = document.createElement('span');
@@ -73,6 +87,7 @@ export function mount(pane) {
     const value = name => pane.querySelector(`[data-value="${name}"]`);
     const detail = name => pane.querySelector(`[data-detail="${name}"]`);
     let charts, timer, active = false, loading = false, refreshPending = false, deploying = false;
+    let showAllDeployments = false, latestDeployments;
     const resize = () => charts?.forEach(chart => chart.resize());
     function renderControl(control) {
         deploying = control?.busy || false;
@@ -97,7 +112,8 @@ export function mount(pane) {
             if (!response.ok) throw new Error('监控数据加载失败，请重试。');
             const data = await response.json();
             renderControl(data.deploymentControl);
-            renderDeployments(pane, data.deployments);
+            latestDeployments = data.deployments;
+            renderDeployments(pane, latestDeployments, showAllDeployments);
             const current = data.current || {};
             value('cpu').textContent = percent(current.cpuPercent);
             value('memory').textContent = percent(current.memoryPercent);
@@ -124,6 +140,10 @@ export function mount(pane) {
         }
     }
     button.addEventListener('click', refresh);
+    pane.querySelector('[data-deployment-more]').addEventListener('click', () => {
+        showAllDeployments = !showAllDeployments;
+        renderDeployments(pane, latestDeployments, showAllDeployments);
+    });
     deployButton.addEventListener('click', async () => {
         deployButton.disabled = true;
         deployButton.textContent = '正在提交…';

@@ -8,9 +8,10 @@ const record = { id: 7, sourceType: 'JSON', bodyJson: '{"hello":"world"}', rawTe
 let pageViews=0;
 let deploymentJob=null, deploymentRequests=0;
 let deploymentRecords = [
- {id:'release-new',startedAt:'2026-11-11T16:00:00Z',finishedAt:'2026-11-11T16:01:05Z',version:'2026.11.12.000000',commit:'bbd8d1f42d7853278c4bda200ec78f0fac430234',dirty:true,description:'<img src=x onerror=alert(1)>',status:'ROLLED_BACK'},
+ {id:'release-new',startedAt:'2026-11-11T16:00:00Z',finishedAt:'2026-11-11T16:01:05Z',version:'2026.11.12.000000',commit:'bbd8d1f42d7853278c4bda200ec78f0fac430234',commitMessage:'feat: add library',dirty:true,description:'<img src=x onerror=alert(1)>',status:'ROLLED_BACK'},
  {id:'release-current',startedAt:'2026-11-11T15:00:00Z',finishedAt:'2026-11-11T15:00:30Z',version:'2026.11.11.230000',commit:'0fb051e',dirty:false,description:'监控页面更新',status:'SUCCESS'},
 ];
+deploymentRecords.push(...Array.from({length:5},(_,i)=>({id:'old-'+i,startedAt:'2026-11-10T15:00:00Z',finishedAt:'2026-11-10T15:00:30Z',version:'old-'+i,commit:'a'.repeat(40),dirty:false,description:'旧记录',status:'SUCCESS'})));
 let rows=[{id:1,kvKey:'GitHub',kvValue:'https://github.com',kvType:'url',kvCategory:'开发'}];
 const server = http.createServer((req, res) => {
  const url = new URL(req.url, 'http://localhost');
@@ -132,10 +133,17 @@ const server = http.createServer((req, res) => {
   await page.waitForFunction(() => ['cpu','memory','disk','pv'].every(name => document.querySelector(`[data-chart="${name}"] canvas`)) && document.querySelector('[data-value="pv"]')?.textContent !== '—');
   assert.equal(await page.locator('[data-value="cpu"]').textContent(),'25.0%');
   assert.equal(await page.locator('[data-value="memory"]').textContent(),'50.0%');
-  assert.equal(await page.locator('.monitor-deployment-scroll').isVisible(),false,'部署记录应默认折叠');
+  assert.equal(await page.locator('.monitor-deployment-scroll').isVisible(),true,'部署记录应默认展开');
+  assert.equal(await page.locator('[data-deployments] tr').count(),5,'默认显示最近五条');
+  assert.equal(await page.locator('[data-deployments] tr').first().getByRole('link').getAttribute('href'),'https://github.com/leonHan01/Leon-Lite-Workflow/commit/bbd8d1f42d7853278c4bda200ec78f0fac430234');
+  assert.equal(await page.locator('[data-deployments] tr').first().getByText('feat: add library').count(),1);
+  await page.getByRole('button',{name:'查看全部记录（7）'}).click();
+  assert.equal(await page.locator('[data-deployments] tr').count(),7);
+  await page.getByRole('button',{name:'收起较早记录'}).click();
+  assert.equal(await page.locator('[data-deployments] tr').count(),5);
   await page.locator('.monitor-deployments > summary').click();
-  assert.equal(await page.locator('.monitor-deployment-scroll').isVisible(),true,'点击标题应展开部署记录');
-  assert.equal(await page.locator('[data-deployments] tr').count(),2);
+  assert.equal(await page.locator('.monitor-deployment-scroll').isVisible(),false);
+  await page.locator('.monitor-deployments > summary').click();
   assert.equal(await page.locator('[data-deployments] tr').first().locator('td').nth(2).textContent(),'<img src=x onerror=alert(1)>');
   assert.equal(await page.locator('[data-deployments] img').count(),0,'部署说明应作为文本显示');
   assert.match(await page.locator('[data-deployments] time').first().textContent(),/2026\/11\/12 00:00:00/,'部署时间应使用北京时间');
@@ -177,7 +185,8 @@ const server = http.createServer((req, res) => {
   await page.reload({waitUntil:'networkidle'});
   await page.waitForFunction(() => document.querySelector('[data-chart="pv"] canvas'));
   assert.equal(await page.getByRole('heading',{name:'服务器监控.'}).count(),1);
-  assert.equal(await page.locator('.monitor-deployment-scroll').isVisible(),false,'重新打开页面应默认折叠部署记录');
+  assert.equal(await page.locator('.monitor-deployment-scroll').isVisible(),true,'重新打开页面应默认展示部署记录');
+  assert.equal(await page.locator('[data-deployments] tr').count(),5);
   await page.locator('.lw-sidebar').getByRole('link',{name:'高级设置',exact:true}).click();
   await page.waitForURL('**/advanced-settings.html');
   const [download]=await Promise.all([page.waitForEvent('download'),page.getByRole('button',{name:'下载 SQL 备份'}).click()]);

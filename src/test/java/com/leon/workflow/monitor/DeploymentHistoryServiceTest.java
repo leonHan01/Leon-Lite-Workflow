@@ -18,7 +18,7 @@ class DeploymentHistoryServiceTest {
         var time = Instant.parse("2026-11-11T16:00:00Z").plusSeconds(number);
         var record = new DeploymentHistoryService.Deployment("release-" + number, time,
                 status.equals("DEPLOYING") ? null : time.plusSeconds(30), "2026.11.12." + number,
-                "bbd8d1f42d7853278c4bda200ec78f0fac430234", false, "发布测试", status, "a".repeat(64));
+                "bbd8d1f42d7853278c4bda200ec78f0fac430234", false, "发布测试", status, "a".repeat(64), "feat: 发布测试");
         Files.writeString(root.resolve("release-" + number + ".json"), mapper.writeValueAsString(record));
     }
 
