@@ -158,6 +158,7 @@
 .music-table th,.music-table td { border-bottom: 1px solid #e3e9e5; padding: 10px 8px; }
 .music-table strong,.music-table small { display: block; max-width: 260px; overflow-wrap: anywhere; }
 .music-table audio { display: block; width: clamp(360px, 30vw, 640px); height: 34px; }
+.music-table audio[hidden] { display: none; }
 .music-content select { padding: 10px; border: 1px solid #cad8d0; border-radius: 8px; background: white; max-width: 100%; min-width: 0; }
 .music-collection { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 18px; align-items: start; }
 .music-library { min-width: 0; }
