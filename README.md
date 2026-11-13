@@ -134,6 +134,7 @@ curl -X POST http://127.0.0.1:8080/api/diamond -H 'Content-Type: application/jso
 | 接口 | 行为 |
 | --- | --- |
 | `GET /api/music/tracks` | 返回歌曲 JSON 数组，含稳定 UUID、标题、艺术家、专辑、格式、时长、字节数、SHA-256 和上传时间 |
+| `GET /api/music/tracks/radio?exclude=<UUID>` | 电台随机返回一首有音频文件的歌曲。多首时排除上一首，只有一首可播放时可重复；无可播放歌曲返回 204。沿用现有认证及 no-store |
 | `POST /api/music/tracks` | multipart 上传单个 `file`，可附带 `title`、`artist`、`album`、`duration`；成功返回 201 |
 | `GET /api/music/tracks/{id}/audio` | 认证后下载音频，支持 Range 请求和浏览器试听 |
 | `DELETE /api/music/tracks/{id}` | 删除元数据及服务器文件，成功返回 204 |
