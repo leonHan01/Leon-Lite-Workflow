@@ -293,7 +293,6 @@ export function mount(root) {
             row.insertCell().textContent = `${(track.size / 1024 / 1024).toFixed(1)} MB`;
             const audio = document.createElement('audio');
             audio.controls = true;
-            audio.hidden = true;
             audio.preload = 'none';
             audio.src = `/api/music/tracks/${encodeURIComponent(track.id)}/audio`;
             audio.setAttribute('aria-label', `试听 ${track.title}`);
@@ -304,15 +303,13 @@ export function mount(root) {
             play.textContent = '▶ 播放';
             play.setAttribute('aria-label', `播放 ${track.title}`);
             play.addEventListener('click', () => {
-                play.hidden = true;
-                audio.hidden = false;
+                play.replaceWith(audio);
                 audio.play().catch(() => {
-                    audio.hidden = true;
-                    play.hidden = false;
+                    audio.replaceWith(play);
                     listStatus.textContent = '无法试听，请检查登录状态及浏览器音频格式支持。';
                 });
             });
-            row.insertCell().append(play, audio);
+            row.insertCell().append(play);
             const remove = document.createElement('button');
             remove.type = 'button';
             remove.textContent = '删除';
