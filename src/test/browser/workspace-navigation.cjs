@@ -134,6 +134,12 @@ const server = http.createServer((req, res) => {
   assert.equal(await page.locator('[data-value="cpu"]').textContent(),'25.0%');
   assert.equal(await page.locator('[data-value="memory"]').textContent(),'50.0%');
   assert.equal(await page.locator('.monitor-deployment-scroll').isVisible(),true,'部署记录应默认展开');
+  const headerBounds = await page.locator('.monitor-deployment-table th').first().evaluate(cell => {
+   const text = document.createRange(); text.selectNodeContents(cell);
+   const label = text.getBoundingClientRect(), scroll = cell.closest('.monitor-deployment-scroll').getBoundingClientRect();
+   return { labelTop: label.top, scrollTop: scroll.top };
+  });
+  assert.ok(headerBounds.labelTop >= headerBounds.scrollTop + 4, '部署记录表头文字缺少顶部空间，容易被滚动容器裁切');
   assert.equal(await page.locator('[data-deployments] tr').count(),5,'默认显示最近五条');
   assert.equal(await page.locator('[data-deployments] tr').first().getByRole('link').getAttribute('href'),'https://github.com/leonHan01/Leon-Lite-Workflow/commit/bbd8d1f42d7853278c4bda200ec78f0fac430234');
   assert.equal(await page.locator('[data-deployments] tr').first().getByText('feat: add library').count(),1);

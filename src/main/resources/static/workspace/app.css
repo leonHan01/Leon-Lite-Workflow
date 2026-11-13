@@ -104,7 +104,7 @@
 .workspace-app .monitor-deployment-scroll { overflow-x:auto; margin-top:18px; }
 .workspace-app .monitor-deployment-scroll[hidden] { display:none; }
 .workspace-app .monitor-deployment-table { width:100%; min-width:720px; border-collapse:collapse; text-align:left; font-size:12px; color:#53645b; }
-.workspace-app .monitor-deployment-table th { padding:0 14px 12px 0; color:#8d9992; font-size:11px; font-weight:500; white-space:nowrap; }
+.workspace-app .monitor-deployment-table th { padding:10px 14px 12px 0; color:#8d9992; font-size:11px; font-weight:500; white-space:nowrap; }
 .workspace-app .monitor-deployment-table td { padding:15px 14px 15px 0; border-top:1px solid #edf0eb; vertical-align:middle; }
 .workspace-app .monitor-deployment-table time { white-space:nowrap; }
 .workspace-app .monitor-deployment-table strong { display:inline-block; color:#2b3845; font:500 12px var(--lw-mono); overflow-wrap:anywhere; }
