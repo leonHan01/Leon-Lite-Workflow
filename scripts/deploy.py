@@ -32,6 +32,10 @@ DATA = pathlib.Path('/var/lib/leon-lite-workflow')
 HISTORY = DATA / 'deployments'
 OVERRIDE = pathlib.Path('/etc/systemd/system/' + SERVICE + '.d/99-deployment.conf')
 LOCK = APP / '.deployment-lock'
+CACHE = pathlib.Path('/var/cache/leon-workflow-deploy')
+STAGING_ROOT = APP / 'staging'
+LEGACY_STAGING_ROOT = pathlib.Path('/tmp')
+BACKUP_LIMIT = 2
 
 
 def run(args, env=None):
@@ -148,6 +152,156 @@ def record(metadata, status):
     atomic_json(path, data)
 
 
+def seal_backup(backup):
+    """Mark a stopped-database snapshot complete, before replacing the running release."""
+    files = {}
+    for path in backup.rglob('*'):
+        if path.is_file() and not path.is_symlink() and path.name != 'backup.json':
+            files[str(path.relative_to(backup))] = sha256(path)
+    atomic_json(backup / 'backup.json', {'createdAt': now(), 'files': files})
+
+
+def complete_backup(backup):
+    """Accept an intact JAR, stopped H2 snapshot and matching rollback configuration."""
+    try:
+        jar = backup / 'leon-lite-workflow.jar'
+        state_file = backup / 'rollback.json'
+        if state_file.is_symlink() or not state_file.is_file():
+            return False
+        state = json.loads(state_file.read_text())
+        database = backup / 'database' / (pathlib.Path(state['databasePath']).name + '.mv.db')
+        required = [jar, database, backup / 'rollback.json']
+        if state['hadOverride']:
+            required.append(backup / '99-deployment.conf')
+        if any(path.is_symlink() or not path.is_file() or not path.stat().st_size
+               or backup.resolve() not in path.resolve().parents for path in required):
+            return False
+        if sha256(jar) != state['jarSha256']:
+            return False
+        with zipfile.ZipFile(str(jar)) as archive:
+            if 'BOOT-INF/classes/com/example/helloservice/HelloServiceApplication.class' not in archive.namelist():
+                return False
+        manifest = backup / 'backup.json'
+        if manifest.exists():
+            if manifest.is_symlink():
+                return False
+            files = json.loads(manifest.read_text())['files']
+            if not all(str(path.relative_to(backup)) in files for path in required):
+                return False
+            for name, digest in files.items():
+                relative = pathlib.Path(name)
+                if relative.is_absolute() or '..' in relative.parts:
+                    return False
+                path = backup / relative
+                if path.is_symlink() or not path.is_file() or backup.resolve() not in path.resolve().parents or sha256(path) != digest:
+                    return False
+        return True
+    except (OSError, ValueError, KeyError, TypeError, zipfile.BadZipFile):
+        return False
+
+
+def managed_release(name):
+    return bool(re.fullmatch(r'(?:web-)?release-[A-Za-z0-9][A-Za-z0-9.\-]*', name))
+
+
+def prune_deployments(metadata):
+    """Run under the finishing deployment lock; never touch runtime data or history."""
+    if not getattr(shutil.rmtree, 'avoids_symlink_attacks', False):
+        raise RuntimeError('safe directory removal is unavailable')
+    if not LOCK.is_file() or LOCK.read_text().strip() != metadata['id']:
+        raise RuntimeError('retention requires the current deployment lock')
+    history = json.loads((HISTORY / (metadata['id'] + '.json')).read_text())
+    if history['status'] != 'SUCCESS' or sha256(JAR) != metadata['jarSha256']:
+        raise RuntimeError('retention requires a verified successful release')
+    root = APP / 'backups'
+    if root.is_symlink() or not root.is_dir():
+        raise RuntimeError('unexpected backup directory')
+    candidates = []
+    for path in root.iterdir():
+        if path.is_symlink() or not path.is_dir():
+            continue
+        known_name = managed_release(path.name) or bool(re.fullmatch(r'sonora-[0-9a-f]{32}', path.name))
+        known_contents = any((path / name).is_file() for name in ['rollback.json', 'release.json', 'leon-lite-workflow.jar', 'previous.jar'])
+        if known_name and known_contents:
+            candidates.append(path)
+    candidates.sort(key=lambda path: (path.stat().st_mtime, path.name), reverse=True)
+    current = root / metadata['id']
+    if current not in candidates or not complete_backup(current):
+        raise RuntimeError('current rollback backup is incomplete; nothing was pruned')
+    kept = [current]
+    for path in candidates:
+        if path != current and complete_backup(path):
+            kept.append(path)
+            if len(kept) == BACKUP_LIMIT:
+                break
+    if len(kept) < BACKUP_LIMIT:
+        print('RETENTION=skipped (fewer than two verified backups)', flush=True)
+        return
+    protected = {path.name for path in kept}
+    active = {metadata['id']}
+    terminal = set()
+    for path in HISTORY.glob('*.json'):
+        try:
+            entry = json.loads(path.read_text())
+            if entry['status'] in ('SUCCESS', 'FAILED', 'ROLLED_BACK', 'ROLLBACK_FAILED'):
+                terminal.add(entry['id'])
+        except (OSError, ValueError, KeyError):
+            continue
+    request = DATA / 'deploy-control/request.json'
+    if request.is_file():
+        # A build can be in progress before it acquires the deployment lock.
+        active.add(json.loads(request.read_text())['id'])
+    protected.update(active)
+    removed = {'backups': 0, 'builds': 0, 'staging': 0}
+    for path in candidates:
+        if path.name not in protected:
+            shutil.rmtree(str(path))
+            removed['backups'] += 1
+    if CACHE.is_dir() and not CACHE.is_symlink():
+        for path in CACHE.iterdir():
+            if path.is_dir() and not path.is_symlink() and managed_release(path.name) and path.name not in protected:
+                # Unknown/recent directories may belong to a not-yet-published build.
+                if path.name in terminal or time.time() - path.stat().st_mtime > 86400:
+                    shutil.rmtree(str(path))
+                    removed['builds'] += 1
+    for staging_root, staging_protected in [(STAGING_ROOT, protected), (LEGACY_STAGING_ROOT, active)]:
+        if not staging_root.is_dir() or staging_root.is_symlink():
+            continue
+        for path in staging_root.glob('leon-release-*'):
+            if path.is_symlink() or not path.is_dir() or not re.fullmatch(r'leon-release-[A-Za-z0-9_\-]+', path.name):
+                continue
+            if metadata.get('stagedJar') and path.resolve() == pathlib.Path(metadata['stagedJar']).parent.resolve():
+                continue
+            manifest = path / 'metadata.json'
+            identity = None
+            try:
+                if not manifest.is_symlink() and manifest.is_file() and manifest.stat().st_size <= 16384:
+                    identity = json.loads(manifest.read_text())['id']
+            except (OSError, ValueError, KeyError):
+                pass
+            if identity in staging_protected:
+                continue
+            old = time.time() - path.stat().st_mtime > 86400
+            known_upload = all(child.name in ('app.jar', 'deploy.py', 'metadata.json') for child in path.iterdir())
+            if identity in terminal or (old and known_upload):
+                shutil.rmtree(str(path))
+                removed['staging'] += 1
+    print('RETENTION=' + json.dumps({'kept': [path.name for path in kept], 'removed': removed}), flush=True)
+
+
+def finish(metadata):
+    if LOCK.read_text().strip() != metadata['id'] or sha256(JAR) != metadata['jarSha256']:
+        raise RuntimeError('deployment changed before final verification')
+    services()
+    record(metadata, 'SUCCESS')
+    try:
+        prune_deployments(metadata)
+    except Exception as error:
+        # A cleanup failure must not undo a healthy release or erase its rollback protection.
+        print('RETENTION_WARNING=' + type(error).__name__, flush=True)
+    LOCK.unlink()
+
+
 def rollback(metadata):
     backup = APP / 'backups' / metadata['id']
     if not (backup / 'rollback.json').is_file():
@@ -223,6 +377,7 @@ def apply(metadata):
                 shutil.copy2(str(path), str(db_backup / path.name))
         if not (db_backup / (database.name + '.mv.db')).is_file():
             raise RuntimeError('database backup missing')
+        seal_backup(backup)
         OVERRIDE.write_text('[Service]\nEnvironment=LEON_DEPLOYMENTS_DIRECTORY=' + str(HISTORY)
             + '\nEnvironment=LEON_DEPLOYMENT_ID=' + metadata['id'] + '\n')
         os.chmod(str(OVERRIDE), 0o644)
@@ -322,8 +477,11 @@ def local(description):
         'description': description or ('部署工作区版本' if dirty else run(['git', 'log', '-1', '--format=%s'])), 'jarSha256': sha256(jar)}
     def workbench(command, timeout=30):
         return run(['workbench', 'exec', '--instance-id', INSTANCE, '--command', command, '--timeout', str(timeout)])
-    staged = workbench('mktemp -d /tmp/leon-release-XXXXXXXX').strip()
-    if not re.fullmatch(r'/tmp/leon-release-[a-zA-Z0-9]+', staged):
+    prepare = ('import pathlib,tempfile; p=pathlib.Path(' + repr(str(STAGING_ROOT)) + '); '
+        'p.mkdir(mode=0o700,exist_ok=True); assert not p.is_symlink(); '
+        'print(tempfile.mkdtemp(prefix="leon-release-",dir=str(p)))')
+    staged = workbench('python3 -c ' + shlex.quote(prepare)).strip()
+    if not re.fullmatch(re.escape(str(STAGING_ROOT)) + r'/leon-release-[a-zA-Z0-9_\-]+', staged):
         raise RuntimeError('unexpected remote staging path')
     metadata['stagedJar'] = staged + '/app.jar'
     script = pathlib.Path(__file__).resolve()
@@ -368,11 +526,7 @@ def main():
         elif args.remote_action == 'rollback':
             rollback(metadata)
         else:
-            if LOCK.read_text().strip() != metadata['id'] or sha256(JAR) != metadata['jarSha256']:
-                raise RuntimeError('deployment changed before final verification')
-            services()
-            record(metadata, 'SUCCESS')
-            LOCK.unlink()
+            finish(metadata)
             print('DEPLOYMENT_RECORDED=SUCCESS', flush=True)
     else:
         if len(args.description) > 240 or any(ord(char) < 32 for char in args.description):

@@ -178,9 +178,7 @@ def main():
             stage = 'VERIFYING'
             job(metadata, stage, '服务已启动，正在验证 HTTPS、认证、Alfred 查询和音乐电台。')
             wait_for_verification(metadata)
-            deploy.services()
-            deploy.record(metadata, 'SUCCESS')
-            deploy.LOCK.unlink()
+            deploy.finish(metadata)
             job(metadata, 'SUCCESS', '部署成功，服务器已更新为 main 分支最新版本。')
         except Exception:
             status = 'FAILED'

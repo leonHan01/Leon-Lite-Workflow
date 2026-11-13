@@ -4,6 +4,7 @@ import pathlib
 import os
 import io
 import types
+import zipfile
 import tempfile
 import unittest
 import sys
@@ -25,7 +26,8 @@ class DeploymentRunnerTest(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         root = pathlib.Path(self.temporary.name)
         values = {'APP': root / 'app', 'JAR': root / 'app/app.jar', 'DATA': root / 'data',
-                  'HISTORY': root / 'data/deployments', 'OVERRIDE': root / 'release.conf', 'LOCK': root / 'lock'}
+                  'HISTORY': root / 'data/deployments', 'OVERRIDE': root / 'release.conf', 'LOCK': root / 'lock',
+                  'CACHE': root / 'cache', 'STAGING_ROOT': root / 'staging', 'LEGACY_STAGING_ROOT': root / 'legacy-staging'}
         for name, value in values.items():
             manager = patch.object(deploy, name, value)
             manager.start()
@@ -34,6 +36,8 @@ class DeploymentRunnerTest(unittest.TestCase):
         deploy.DATA.mkdir()
         deploy.HISTORY.mkdir()
         (deploy.APP / 'backups').mkdir()
+        for path in [deploy.CACHE, deploy.STAGING_ROOT, deploy.LEGACY_STAGING_ROOT]:
+            path.mkdir()
         self.metadata = {'id': 'release-test', 'version': '2026.11.12.1', 'commit': 'a' * 40,
                          'dirty': True, 'description': '测试发布', 'jarSha256': 'b' * 64}
 
@@ -134,6 +138,112 @@ class DeploymentRunnerTest(unittest.TestCase):
         self.assertEqual('c' * 40, self.metadata['commit'])
         self.assertTrue(any('https://codeload.github.com/leonHan01/Leon-Lite-Workflow/tar.gz/' + 'c' * 40 in args for args in calls))
         self.assertIn('--strip-components=1', calls[-1])
+
+    def complete_snapshot(self, identity, modified):
+        backup = deploy.APP / 'backups' / identity
+        backup.mkdir()
+        jar = backup / 'leon-lite-workflow.jar'
+        with zipfile.ZipFile(str(jar), 'w') as archive:
+            archive.writestr('BOOT-INF/classes/com/example/helloservice/HelloServiceApplication.class', identity.encode())
+        (backup / 'database').mkdir()
+        (backup / 'database/workflow.mv.db').write_bytes(b'stopped H2 snapshot')
+        (backup / '99-deployment.conf').write_text('previous deployment configuration')
+        deploy.atomic_json(backup / 'rollback.json', {'hadOverride': True, 'databasePath': str(deploy.DATA / 'workflow'), 'jarSha256': deploy.sha256(jar)})
+        deploy.seal_backup(backup)
+        deploy.record(dict(self.metadata, id=identity), 'SUCCESS')
+        os.utime(str(backup), (modified, modified))
+        return backup
+
+    def prepare_retention(self):
+        deploy.JAR.write_bytes(b'current running program')
+        self.metadata['jarSha256'] = deploy.sha256(deploy.JAR)
+        deploy.LOCK.write_text(self.metadata['id'])
+        deploy.record(self.metadata, 'SUCCESS')
+        return self.complete_snapshot(self.metadata['id'], 3000)
+
+    def test_retention_keeps_two_complete_backups_and_preserves_active_builds_data_and_history(self):
+        current = self.prepare_retention()
+        previous = self.complete_snapshot('release-previous', 2000)
+        old = self.complete_snapshot('release-old', 1000)
+        legacy = deploy.APP / 'backups/release-legacy'
+        legacy.mkdir(); (legacy / 'leon-lite-workflow.jar').write_bytes(b'old incomplete copy')
+        database = deploy.DATA / 'workflow.mv.db'
+        database.write_bytes(b'live business data')
+        control = deploy.DATA / 'deploy-control'; control.mkdir()
+        deploy.atomic_json(control / 'request.json', {'id': 'web-release-building'})
+        for name in ['release-old', 'release-previous', 'web-release-building', '.m2', 'repository.git', 'unrelated']:
+            (deploy.CACHE / name).mkdir()
+        outside = deploy.DATA / 'other-project'; outside.mkdir()
+        (outside / 'private.txt').write_text('must remain')
+        (deploy.CACHE / 'release-symlink').symlink_to(outside, target_is_directory=True)
+        for root, name, identity in [(deploy.STAGING_ROOT, 'leon-release-Old', 'release-old'),
+                                     (deploy.STAGING_ROOT, 'leon-release-New', self.metadata['id']),
+                                     (deploy.STAGING_ROOT, 'leon-release-Pending', 'release-pending'),
+                                     (deploy.LEGACY_STAGING_ROOT, 'leon-release-Legacy', 'release-previous')]:
+            path = root / name; path.mkdir(); deploy.atomic_json(path / 'metadata.json', {'id': identity})
+        orphan = deploy.STAGING_ROOT / 'leon-release-Orphan'; orphan.mkdir()
+        (orphan / 'app.jar').write_bytes(b'interrupted upload'); os.utime(str(orphan), (1, 1))
+        records_before = sorted(path.name for path in deploy.HISTORY.iterdir())
+        deploy.prune_deployments(self.metadata)
+        self.assertEqual({current.name, previous.name}, {path.name for path in (deploy.APP / 'backups').iterdir()})
+        self.assertFalse(old.exists())
+        self.assertFalse((deploy.CACHE / 'release-old').exists())
+        for name in ['release-previous', 'web-release-building', '.m2', 'repository.git', 'unrelated', 'release-symlink']:
+            self.assertTrue((deploy.CACHE / name).exists())
+        self.assertEqual('must remain', (outside / 'private.txt').read_text())
+        self.assertFalse((deploy.STAGING_ROOT / 'leon-release-Old').exists())
+        self.assertFalse(orphan.exists())
+        self.assertTrue((deploy.STAGING_ROOT / 'leon-release-New').exists())
+        self.assertTrue((deploy.STAGING_ROOT / 'leon-release-Pending').exists())
+        self.assertFalse((deploy.LEGACY_STAGING_ROOT / 'leon-release-Legacy').exists())
+        self.assertEqual(b'live business data', database.read_bytes())
+        self.assertEqual(records_before, sorted(path.name for path in deploy.HISTORY.iterdir()))
+
+    def test_retention_rejects_corruption_and_keeps_an_older_usable_rollback(self):
+        current = self.prepare_retention()
+        corrupt = self.complete_snapshot('release-corrupt', 2500)
+        (corrupt / 'database/workflow.mv.db').write_bytes(b'corrupted backup')
+        usable = self.complete_snapshot('release-usable', 2000)
+        self.assertFalse(deploy.complete_backup(corrupt))
+        deploy.prune_deployments(self.metadata)
+        self.assertEqual({current.name, usable.name}, {path.name for path in (deploy.APP / 'backups').iterdir()})
+
+    def test_incomplete_current_backup_prevents_all_cleanup(self):
+        current = self.prepare_retention()
+        self.complete_snapshot('release-previous', 2000)
+        old = self.complete_snapshot('release-old', 1000)
+        (current / '99-deployment.conf').unlink()
+        with self.assertRaises(RuntimeError):
+            deploy.prune_deployments(self.metadata)
+        self.assertTrue(old.exists())
+
+    def test_failed_or_concurrent_deployment_cannot_prune_backups(self):
+        self.prepare_retention()
+        old = self.complete_snapshot('release-old', 1000)
+        deploy.record(self.metadata, 'DEPLOYING')
+        with self.assertRaises(RuntimeError):
+            deploy.prune_deployments(self.metadata)
+        deploy.record(self.metadata, 'SUCCESS')
+        deploy.LOCK.write_text('another-release')
+        with self.assertRaises(RuntimeError):
+            deploy.prune_deployments(self.metadata)
+        self.assertTrue(old.exists())
+
+    def test_fewer_than_two_valid_backups_does_not_prune(self):
+        self.prepare_retention()
+        incomplete = deploy.APP / 'backups/release-incomplete'; incomplete.mkdir()
+        (incomplete / 'previous.jar').write_bytes(b'incomplete')
+        deploy.prune_deployments(self.metadata)
+        self.assertTrue(incomplete.exists())
+
+    def test_cleanup_failure_does_not_roll_back_a_verified_release(self):
+        self.prepare_retention()
+        with patch.object(deploy, 'services'), patch.object(deploy, 'prune_deployments', side_effect=OSError('cleanup failed')), \
+                patch.object(deploy, 'rollback') as rollback:
+            deploy.finish(self.metadata)
+        self.assertFalse(deploy.LOCK.exists())
+        self.assertEqual('SUCCESS', json.loads((deploy.HISTORY / 'release-test.json').read_text())['status'])
+        rollback.assert_not_called()
 
 
 if __name__ == '__main__':
