@@ -16,9 +16,11 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -67,6 +69,62 @@ class LlmMessageServiceTest {
         assertEquals("帮我分析一下今天的工作安排是否合理", session.getTitle());
         assertEquals("user", saved.get("role"));
         verify(llmSessionRepository).save(session);
+    }
+
+    @Test
+    void updateSessionRenamesAndRejectsBlankTitle() {
+        LlmSession session = new LlmSession();
+        session.setId(3L);
+        session.setTitle("新对话");
+        session.setDeleted(false);
+        when(llmSessionRepository.findById(3L)).thenReturn(Optional.of(session));
+        when(llmSessionRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        when(llmMessageRepository.findBySessionIdAndDeletedFalseOrderByIdAsc(3L)).thenReturn(List.of());
+
+        Map<String, Object> saved = llmMessageService.updateSession(3L, Map.of("title", "周报"));
+
+        assertEquals("周报", saved.get("title"));
+        assertEquals("周报", session.getTitle());
+        assertThrows(IllegalArgumentException.class, () -> llmMessageService.updateSession(3L, Map.of("title", "  ")));
+        assertThrows(IllegalArgumentException.class, () -> llmMessageService.updateSession(3L, Map.of()));
+    }
+
+    @Test
+    void updateSessionClipsTitleAndCountsMessages() {
+        LlmSession session = new LlmSession();
+        session.setId(3L);
+        session.setTitle("新对话");
+        session.setDeleted(false);
+        when(llmSessionRepository.findById(3L)).thenReturn(Optional.of(session));
+        when(llmSessionRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        when(llmMessageRepository.findBySessionIdAndDeletedFalseOrderByIdAsc(3L))
+                .thenReturn(List.of(new LlmMessage(), new LlmMessage()));
+
+        Map<String, Object> saved = llmMessageService.updateSession(3L, Map.of("title", "题".repeat(201)));
+
+        assertEquals(200, session.getTitle().length());
+        assertEquals(session.getTitle(), saved.get("title"));
+        assertEquals(2, saved.get("messageCount"));
+        assertNotNull(saved.get("updateTime"));
+    }
+
+    @Test
+    void updateSessionRejectsMissingAndDeletedSessions() {
+        when(llmSessionRepository.findById(9L)).thenReturn(Optional.empty());
+
+        IllegalArgumentException missing = assertThrows(IllegalArgumentException.class,
+                () -> llmMessageService.updateSession(9L, Map.of("title", "周报")));
+
+        assertEquals("对话不存在: 9", missing.getMessage());
+
+        LlmSession deleted = new LlmSession();
+        deleted.setId(9L);
+        deleted.setDeleted(true);
+        when(llmSessionRepository.findById(9L)).thenReturn(Optional.of(deleted));
+
+        assertEquals("对话不存在: 9", assertThrows(IllegalArgumentException.class,
+                () -> llmMessageService.updateSession(9L, Map.of("title", "周报"))).getMessage());
+        verify(llmSessionRepository, never()).save(any());
     }
 
     @Test

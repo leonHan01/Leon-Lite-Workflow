@@ -38,4 +38,18 @@ class LlmMessageControllerTest {
         assertEquals(9L, ((Map<?, ?>) controller.addMessage(1L, Map.of("role", "user", "content", "hi")).getBody().get("data")).get("id"));
         assertEquals("deleted", controller.deleteSession(1L).getBody().get("data"));
     }
+
+    @Test
+    void updateSessionPassesAnEmptyBodyWhenTheRequestIsMissing() {
+        LlmMessageService service = mock(LlmMessageService.class);
+        LlmMessageController controller = new LlmMessageController(service);
+        when(service.updateSession(4L, Map.of("title", "周报"))).thenReturn(Map.of("id", 4L, "title", "周报"));
+        when(service.updateSession(4L, Map.of())).thenReturn(Map.of("id", 4L, "title", ""));
+
+        assertEquals("周报", ((Map<?, ?>) controller.updateSession(4L, Map.of("title", "周报")).getBody().get("data")).get("title"));
+        controller.updateSession(4L, null);
+
+        verify(service).updateSession(4L, Map.of());
+        verify(service).updateSession(4L, Map.of("title", "周报"));
+    }
 }

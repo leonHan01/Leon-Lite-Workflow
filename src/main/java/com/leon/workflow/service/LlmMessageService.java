@@ -76,6 +76,20 @@ public class LlmMessageService {
     }
 
     @Transactional
+    public Map<String, Object> updateSession(Long id, Map<String, Object> request) {
+        LlmSession session = requireSession(id);
+        String title = stringValue(request.get("title"));
+        if (title.isBlank()) {
+            throw new IllegalArgumentException("标题不能为空");
+        }
+        session.setTitle(clip(title, 200));
+        session.setUpdateTime(LocalDateTime.now());
+        llmSessionRepository.save(session);
+        int count = llmMessageRepository.findBySessionIdAndDeletedFalseOrderByIdAsc(id).size();
+        return toSessionSummary(session, count);
+    }
+
+    @Transactional
     public Map<String, Object> addMessage(Long sessionId, Map<String, Object> request) {
         LlmSession session = requireSession(sessionId);
         String role = stringValue(request.get("role"));
