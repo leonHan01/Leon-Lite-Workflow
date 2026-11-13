@@ -14,7 +14,8 @@ export function mount(root) {
         if ([10, 20, 50].includes(preferred)) pageSize = preferred;
     } catch { /* Browser storage can be unavailable; pagination still works. */ }
 
-    let writing = false;
+    let writing = false, uploading = false, active = false, fileDragDepth = 0;
+    const audioExtensions = new Set(["mp3", "m4a", "aac", "wav", "aif", "aiff", "caf", "flac"]);
     const playlistStatus = find('[data-playlist-status]');
     let activePlaylistId = '';
     const destination = find('[data-destination]');
@@ -370,17 +371,56 @@ export function mount(root) {
         } finally { audio.removeAttribute('src'); audio.load(); URL.revokeObjectURL(url); }
     }
 
-    form.addEventListener('submit', async event => {
-        event.preventDefault();
-        const files = [...form.elements.files.files];
-        if (!files.length) return;
-        if (files.some(file => !file.size || file.size > 128 * 1024 * 1024)) { status.textContent = '歌曲不能为空，且单首不能超过 128 MB。'; return; }
-        const artist = form.elements.artist.value;
-        const album = form.elements.album.value;
-        const playlistId = form.elements.playlistId.value;
-        for (const element of form.elements) element.disabled = true;
-        let uploaded = 0;
+    function clearFileDrag() { fileDragDepth = 0; root.classList.remove('is-file-dragging'); }
+    function fileDrag(event) {
+        return active && !root.hidden && [...(event.dataTransfer?.types || [])].includes('Files');
+    }
+    function showFileDrag(event) {
+        const card = event.target.closest?.('[data-playlist-id]');
+        const list = playlists.find(item => item.id === card?.dataset.playlistId);
+        find('[data-file-drop-title]').textContent = uploading ? '正在上传，请等待当前任务完成' : writing ? '正在保存，请稍候再上传' : list ? `松开上传并加入「${list.name}」` : '松开即可上传歌曲';
+        root.classList.add('is-file-dragging');
+    }
+    document.addEventListener('dragenter', event => {
+        if (!fileDrag(event)) return;
+        event.preventDefault(); fileDragDepth++; showFileDrag(event);
+    }, true);
+    document.addEventListener('dragover', event => {
+        if (!fileDrag(event)) return;
+        event.preventDefault(); event.stopPropagation();
+        event.dataTransfer.dropEffect = writing ? 'none' : 'copy'; showFileDrag(event);
+    }, true);
+    document.addEventListener('dragleave', () => {
+        if (fileDragDepth > 0 && --fileDragDepth === 0) clearFileDrag();
+    }, true);
+    document.addEventListener('dragend', clearFileDrag, true);
+    window.addEventListener('blur', clearFileDrag);
+    document.addEventListener('keydown', event => { if (event.key === 'Escape') clearFileDrag(); });
+    document.addEventListener('drop', event => {
+        if (!fileDrag(event)) return;
+        event.preventDefault(); event.stopPropagation(); clearFileDrag();
+        const card = event.target.closest?.('[data-playlist-id]');
+        const target = card?.dataset.playlistId || (event.target.closest?.('[data-all-tracks]') ? '' : form.elements.playlistId.value || activePlaylistId);
+        void uploadFiles([...event.dataTransfer.files], target);
+    }, true);
+
+    async function uploadFiles(candidates, playlistId) {
+        if (writing) { status.textContent = uploading ? '已有歌曲正在上传，请等待当前任务完成后再拖入。' : '正在保存歌单，请稍候再上传。'; return; }
         const failures = [];
+        const files = candidates.filter(file => {
+            if (!audioExtensions.has(file.name.split('.').pop().toLowerCase())) { failures.push(`${file.name}：不支持的音频格式，已跳过。`); return false; }
+            if (!file.size || file.size > 128 * 1024 * 1024) { failures.push(`${file.name}：歌曲不能为空，且单首不能超过 128 MB。`); return false; }
+            return true;
+        });
+        if (!files.length) { status.textContent = failures.join('；') || '请拖入 MP3 等受支持的音频文件。'; return; }
+        if (playlistId && !playlists.some(list => list.id === playlistId)) { status.textContent = '目标歌单已不存在，请刷新后重试。'; return; }
+        const artist = form.elements.artist.value, album = form.elements.album.value;
+        uploading = true; writing = true;
+        find('[data-uploader]').open = true;
+        for (const element of form.elements) element.disabled = true;
+        find('[data-refresh]').disabled = true;
+        renderPlaylists(); updatePagination(); updateSortControls();
+        let uploaded = 0;
         try {
             for (const [index, file] of files.entries()) {
                 status.textContent = `正在上传 ${index + 1} / ${files.length}：${file.name}`;
@@ -401,7 +441,16 @@ export function mount(root) {
             if (!failures.length) { form.reset(); find('[data-uploader]').open = false; }
             status.textContent = `已上传 ${uploaded} 首。${failures.join('；')}`;
             await refresh();
-        } finally { for (const element of form.elements) element.disabled = false; }
+        } finally {
+            uploading = false; writing = false;
+            for (const element of form.elements) element.disabled = false;
+            find('[data-refresh]').disabled = loading;
+            renderPlaylists(); updatePagination(); updateSortControls();
+        }
+    }
+    form.addEventListener('submit', event => {
+        event.preventDefault();
+        void uploadFiles([...form.elements.files.files], form.elements.playlistId.value);
     });
     find('[data-create-playlist]').addEventListener('submit', event => {
         event.preventDefault(); const name = event.currentTarget.elements.name.value.trim(); if (!name) return;
@@ -464,5 +513,5 @@ export function mount(root) {
         remaining.splice(index + (target.after ? 1 : 0), 0, ...moved);
         savePlaylistOrder(id, remaining, expected);
     });
-    return { activate() { if (!loaded) refresh(); }, deactivate() { clearDrag(); root.querySelectorAll('audio').forEach(audio => audio.pause()); } };
+    return { activate() { active = true; if (!loaded) refresh(); }, deactivate() { active = false; clearFileDrag(); clearDrag(); root.querySelectorAll('audio').forEach(audio => audio.pause()); } };
 }

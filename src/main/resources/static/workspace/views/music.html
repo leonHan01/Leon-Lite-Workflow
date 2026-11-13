@@ -1,12 +1,13 @@
 <div class="music-content">
     <details class="music-uploader" data-uploader>
-        <summary><span>上传歌曲</span><small>添加新音乐到曲库或歌单</small></summary>
+        <summary><span>上传歌曲</span><small>点击选择文件，或直接拖入 MP3 上传</small></summary>
     <form class="music-upload" data-upload>
-        <p>支持 MP3、M4A、AAC、WAV、AIFF、CAF 和 FLAC，单首不超过 128 MB。多首歌曲会依次上传。</p>
+        <p>支持 MP3、M4A、AAC、WAV、AIFF、CAF 和 FLAC，单首不超过 128 MB。多首歌曲会依次上传。文件可直接拖到此页，拖到歌单卡片上会在上传后自动加入该歌单。</p>
         <label class="music-files">选择歌曲 <input type="file" name="files" accept=".mp3,.m4a,.aac,.wav,.aif,.aiff,.caf,.flac" multiple required></label>
         <div class="music-fields"><label>艺术家（可选）<input name="artist" maxlength="240" placeholder="未知艺术家"></label><label>专辑（可选）<input name="album" maxlength="240" placeholder="未知专辑"></label><label>上传后加入歌单<select name="playlistId"><option value="">仅上传到曲库</option></select></label><button type="submit">上传到曲库 ↗</button></div>
     </form>
     </details>
+    <div class="music-file-drop" data-file-drop aria-hidden="true"><div><strong data-file-drop-title>松开即可上传歌曲</strong><p>支持多首 MP3，单首不超过 128 MB；拖到歌单卡片可直接加入歌单。</p></div></div>
     <p class="music-status" data-status role="status" aria-live="polite"></p>
     <div class="music-collection">
         <aside class="music-playlists" aria-label="在线歌单管理">

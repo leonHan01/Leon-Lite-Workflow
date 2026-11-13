@@ -6,6 +6,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE_PATH || 'playwright')
 const root = path.resolve(__dirname, '../../main/resources/static');
 let tracks = [];
 let writes = 0;
+let droppedUploads = [], nextUpload = 1, failUpload = false, uploadDelay = 0, inFlightUploads = 0, maxUploadConcurrency = 0;
 let playlists = [];
 let playlistWrites = 0;
 let nextPlaylist = 1;
@@ -50,11 +51,21 @@ const server = http.createServer((req, res) => {
         const chunks = [];
         req.on('data', chunk => chunks.push(chunk));
         req.on('end', () => {
-            assert.match(Buffer.concat(chunks).toString(), /filename="song.wav"/);
-            tracks.push({ id, title: '<b>song</b>', artist: '测试歌手', album: '测试专辑', size: 44 });
-            writes++;
-            res.writeHead(201, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify(tracks[0]));
+            const text = Buffer.concat(chunks).toString();
+            const filename = text.match(/filename="([^"]+)"/)?.[1];
+            assert.ok(filename, 'multipart upload contains a filename');
+            inFlightUploads++; maxUploadConcurrency = Math.max(maxUploadConcurrency, inFlightUploads);
+            const finish = () => {
+                inFlightUploads--;
+                if (failUpload) { failUpload = false; res.writeHead(503, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ message: '临时上传失败，请重试。' })); }
+                const song = filename === 'song.wav' ? { id, title: '<b>song</b>', artist: '测试歌手', album: '测试专辑', size: 44 }
+                    : { id: `20000000-0000-0000-0000-${String(nextUpload++).padStart(12, '0')}`, title: filename, artist: '拖入歌手', album: '上传专辑', size: 16 };
+                tracks.push(song); if (filename !== 'song.wav') droppedUploads.push(filename);
+                writes++;
+                res.writeHead(201, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(song));
+            };
+            if (uploadDelay) setTimeout(finish, uploadDelay); else finish();
         });
         return;
     }
@@ -308,10 +319,83 @@ const server = http.createServer((req, res) => {
         assert.ok(rail.width <= 80, 'music page uses a compact navigation rail');
         assert.ok(music.x < 100 && music.x + music.width >= 1640, 'music content uses the available page width');
         if (process.env.SCREENSHOT_PATH) await page.screenshot({ path: process.env.SCREENSHOT_PATH, fullPage: true });
+        // Real File objects exercise OS-file drag/drop separately from internal row sorting.
+        async function filesTransfer(names) {
+            return page.evaluateHandle(names => {
+                const data = new DataTransfer();
+                for (const name of names) data.items.add(new File(name.startsWith('empty') ? [] : ['ID3 fixture audio'], name, { type: name.endsWith('.txt') ? 'text/plain' : 'audio/mpeg' }));
+                return data;
+            }, names);
+        }
+        async function dropFiles(names, selector = '.music-content') {
+            const transfer = await filesTransfer(names);
+            const node = page.locator(selector);
+            await node.dispatchEvent('dragenter', { dataTransfer: transfer });
+            await node.dispatchEvent('dragover', { dataTransfer: transfer });
+            assert.ok(await page.locator('[data-file-drop]').isVisible(), 'file drag shows upload target');
+            await node.dispatchEvent('drop', { dataTransfer: transfer }); await transfer.dispose();
+        }
+        async function finishUpload() { await page.waitForFunction(() => !document.querySelector('[data-upload] button[type=submit]').disabled); }
+        const originalSongs = tracks.map(song => song.id), memberships = playlists.map(list => [...list.trackIds]);
+        await dropFiles(['direct.mp3'], '[data-tracks] tr:first-child'); await finishUpload();
+        assert.deepEqual(droppedUploads, ['direct.mp3']);
+        assert.ok(originalSongs.every(id => tracks.some(song => song.id === id)), 'direct uploads preserve existing songs');
+        assert.deepEqual(playlists.map(list => list.trackIds), memberships, 'library drops do not alter playlists');
+        assert.ok(await page.locator('[data-file-drop]').isHidden(), 'drop clears overlay');
+        const dropList = playlists[0].id;
+        await dropFiles(['batch-one.mp3', 'batch-two.MP3'], `[data-playlist-id="${dropList}"]`); await finishUpload();
+        assert.deepEqual(droppedUploads.slice(-2), ['batch-one.mp3', 'batch-two.MP3']);
+        const uploadedIds = tracks.filter(song => song.title.startsWith('batch-')).map(song => song.id);
+        assert.deepEqual(playlists[0].trackIds.slice(-2), uploadedIds, 'dropping MP3 files on a playlist appends them in file order');
+        await page.locator(`[data-playlist-id="${dropList}"]`).click();
+        await dropFiles(['inside.mp3'], '.music-library'); await finishUpload();
+        assert.ok(playlists[0].trackIds.includes(tracks.find(song => song.title === 'inside.mp3').id), 'dropping in an open playlist adds the uploaded track to that playlist');
+        await page.locator('[data-all-tracks]').click();
+        assert.equal(maxUploadConcurrency, 1, 'multi-file uploads run sequentially');
+        const beforeInvalid = writes;
+        await dropFiles(['notes.txt', 'empty.mp3']);
+        assert.equal(writes, beforeInvalid, 'unsupported/empty files never reach server');
+        assert.match(await page.locator('[data-status]').innerText(), /不支持的音频格式/);
+        assert.match(await page.locator('[data-status]').innerText(), /不能为空/);
+        await dropFiles(['mixed.mp3', 'cover.txt']); await finishUpload();
+        assert.ok(droppedUploads.includes('mixed.mp3'));
+        assert.match(await page.locator('[data-status]').innerText(), /已上传 1 首.*不支持的音频格式/);
+        failNextAddition = true;
+        await dropFiles(['kept.mp3'], `[data-playlist-id="${dropList}"]`); await finishUpload();
+        const kept = tracks.find(song => song.title === 'kept.mp3');
+        assert.ok(kept && !playlists[0].trackIds.includes(kept.id), 'failed playlist attachment preserves uploaded audio in the library');
+        assert.match(await page.locator('[data-status]').innerText(), /已上传.*加入歌单失败/);
+        failUpload = true;
+        await dropFiles(['retry.mp3']); await finishUpload();
+        assert.match(await page.locator('[data-status]').innerText(), /临时上传失败/);
+        assert.equal(droppedUploads.includes('retry.mp3'), false);
+        await dropFiles(['retry.mp3']); await finishUpload(); assert.equal(droppedUploads.includes('retry.mp3'), true);
+        uploadDelay = 400;
+        await dropFiles(['slow.mp3']);
+        assert.ok(await page.locator('[data-upload] button[type=submit]').isDisabled());
+        await dropFiles(['blocked.mp3']);
+        assert.match(await page.locator('[data-status]').innerText(), /等待当前任务完成/);
+        await finishUpload(); uploadDelay = 0;
+        assert.equal(droppedUploads.includes('blocked.mp3'), false, 'dropping again during an upload does not start a second batch');
+        const abandoned = await filesTransfer(['cancel.mp3']);
+        await page.locator('.music-content').dispatchEvent('dragenter', { dataTransfer: abandoned });
+        await page.keyboard.press('Escape'); assert.ok(await page.locator('[data-file-drop]').isHidden()); await abandoned.dispose();
+        for (const width of [2200, 1440, 800, 390]) {
+            await page.setViewportSize({ width, height: 900 });
+            const audioWidth = (await page.locator('[data-tracks] audio').first().boundingBox()).width;
+            assert.ok(audioWidth >= 360 && audioWidth <= 640, 'preview keeps an extended seek area');
+            if (width === 2200) assert.ok(audioWidth >= 600, 'wide screens get a longer preview');
+            assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'extended preview scrolls inside table on small screens');
+        }
+        await page.setViewportSize({ width: 1644, height: 1100 });
+        if (process.env.SCREENSHOT_PATH) await page.screenshot({ path: process.env.SCREENSHOT_PATH.replace('.png', '-file-upload.png'), fullPage: true });
         await page.locator('.lw-sidebar').getByRole('link', { name: '高级设置', exact: true }).click();
         await page.waitForFunction(() => !document.body.classList.contains('is-music-page'));
         assert.ok((await page.locator('.lw-sidebar').boundingBox()).width > 200, 'other workspace pages keep their normal navigation');
+        const inactiveWrites = writes, inactiveFiles = await filesTransfer(['inactive.mp3']);
+        await page.locator('body').dispatchEvent('drop', { dataTransfer: inactiveFiles }); await inactiveFiles.dispose();
+        assert.equal(writes, inactiveWrites, 'inactive music view does not intercept other pages');
         assert.deepEqual(errors, []);
-        console.log('Music management checks passed (pagination 10/20/50, cross-page selection, boundaries, full-width layout; reorder, filtered/multi moves, no-op, failure/conflict, reload and copy): single/multi drag, duplicates, errors/retry, cancellation, external payloads, batch alternative and responsive layout.');
+        console.log('Music management checks passed (MP3 page/playlist drops, sequential multi-file upload, invalid/empty files, failure/retry, busy/cancel/inactive handling, extended preview; pagination 10/20/50, cross-page selection, boundaries, full-width layout; reorder, filtered/multi moves, no-op, failure/conflict, reload and copy): single/multi drag, duplicates, errors/retry, cancellation, external payloads, batch alternative and responsive layout.');
     } finally { await browser.close(); server.close(); }
 })().catch(error => { console.error(error); server.close(); process.exitCode = 1; });
