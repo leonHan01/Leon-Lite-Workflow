@@ -126,7 +126,7 @@ export function mount(pane, workspace) {
             </div>`;
         }).join('');
         syncWorld(); lines();
-        $('[data-canvas-hint]').textContent = connecting ? (connecting.endpoint === 'source' ? '重新连接起点：点击节点右侧出口，Esc 取消' : '连接到节点左侧入口，Esc 取消') : '点击连线编辑 · 拖拽空白移动 · Ctrl/⌘+滚轮缩放';
+        $('[data-canvas-hint]').textContent = connecting ? (connecting.point ? `按住拖动连线，松开到节点${connecting.endpoint === 'source' ? '出口' : '入口'}完成；Esc 取消` : connecting.endpoint === 'source' ? '重新连接起点：点击节点右侧出口，Esc 取消' : '连接到节点左侧入口，Esc 取消') : '按住出口拖动连线 · 点击连线编辑 · Ctrl/⌘+滚轮缩放';
     }
     function syncWorld() {
         const scroll = $('.wf-canvas-scroll'), canvas = $('.wf-canvas'), stage = $('.wf-canvas-stage');
@@ -456,7 +456,7 @@ export function mount(pane, workspace) {
             if (target.dataset.edge || target.dataset.selectEdge) selectEdge(target.dataset.edge || target.dataset.selectEdge);
             else if (target.dataset.deleteEdge) deleteEdge(target.dataset.deleteEdge);
             else if (target.dataset.add) add(target.dataset.add);
-            else if (target.dataset.source) connectPort('source', target.dataset.source, target.dataset.branch);
+            else if (target.dataset.source && (event.detail === 0 || connecting?.edgeId)) connectPort('source', target.dataset.source, target.dataset.branch);
             else if (target.dataset.target) connectPort('target', target.dataset.target);
             else if (target.dataset.run) perform(() => viewRun(target.dataset.run));
             else if (target.dataset.deleteCredential) perform(async () => { if (!confirm('删除后，引用此凭据的节点需要重新选择凭据，是否继续？')) return; await api('/credentials/' + target.dataset.deleteCredential, { method: 'DELETE' }); credentials = await api('/credentials'); credentialList(); inspector(); });
@@ -526,35 +526,50 @@ export function mount(pane, workspace) {
         handle.addEventListener('pointermove', move); handle.addEventListener('pointerup', end); handle.addEventListener('pointercancel', end);
     });
     $('.wf-canvas-scroll').addEventListener('pointerdown', event => {
-        const handle = event.target.closest('[data-reconnect]'); if (!handle || event.button !== 0) return;
+        const handle = event.target.closest('[data-reconnect]'), source = event.target.closest('[data-source]');
+        if ((!handle && !source) || event.button !== 0 || event.isPrimary === false) return;
+        // The explicit reconnect buttons also allow choosing a port with a click.
+        if (!handle && connecting?.edgeId) return;
         event.preventDefault(); event.stopPropagation();
-        const scroll = event.currentTarget, edgeId = handle.dataset.edgeId, endpoint = handle.dataset.reconnect;
+        const scroll = event.currentTarget, edgeId = handle?.dataset.edgeId, endpoint = handle?.dataset.reconnect || 'target';
+        const point = e => {
+            const rect = scroll.getBoundingClientRect();
+            return { x: (e.clientX - rect.left + scroll.scrollLeft) / zoom, y: (e.clientY - rect.top + scroll.scrollTop) / zoom };
+        };
         const start = { x: event.clientX, y: event.clientY }; let moved = false;
-        beginReconnect(edgeId, endpoint); scroll.setPointerCapture(event.pointerId);
+        try {
+            if (handle) beginReconnect(edgeId, endpoint);
+            else connectPort('source', source.dataset.source, source.dataset.branch || '');
+        } catch (error) { notice(error.message, true); return; }
+        const connection = connecting;
+        connection.point = point(event); renderCanvas();
+        scroll.setPointerCapture(event.pointerId);
         const move = e => {
-            if (!connecting || connecting.edgeId !== edgeId) return;
+            if (connecting !== connection) return;
             moved ||= Math.abs(e.clientX - start.x) + Math.abs(e.clientY - start.y) > 4;
             if (!moved) return;
-            const rect = scroll.getBoundingClientRect();
-            connecting.point = { x: (e.clientX - rect.left + scroll.scrollLeft) / zoom, y: (e.clientY - rect.top + scroll.scrollTop) / zoom };
+            connecting.point = point(e);
+            pane.querySelectorAll('.wf-port.is-drop-target').forEach(port => port.classList.remove('is-drop-target'));
+            document.elementFromPoint(e.clientX, e.clientY)?.closest(endpoint === 'source' ? '[data-source]' : '[data-target]')?.classList.add('is-drop-target');
             lines();
         };
         const end = e => {
             scroll.removeEventListener('pointermove', move); scroll.removeEventListener('pointerup', end); scroll.removeEventListener('pointercancel', end);
             if (scroll.hasPointerCapture(event.pointerId)) scroll.releasePointerCapture(event.pointerId);
             try {
-                if (e.type === 'pointerup' && moved && connecting?.edgeId === edgeId) {
+                if (e.type === 'pointerup' && moved && connecting === connection) {
                     const element = document.elementFromPoint(e.clientX, e.clientY);
                     const port = element?.closest(endpoint === 'source' ? '[data-source]' : '[data-target]');
                     const node = graph.nodes.find(n => n.id === element?.closest('[data-node]')?.dataset.node);
                     if (port) connectPort(endpoint, endpoint === 'source' ? port.dataset.source : port.dataset.target, port.dataset.branch || '');
                     else if (node && (endpoint === 'target' || node.type !== 'if')) connectPort(endpoint, node.id);
-                    else notice('未连接到有效端口，已保留原连线。', true);
+                    else notice(edgeId ? '未连接到有效端口，已保留原连线。' : '未连接到目标节点，已取消本次连线。');
                 }
             } catch (error) { notice(error.message, true); }
             finally {
                 connecting = null; renderCanvas(); inspector();
-                pane.querySelector(`[data-edge="${CSS.escape(edgeId)}"]`)?.focus({ preventScroll: true });
+                const focusTarget = selectedEdge ? pane.querySelector(`[data-edge="${CSS.escape(selectedEdge)}"]`) : scroll;
+                focusTarget?.focus({ preventScroll: true });
             }
         };
         scroll.addEventListener('pointermove', move); scroll.addEventListener('pointerup', end); scroll.addEventListener('pointercancel', end);

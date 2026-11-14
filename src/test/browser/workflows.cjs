@@ -108,9 +108,27 @@ const server = http.createServer(async (req, res) => {
             await page.mouse.click(point.x, point.y);
             assert.equal(await page.locator('[data-edge].is-selected').getAttribute('data-edge'), id);
         };
-        const connectPorts = async (source, target) => {
-            await page.locator(`[data-source="${source}"]`).click();
-            await page.locator(`[data-target="${target}"]`).click();
+        const connectPorts = async (source, target, branch = '', halfScale = false) => {
+            await page.getByRole('button',{name:'适应视图',exact:true}).click();
+            if (halfScale) {
+                await page.getByRole('button',{name:'重置画布缩放',exact:true}).click();
+                for (let i=0;i<5;i++) await page.getByRole('button',{name:'缩小画布',exact:true}).click();
+                assert.equal(await page.locator('[data-zoom]').textContent(),'50%');
+            }
+            const from = await page.locator(`[data-source="${source}"][data-branch="${branch}"]`).boundingBox();
+            const to = await page.locator(`[data-target="${target}"]`).boundingBox();
+            const count = await page.locator('[data-edge]').count();
+            await page.mouse.move(from.x+from.width/2,from.y+from.height/2); await page.mouse.down();
+            await page.mouse.move(to.x+to.width/2,to.y+to.height/2,{steps:10});
+            assert.equal(await page.locator('.wf-edge-preview').count(),1,'按住拖动时没有预览线');
+            assert.equal(await page.locator('[data-edge]').count(),count,'松开前就创建了连线');
+            assert.equal(await page.locator('.wf-port.is-drop-target').getAttribute('data-target'),target);
+            const tip=await page.locator('.wf-edge-preview').evaluate(path=>{
+                const p=path.getPointAtLength(path.getTotalLength()).matrixTransform(path.getScreenCTM());return {x:p.x,y:p.y};
+            });
+            assert.ok(Math.abs(tip.x-to.x-to.width/2)<2 && Math.abs(tip.y-to.y-to.height/2)<2,'缩放后预览线没有跟随鼠标');
+            await page.mouse.up();
+            assert.equal(await page.locator('.wf-edge-preview').count(),0,'松开后残留预览线');
         };
         const dragEndpoint = async (endpoint, port) => {
             const handle = await page.locator(`[data-reconnect="${endpoint}"]`).boundingBox();
@@ -122,6 +140,24 @@ const server = http.createServer(async (req, res) => {
         assert.equal(await page.locator('.wf-edge-handle').count(),2);
         await page.keyboard.press('Delete'); await saveGraph();
         assert.ok(!workflow.definition.edges.some(e=>e.id===originalEdge.id),'Delete 未删除选中连线');
+        // A click without holding and dragging must not leave a pending mouse connection.
+        await page.locator(`[data-source="${scriptId}"]`).click();
+        await page.locator(`[data-target="${condition.id}"]`).click(); await saveGraph();
+        assert.ok(!workflow.definition.edges.some(e=>e.source===scriptId && e.target===condition.id));
+        const beforeCancel = workflow.definition.edges.length;
+        await page.getByRole('button',{name:'适应视图',exact:true}).click();
+        const sourcePort=await page.locator('[data-source="start"]').boundingBox();
+        const board=await page.locator('.wf-canvas-scroll').boundingBox();
+        for (const cancel of ['blank','escape']) {
+            await page.mouse.move(sourcePort.x+sourcePort.width/2,sourcePort.y+sourcePort.height/2); await page.mouse.down();
+            await page.mouse.move(board.x+board.width/2,board.y+280,{steps:8});
+            assert.equal(await page.locator('.wf-edge-preview').count(),1);
+            if (cancel==='escape') await page.keyboard.press('Escape');
+            await page.mouse.up(); await saveGraph();
+            assert.equal(workflow.definition.edges.length,beforeCancel,'取消拖动时创建了连线');
+            assert.equal(await page.locator('.wf-edge-preview').count(),0);
+            assert.equal(await page.locator('.wf-port.is-drop-target').count(),0);
+        }
         await connectPorts('start', condition.id); await saveGraph();
         assert.equal(workflow.definition.edges.filter(e=>e.source==='start').length,2,'新增连接覆盖了原有出口');
         const editedId = workflow.definition.edges.find(e=>e.source==='start' && e.target===condition.id).id;
@@ -160,6 +196,18 @@ const server = http.createServer(async (req, res) => {
         await page.getByRole('button',{name:'删除连线',exact:true}).click(); await saveGraph();
         assert.ok(!workflow.definition.edges.some(e=>e.id===editedId));
         await connectPorts(scriptId,condition.id); await saveGraph();
+        for (const branch of ['true','false']) {
+            const previous=workflow.definition.edges.find(e=>e.source===condition.id && e.branch===branch);
+            await clickEdge(previous.id); await page.keyboard.press('Delete'); await saveGraph();
+            await connectPorts(condition.id,'end',branch,true); await saveGraph();
+            assert.equal(workflow.definition.edges.filter(e=>e.source===condition.id && e.branch===branch && e.target==='end').length,1);
+        }
+        // Keyboard users can still choose an output, then activate a destination.
+        await page.locator('[data-source="start"]').focus(); await page.keyboard.press('Enter');
+        await page.locator('[data-target="end"]').click(); await saveGraph();
+        const keyboardEdge=workflow.definition.edges.find(e=>e.source==='start' && e.target==='end');
+        assert.ok(keyboardEdge,'键盘方式无法创建连线');
+        await clickEdge(keyboardEdge.id); await page.keyboard.press('Delete'); await saveGraph();
         await page.locator('[data-node="end"]').click();
         assert.equal(await page.locator('[data-action="delete-node"]').count(), 0);
         assert.equal(await page.locator('[data-connect]').count(), 0);
