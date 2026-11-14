@@ -5,6 +5,24 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ScriptProcessRunnerTest {
+    @Test void mountsOnlyNamedPublicResourcesFromDistributionJdkSymlinks() throws Exception {
+        var root = java.nio.file.Files.createTempDirectory("jdk-resource-test-");
+        try {
+            var jdk = java.nio.file.Files.createDirectories(root.resolve("jdk/lib" )).getParent();
+            var external = java.nio.file.Files.createDirectories(root.resolve("external/security" )).getParent();
+            var timezone = java.nio.file.Files.writeString(root.resolve("tzdb.dat"), "timezone-data");
+            var policy = java.nio.file.Files.writeString(external.resolve("security/java.security"), "public-policy");
+            var privateFile = java.nio.file.Files.writeString(external.resolve("private-app.env"), "must-not-be-mounted");
+            java.nio.file.Files.createSymbolicLink(jdk.resolve("conf"), external);
+            java.nio.file.Files.createSymbolicLink(jdk.resolve("lib/tzdb.dat"), timezone);
+            assertEquals(Set.of(timezone.toRealPath(), policy.toRealPath()), ScriptProcessRunner.externalJdkResources(jdk.toRealPath()));
+            assertFalse(ScriptProcessRunner.externalJdkResources(jdk).contains(privateFile));
+        } finally {
+            try (var files = java.nio.file.Files.walk(root)) {
+                for (var path : files.sorted(Comparator.reverseOrder()).toList()) java.nio.file.Files.deleteIfExists(path);
+            }
+        }
+    }
     private final Map<String, Object> input = Map.of("items", List.of(Map.of("json", Map.of("name", "leon中文", "amount", 120))));
     @Test void runsBothLanguagesWithTheSameJsonContractAndBoundedLogs() throws Exception {
         try (var runner = new Runner()) {

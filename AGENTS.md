@@ -13,3 +13,6 @@
 - 公网插件和 Alfred 接口使用访问令牌，管理页面使用令牌登录并限制写入来源。不要绕过认证或将未认证的管理接口公开；修改访问控制或公开范围时，明确说明实际效果。部署前后不得将凭据、令牌、令牌摘要或敏感数据写进日志、项目文件或版本库。
 - 浏览器管理页面通过站内登录页及 `Secure`、`HttpOnly` Cookie 登录，默认记住 30 天；服务端会话保存在 H2 中，退出时撤销。HTTPS 代理用内部 `/auth/check` 保护页面和静态资源，不要恢复会在浏览器关闭后丢失的 Basic 登录弹窗，也不要把原始令牌存入网页 localStorage 或 sessionStorage。
 - 正式有道翻译通过 `/etc/leon-lite-workflow-youdao.env`（root 所有、0600）提供 `YOUDAO_APP_KEY`、`YOUDAO_APP_SECRET`，由 systemd 的 `97-youdao.conf` 加载。升级保留该私有配置；检查只输出变量是否已设置，不输出配置内容、完整进程环境或密钥。验证可通过现有 Alfred 客户端请求 `fy hello`、`fy 你好`。
+
+- 工作流脚本由 `/usr/bin/setpriv` 清除继承能力后，在 `/usr/bin/bwrap` 隔离进程内运行，保留非特权用户命名空间、现有服务限制和清空子进程环境的策略。凭据主密钥由 `/etc/leon-lite-workflow-workflows.env`（root 所有、0600）提供 `LEON_WORKFLOW_CREDENTIAL_KEY`，systemd 的 `96-workflows.conf` 加载；升级保留原值，不重新生成或直接轮换已有密钥，不输出密钥或摘要。安装使用 `scripts/install_workflow_runtime.py`，该脚本只配置运行环境及受保护的代理路由，服务重启由部署脚本统一完成。
+- `/workflows.html` 与 `/workspace/` 资源使用管理页 Cookie 登录保护，`/api/workflows/**` 由服务端校验管理会话及写入来源，插件 Bearer 令牌不能直接管理或运行工作流。部署脚本在线执行 HTTP → JavaScript → Groovy 验收（包括加密凭据读取），成功后仅清理本次创建的测试流程、测试凭据及临时登录会话；不得删除既有流程或凭据。

@@ -220,11 +220,13 @@ HTTPS 代理通过内部 `/auth/check` 校验管理页面和静态资源的会�
 
 两种脚本共用 JSON 协议：输入、返回值都为 `{"items":[{"json":{...}}]}`。JavaScript 入口为 `function main(input, ctx)`，Groovy 为 `def main(Map input, Map ctx)`；`ctx` 仅包含 `runId`、`nodeId` 和节点参数 `params`。切换语言分别保留源码。JavaScript 使用 GraalJS 25.0.2，Groovy 使用项目 Maven 管理的版本。脚本不是 Node.js 环境，不提供 npm、文件或网络能力；HTTP 调用使用专门的节点。HTTP 返回 `items[0].json` 包含 `status`、`headers` 和 `body`。配置字段支持 `{{ input.items[0].json.name }}`、`{{ ctx.params.name }}` 形式的字段引用，不执行任意表达式。
 
-脚本通过独立 Java 21 子进程运行，只传递 JSON 数据，并清空主应用环境变量。macOS 使用系统 `sandbox-exec`，Linux 必须安装 `/usr/bin/bwrap`（bubblewrap）且允许非特权用户命名空间。沙箱只提供只读语言运行时、JDK 和必要系统库，禁止宿主业务文件读取及网络访问；JavaScript 额外关闭 Java 主机访问。隔离环境缺失或不可用时拒绝执行脚本，不回退到主进程执行。脚本 JVM 堆上限 128 MB，元空间 96 MB，直接内存 16 MB；单节点超时 100–30000 ms（默认 10 秒，包含编译启动），工作流最长约 5 分钟，最多同时执行 2 个任务、排队 8 个。超时和取消会终止子进程及其后代。操作系统沙箱隔离访问权限，JVM 内存限制不等于整个进程或进程树的硬内存限额；部署到共享或不可信多租户环境前还应通过 cgroup / systemd 施加进程树资源配额。
+脚本通过独立 Java 21 子进程运行，只传递 JSON 数据，并清空主应用环境变量。macOS 使用系统 `sandbox-exec`，Linux 必须安装 `/usr/bin/bwrap`（bubblewrap）和 `/usr/bin/setpriv`（util-linux），且允许非特权用户命名空间。脚本启动链先清除继承的进程能力，兼容主服务绑定低端口的权限；发行版 JDK 链接到目录外的时区及安全策略资源按文件只读挂载。沙箱只提供只读语言运行时、JDK 和必要系统库，禁止宿主业务文件读取及网络访问；JavaScript 额外关闭 Java 主机访问。隔离环境缺失或不可用时拒绝执行脚本，不回退到主进程执行。脚本 JVM 堆上限 128 MB，元空间 96 MB，直接内存 16 MB；单节点超时 100–30000 ms（默认 10 秒，包含编译启动），工作流最长约 5 分钟，最多同时执行 2 个任务、排队 8 个。超时和取消会终止子进程及其后代。操作系统沙箱隔离访问权限，JVM 内存限制不等于整个进程或进程树的硬内存限额；部署到共享或不可信多租户环境前还应通过 cgroup / systemd 施加进程树资源配额。
 
 HTTP 节点仅接受 HTTP/HTTPS；默认阻止回环、内网、链路本地、云元数据及其他保留地址。连接时使用校验过的 DNS 地址，防止二次解析绕过限制；不自动重试、不跟随重定向。确需调用内部系统时，由运维通过 `LEON_WORKFLOW_HTTP_ALLOWED_ORIGINS` 明确配置允许的来源，例如 `http://127.0.0.1:9000`；多个来源用逗号分隔，准确匹配协议、主机和端口，不在节点中开放绕过选项。输入、输出和 HTTP 响应最大 1 MB、最多 1000 个 item；日志最多 16 KB。
 
 「管理凭据」支持 Bearer、Basic 和自定义 Header。启用前在应用私有环境配置中设置 `LEON_WORKFLOW_CREDENTIAL_KEY`，值为独立生成的 32 字节随机密钥的 Base64 编码。不要把密钥写进仓库、日志或网页存储，升级保留该配置；更换密钥前需安排凭据重新加密，不能直接替换。密钥不设置时仍可使用无凭据 HTTP 节点，凭据保存及读取会拒绝。凭据在 H2 中使用 AES-256-GCM 加密，接口只返回名称、类型和 ID，发送凭据必须使用 HTTPS。运行记录会隐藏常见敏感字段及已知凭据的回显，脚本和配置中应只引用凭据 ID。SQL 备份包含加密后的凭据记录，恢复后还需原有服务器加密密钥。
+
+正式 ECS 的凭据主密钥保存在 `/etc/leon-lite-workflow-workflows.env`（root 所有、`0600`），由 `96-workflows.conf` 加载。`scripts/install_workflow_runtime.py` 会保留已有密钥、检查或安装 bubblewrap，并备份后补充受登录保护的 HTTPS 路由；它不单独重启应用。随后统一运行 `python3 scripts/deploy.py --description ...`，成功标记和备份清理前，会在线执行使用加密凭据的 HTTP → JavaScript → Groovy 流程，同时验证原有数据 ID 保留。验收只清理本次创建的测试流程、凭据与临时会话。
 
 新增接口统一位于 `/api/workflows/**`，正式环境只允许管理页 Cookie 会话访问；写入还必须通过现有的准确 Origin 和 `X-Requested-With` 校验。插件/Alfred 的 Bearer 令牌不能直接管理或运行工作流，原有接口认证规则不变。页面和 `/workspace/` 资源沿用 HTTPS 代理的登录保护。
 

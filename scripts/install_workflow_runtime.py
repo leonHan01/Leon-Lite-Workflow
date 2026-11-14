@@ -88,13 +88,18 @@ def configure_proxy():
 def main():
     if os.geteuid() != 0:
         raise RuntimeError('runtime configuration requires root')
+    packages = []
     if not pathlib.Path('/usr/bin/bwrap').is_file():
+        packages.append('bubblewrap')
+    if not pathlib.Path('/usr/bin/setpriv').is_file():
+        packages.append('util-linux')
+    if packages:
         manager = next((tool for tool in ['dnf', 'yum', 'apt-get'] if shutil.which(tool)), None)
         if manager is None:
             raise RuntimeError('no supported package manager for bubblewrap')
         if manager == 'apt-get':
             run([manager, 'update', '-qq'])
-        run([manager, '-y', 'install', 'bubblewrap'])
+        run([manager, '-y', 'install'] + packages)
     if int(pathlib.Path('/proc/sys/user/max_user_namespaces').read_text().strip()) <= 0:
         raise RuntimeError('unprivileged user namespaces must be enabled')
     clone = pathlib.Path('/proc/sys/kernel/unprivileged_userns_clone')

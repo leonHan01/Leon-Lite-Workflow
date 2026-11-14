@@ -27,7 +27,7 @@ public class ScriptProcessRunner {
 
     public String sandbox() {
         if (System.getProperty("os.name").startsWith("Mac") && Files.isExecutable(Path.of("/usr/bin/sandbox-exec"))) return "macOS Sandbox";
-        if (Files.isExecutable(Path.of("/usr/bin/bwrap"))) return "bubblewrap";
+        if (Files.isExecutable(Path.of("/usr/bin/bwrap")) && Files.isExecutable(Path.of("/usr/bin/setpriv"))) return "bubblewrap";
         return "unavailable";
     }
     public Result execute(String language, String source, Map<String, Object> input, Map<String, Object> ctx, int timeoutMs) throws Exception {
@@ -81,10 +81,16 @@ public class ScriptProcessRunner {
                     + " (literal \"/dev/random\") (literal \"/dev/urandom\") (literal \"/dev/null\") (literal \"/dev/dtracehelper\"))";
             command.addAll(List.of("/usr/bin/sandbox-exec", "-p", profile, jdk.resolve("bin/java").toString()));
         } else {
-            command.addAll(List.of("/usr/bin/bwrap", "--die-with-parent", "--new-session", "--unshare-all", "--cap-drop", "ALL",
+            // The HTTP service inherits CAP_NET_BIND_SERVICE for port 80. Bubblewrap refuses ambient capabilities;
+            // remove them only from the worker launch chain, leaving the parent service's privileges unchanged.
+            command.addAll(List.of("/usr/bin/setpriv", "--no-new-privs", "--inh-caps=-all", "--ambient-caps=-all",
+                    "/usr/bin/bwrap", "--die-with-parent", "--new-session", "--unshare-all", "--cap-drop", "ALL",
                     "--ro-bind", jdk.toString(), "/jdk", "--ro-bind", directory.toString(), "/runtime", "--proc", "/proc", "--dev", "/dev",
                     "--tmpfs", "/tmp", "--chdir", "/runtime"));
             for (String path : List.of("/lib", "/lib64", "/usr/lib", "/usr/lib64")) if (Files.exists(Path.of(path))) command.addAll(List.of("--ro-bind", path, path));
+            // Distribution JDKs (including Dragonwell/RHEL) link timezone/security resources outside java.home.
+            // Bind individual public JDK resources, never the surrounding /etc or /usr/share directories.
+            for (Path resource : externalJdkResources(jdk)) command.addAll(List.of("--ro-bind", resource.toString(), resource.toString()));
             command.add("/jdk/bin/java");
         }
         command.addAll(List.of("-Xmx128m", "-Xss512k", "-XX:MaxMetaspaceSize=96m", "-XX:MaxDirectMemorySize=16m", "-XX:ActiveProcessorCount=1",
@@ -93,6 +99,23 @@ public class ScriptProcessRunner {
         return command;
     }
     private String escaped(Path path) { return path.toString().replace("\\", "\\\\").replace("\"", "\\\""); }
+    static Set<Path> externalJdkResources(Path jdk) throws IOException {
+        List<String> names = new ArrayList<>(List.of("lib/tzdb.dat", "conf/security/java.security", "conf/security/java.policy",
+                "conf/net.properties", "conf/logging.properties", "lib/security/default.policy", "lib/security/blocked.certs",
+                "lib/security/cacerts", "lib/security/public_suffix_list.dat"));
+        for (String policy : List.of("limited", "unlimited"))
+            for (String name : List.of("default_local.policy", "default_US_export.policy", "exempt_local.policy"))
+                names.add("conf/security/policy/" + policy + "/" + name);
+        Set<Path> resources = new LinkedHashSet<>();
+        for (String name : names) {
+            Path file = jdk.resolve(name);
+            if (Files.isRegularFile(file)) {
+                Path real = file.toRealPath();
+                if (!real.startsWith(jdk)) resources.add(real);
+            }
+        }
+        return resources;
+    }
     private synchronized Path prepare() throws IOException {
         if (runtime != null) return runtime;
         Path dir = Files.createTempDirectory("leon-script-runtime-", PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------"))).toRealPath();
