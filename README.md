@@ -93,7 +93,8 @@ curl -X POST http://127.0.0.1:8080/api/diamond -H 'Content-Type: application/jso
 | --- | --- |
 | `/` | 总览 |
 | `/simple-kv.html` | 快捷项 |
-| `/workflows.html` | 可视化工作流编排、双语言脚本和运行记录 |
+| `/workflows.html` | 可视化工作流编排、定时配置、双语言脚本和运行记录 |
+| `/workflow-runs.html` | 全部工作流的运行实例、筛选分页和节点详情 |
 | `/json-record-search.html`、`/json-record.html` | JSON 记录与详情 |
 | `/monitor.html` | 服务器监控 |
 | `/music.html` | 声屿歌曲管理，支持多首上传、搜索、试听和删除 |
@@ -214,9 +215,15 @@ HTTPS 代理通过内部 `/auth/check` 校验管理页面和静态资源的会�
 
 ### 工作流编排（一期）
 
-在管理页侧栏打开「工作流编排」，新建流程后添加 HTTP 请求、JavaScript、Groovy 或 IF 节点。拖动节点标题调整位置；点击右侧出口和目标节点左侧入口连线，也可在节点配置的「连接出口」中选择下一个节点。IF 分别配置 true / false 出口。一期支持单触发器、无环流程和条件分支，最多 64 个节点；不支持循环、汇合、并行、Webhook 或定时触发。
+在管理页侧栏打开「工作流编排」，新建流程后添加 HTTP 请求、JavaScript、Groovy 或 IF 节点。拖动节点标题调整位置；点击右侧出口和目标节点左侧入口连线，也可在节点配置的「连接出口」中选择下一个节点。IF 分别配置 true / false 出口。一期支持单触发器、无环流程和条件分支，最多 64 个节点；不支持循环、汇合、并行或 Webhook；定时执行在工作流配置中启用。
 
 「保存草稿」允许保存尚未连接完整的流程；「发布版本」先保存再校验连线、节点和配置，生成不可变版本。「运行 vN」始终执行该发布版本，未发布的编辑不参与运行。下方可以填写手动输入、调试当前草稿节点、查看最近 50 次运行的节点输入、输出、日志、错误和耗时，也可以停止运行。「载入双语言示例」提供一条可直接发布执行的示例：120 → JavaScript 加 5 → Groovy 翻倍 → IF 判断 → 250。
+
+**定时执行。** 在工作流右上方点击「定时执行」，选择每分钟、每 5 / 15 分钟、每小时、每天 09:00、工作日 09:00，或填写六段 Cron（秒、分、时、日、月、周）。默认时区为 `Asia/Shanghai`，可使用其他 IANA 时区，预览会显示该时区下接下来 5 次执行时间。先发布工作流才能启用，启用后每次执行当时最新的已发布版本；草稿编辑不参与定时运行。定时输入单独保存，首次配置默认复制当前手动运行输入；凭据继续使用 HTTP 节点的凭据引用。
+
+定时配置保存在 H2，服务重启后保留。同一工作流已有排队或运行实例时，跳过本次定时执行点；暂停只停止后续触发，已有实例继续运行。服务停机错过的执行点不补跑，恢复后从下一个时间点开始。轮询使用独立线程，每秒检查一次；创建实例与推进下次执行时间在一个数据库事务内完成，防止并发轮询重复创建实例。队列已满时实例标记失败，不立即重试。`LEON_WORKFLOW_SCHEDULING_ENABLED=false` 可暂停整个工作流调度循环，默认启用；它不会启用原来独立开关控制的待办统计或日结任务。
+
+**运行实例。** 从侧栏打开「运行实例」，按工作流、状态、手动 / 定时触发、实例 ID 或名称筛选，支持每页 20 / 50 / 100 条。页面展示版本、开始时间、耗时、计划执行时间和统计汇总，默认每 4 秒刷新；查看详情可以展开节点输入、输出、日志和错误，并停止排队或运行中的实例。已删除工作流的历史实例继续保留，列表接口不返回输入输出或脚本源码，详情沿用原有脱敏规则。
 
 两种脚本共用 JSON 协议：输入、返回值都为 `{"items":[{"json":{...}}]}`。JavaScript 入口为 `function main(input, ctx)`，Groovy 为 `def main(Map input, Map ctx)`；`ctx` 仅包含 `runId`、`nodeId` 和节点参数 `params`。切换语言分别保留源码。JavaScript 使用 GraalJS 25.0.2，Groovy 使用项目 Maven 管理的版本。脚本不是 Node.js 环境，不提供 npm、文件或网络能力；HTTP 调用使用专门的节点。HTTP 返回 `items[0].json` 包含 `status`、`headers` 和 `body`。配置字段支持 `{{ input.items[0].json.name }}`、`{{ ctx.params.name }}` 形式的字段引用，不执行任意表达式。
 
@@ -226,11 +233,11 @@ HTTP 节点仅接受 HTTP/HTTPS；默认阻止回环、内网、链路本地、�
 
 「管理凭据」支持 Bearer、Basic 和自定义 Header。启用前在应用私有环境配置中设置 `LEON_WORKFLOW_CREDENTIAL_KEY`，值为独立生成的 32 字节随机密钥的 Base64 编码。不要把密钥写进仓库、日志或网页存储，升级保留该配置；更换密钥前需安排凭据重新加密，不能直接替换。密钥不设置时仍可使用无凭据 HTTP 节点，凭据保存及读取会拒绝。凭据在 H2 中使用 AES-256-GCM 加密，接口只返回名称、类型和 ID，发送凭据必须使用 HTTPS。运行记录会隐藏常见敏感字段及已知凭据的回显，脚本和配置中应只引用凭据 ID。SQL 备份包含加密后的凭据记录，恢复后还需原有服务器加密密钥。
 
-正式 ECS 的凭据主密钥保存在 `/etc/leon-lite-workflow-workflows.env`（root 所有、`0600`），由 `96-workflows.conf` 加载。`scripts/install_workflow_runtime.py` 会保留已有密钥、检查或安装 bubblewrap，并备份后补充受登录保护的 HTTPS 路由；它不单独重启应用。随后统一运行 `python3 scripts/deploy.py --description ...`，成功标记和备份清理前，会在线执行使用加密凭据的 HTTP → JavaScript → Groovy 流程，同时验证原有数据 ID 保留。验收只清理本次创建的测试流程、凭据与临时会话。
+正式 ECS 的凭据主密钥保存在 `/etc/leon-lite-workflow-workflows.env`（root 所有、`0600`），由 `96-workflows.conf` 加载。`scripts/install_workflow_runtime.py` 会保留已有密钥、检查或安装 bubblewrap，并备份后补充受登录保护的 HTTPS 路由；它不单独重启应用。随后统一运行 `python3 scripts/deploy.py --description ...`，成功标记和备份清理前，会在线执行使用加密凭据的 HTTP → JavaScript → Groovy 流程，还会验证真实定时触发和独立实例列表，同时验证原有数据 ID 保留。验收只清理本次创建的测试流程、凭据与临时会话。
 
 新增接口统一位于 `/api/workflows/**`，正式环境只允许管理页 Cookie 会话访问；写入还必须通过现有的准确 Origin 和 `X-Requested-With` 校验。插件/Alfred 的 Bearer 令牌不能直接管理或运行工作流，原有接口认证规则不变。页面和 `/workspace/` 资源沿用 HTTPS 代理的登录保护。
 
-数据保存在原有 H2 内新增的 `automation_workflow`、`automation_version`、`automation_run`、`automation_node_run`、`automation_credential` 表，不替换现有数据。节点开始和结束分别持久化状态；正常关闭服务会取消任务，异常重启会将遗留未完成任务标为失败，均不自动重放。HTTP 已发出、结果尚未保存时不能断言对端是否成功，取消也不能撤销已发送的请求；请确认对端结果或使用业务幂等键后再手动重跑。删除工作流使用逻辑删除并保留历史，执行中的流程须先停止。
+数据保存在原有 H2 内新增的 `automation_workflow`、`automation_version`、`automation_run`、`automation_node_run`、`automation_credential`、`automation_schedule` 表，不替换现有数据。节点开始和结束分别持久化状态；正常关闭服务会取消任务，异常重启会将遗留未完成任务标为失败，均不自动重放。历史实例新增触发方式和计划时间字段，旧实例默认标记为手动触发，已有 ID、版本、输入输出保留。HTTP 已发出、结果尚未保存时不能断言对端是否成功，取消也不能撤销已发送的请求；请确认对端结果或使用业务幂等键后再手动重跑。删除工作流使用逻辑删除并保留历史，执行中的流程须先停止。
 
 工作流后端测试为 `WorkflowIntegrationTest`、`ScriptProcessRunnerTest`；浏览器测试为 `src/test/browser/workflows.cjs`，沿用 `PLAYWRIGHT_MODULE_PATH` 和 `CHROME_PATH`，验证新增节点、双语言源码保留、拖动、发布执行、分支状态、凭据及手机布局，不启动游戏。
 

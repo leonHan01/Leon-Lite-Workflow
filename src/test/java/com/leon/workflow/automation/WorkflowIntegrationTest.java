@@ -24,6 +24,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 @SpringBootTest(classes = HelloServiceApplication.class, properties = {
         "spring.datasource.url=jdbc:h2:mem:automation;DB_CLOSE_DELAY=-1", "spring.jpa.hibernate.ddl-auto=create-drop",
+        "leon.workflows.scheduling-enabled=false",
         "leon.auth.required=true", "leon.auth.admin-origin=https://example.test",
         "leon.auth.token-sha256=1723a753ba41b0b19f3f758eb3226c453b086f5e279abe9e745e0e5534504e69",
         "leon.workflows.credential-key=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" })
@@ -49,6 +50,8 @@ class WorkflowIntegrationTest {
     @Autowired WebApplicationContext context;
     @Autowired WorkflowStore store;
     @Autowired WorkflowEngine engine;
+    @Autowired WorkflowSchedules schedules;
+    @Autowired WorkflowScheduler scheduler;
     @Autowired JdbcTemplate jdbc;
     MockMvc mvc;
     Cookie cookie;
@@ -133,6 +136,99 @@ class WorkflowIntegrationTest {
         String id = store.createRun(text(workflow.get("id")), 1, graph, empty());
         new WorkflowStore(jdbc).initialize();
         assertEquals("FAILED", store.run(id).get("status"));
+    }
+    @Test void scheduledRunsUsePublishedVersionsAndCarryTheirPlannedTimeWithoutDuplicateClaims() throws Exception {
+        var graph = new WorkflowGraph(List.of(node("start", "manual", Map.of()), script("js", "javascript", "function main(i,c){return {items:[{json:{value:i.items[0].json.value+1}}]};}"),
+                script("groovy", "groovy", "def main(Map i,Map c){return [items:[[json:[value:i.items[0].json.value*2]]]]}")), List.of(edge("start", "js", ""), edge("js", "groovy", "")));
+        var workflow = createPublished(graph); String id = text(workflow.get("id"));
+        var config = schedules.save(id, schedule(true, 0), java.time.Instant.now());
+        java.time.Instant due = java.time.Instant.parse(text(config.get("nextRunAt")));
+        scheduler.tick(due.plusMillis(100)); scheduler.tick(due.plusMillis(200));
+        assertEquals(1, store.runs(id).size());
+        var run = await(text(store.runs(id).getFirst().get("id")));
+        assertEquals("SUCCEEDED", run.get("status"), text(run.get("error"))); assertEquals("SCHEDULED", run.get("triggerType"));
+        assertEquals(due.toString(), run.get("scheduledAt")); assertEquals(1, run.get("version"));
+        assertEquals(42, object(object(((List<?>)object(run.get("output")).get("items")).getFirst()).get("json")).get("value"));
+        store.save(id, "定时最新发布", WorkflowGraph.initial(), 2); store.publish(id, 3, write(engine.runtimes()));
+        java.time.Instant following = java.time.Instant.parse(text(schedules.get(id).get("nextRunAt")));
+        scheduler.tick(following);
+        var newest = await(text(store.runs(id).getFirst().get("id")));
+        assertEquals(2, newest.get("version")); assertEquals("SUCCEEDED", newest.get("status"));
+        schedules.save(id, schedule(false, 1), following.plusSeconds(1));
+    }
+    @Test void schedulesValidatePublicationCronTimezoneAndOptimisticRevisionAndSupportPausing() throws Exception {
+        String id = text(store.create("定时配置校验").get("id"));
+        assertThrows(IllegalArgumentException.class, () -> schedules.save(id, schedule(true, 0), java.time.Instant.now()));
+        var draft = schedule(false, 0);
+        request(put("/api/workflows/" + id + "/schedule").content(write(draft)));
+        assertFalse((Boolean)schedules.get(id).get("enabled")); assertNull(schedules.get(id).get("nextRunAt"));
+        assertThrows(org.springframework.web.server.ResponseStatusException.class, () -> schedules.save(id, draft, java.time.Instant.now()));
+        for (var invalid : List.of(Map.of("cron", "invalid", "timeZone", "Asia/Shanghai"), Map.of("cron", "0 0 9 * * *", "timeZone", "Unknown/Zone")))
+            mvc.perform(post("/api/workflows/schedule-preview").cookie(cookie).header("Origin", "https://example.test").header("X-Requested-With", "XMLHttpRequest").contentType(MediaType.APPLICATION_JSON).content(write(invalid))).andExpect(status().isBadRequest());
+        mvc.perform(post("/api/workflows/schedule-preview").cookie(cookie).header("Origin", "https://example.test").header("X-Requested-With", "XMLHttpRequest").contentType(MediaType.APPLICATION_JSON).content("{\"cron\":\"0 0 9 * * *\",\"timeZone\":\"Asia/Shanghai\"}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.nextRuns.length()").value(5));
+        mvc.perform(put("/api/workflows/" + id + "/schedule").cookie(cookie).header("Origin", "https://evil.test").contentType(MediaType.APPLICATION_JSON).content(write(draft))).andExpect(status().isForbidden());
+    }
+    @Test void schedulingSkipsOverlapsAndDisablingOrDeletingStopsFutureTriggers() throws Exception {
+        var workflow = createPublished(WorkflowGraph.initial()); String id = text(workflow.get("id"));
+        var config = schedules.save(id, schedule(true, 0), java.time.Instant.now());
+        String manual = store.createRun(id, 1, WorkflowGraph.initial(), empty());
+        java.time.Instant due = java.time.Instant.parse(text(config.get("nextRunAt")));
+        scheduler.tick(due);
+        assertEquals(1, store.runs(id).size()); assertEquals("SKIPPED", schedules.get(id).get("lastOutcome"));
+        assertTrue(java.time.Instant.parse(text(schedules.get(id).get("nextRunAt"))).isAfter(due));
+        schedules.save(id, schedule(false, 1), due); scheduler.tick(due.plusSeconds(120));
+        assertEquals(1, store.runs(id).size()); assertEquals("QUEUED", store.run(manual).get("status"));
+        store.finish(manual, "CANCELLED", null, null);
+        schedules.save(id, schedule(true, 2), due); store.delete(id); scheduler.tick(due.plusSeconds(120));
+        assertFalse(jdbc.queryForObject("SELECT enabled FROM automation_schedule WHERE workflow_id=?", Boolean.class, id));
+        var history = store.allRuns(id, null, null, null, 1, 20);
+        assertEquals(1L, history.get("total")); assertTrue((Boolean)object(((List<?>)history.get("items")).getFirst()).get("workflowDeleted"));
+    }
+    @Test void racingSchedulePollersCreateExactlyOneQueuedInstanceAndRestartSkipsMissedTimes() throws Exception {
+        var workflow = createPublished(WorkflowGraph.initial()); String id = text(workflow.get("id"));
+        var config = schedules.save(id, schedule(true, 0), java.time.Instant.now());
+        java.time.Instant time = java.time.Instant.parse(text(config.get("nextRunAt")));
+        var due = new WorkflowSchedules.Due(id, time.toEpochMilli());
+        try (var pool = java.util.concurrent.Executors.newFixedThreadPool(2)) {
+            var start = new java.util.concurrent.CountDownLatch(1);
+            var first = pool.submit(() -> { start.await(); return schedules.claim(due, time); });
+            var second = pool.submit(() -> { start.await(); return schedules.claim(due, time); }); start.countDown();
+            assertEquals(1, (first.get() == null ? 0 : 1) + (second.get() == null ? 0 : 1));
+        }
+        var run = store.runs(id).getFirst(); store.finish(text(run.get("id")), "CANCELLED", null, null);
+        var saved = schedules.get(id); new WorkflowStore(jdbc).initialize();
+        assertEquals(saved.get("nextRunAt"), schedules.get(id).get("nextRunAt"));
+        var missed = new WorkflowSchedules.Due(id, java.time.Instant.parse(text(saved.get("nextRunAt"))).toEpochMilli());
+        java.time.Instant restarted = time.plusSeconds(3600); schedules.skipMissed(missed, restarted);
+        assertEquals("MISSED", schedules.get(id).get("lastOutcome"));
+        assertTrue(java.time.Instant.parse(text(schedules.get(id).get("nextRunAt"))).isAfter(restarted)); assertEquals(1, store.runs(id).size());
+        schedules.save(id, schedule(false, 1), restarted);
+    }
+    @Test void globalInstancesArePaginatedFilteredAndExcludePayloadsUntilDetailIsRequested() throws Exception {
+        var workflow = createPublished(WorkflowGraph.initial()); String id = text(workflow.get("id"));
+        for (int i = 0; i < 25; i++) {
+            String run = store.createRun(id, 1, WorkflowGraph.initial(), empty(), i % 2 == 0 ? "SCHEDULED" : "MANUAL", i % 2 == 0 ? System.currentTimeMillis() : null);
+            store.finish(run, i % 3 == 0 ? "FAILED" : "SUCCEEDED", empty(), i % 3 == 0 ? "测试失败" : null);
+        }
+        var first = store.allRuns(id, null, null, null, 1, 20);
+        var second = store.allRuns(id, null, null, null, 2, 20);
+        assertEquals(25L, first.get("total")); assertEquals(20, ((List<?>)first.get("items")).size()); assertEquals(5, ((List<?>)second.get("items")).size());
+        Set<Object> ids = new HashSet<>(); for (Object row : (List<?>)first.get("items")) assertTrue(ids.add(object(row).get("id")));
+        for (Object row : (List<?>)second.get("items")) assertTrue(ids.add(object(row).get("id")));
+        assertEquals(13L, store.allRuns(id, null, "SCHEDULED", null, 1, 20).get("total"));
+        assertEquals(9L, store.allRuns(id, "FAILED", null, null, 1, 20).get("total"));
+        assertEquals(0L, store.allRuns(id, null, null, "%_!", 1, 20).get("total"));
+        mvc.perform(get("/api/workflows/runs").param("workflowId", id).cookie(cookie)).andExpect(status().isOk()).andExpect(jsonPath("$.total").value(25))
+                .andExpect(jsonPath("$.items[0].workflowName").exists()).andExpect(jsonPath("$.items[0].triggerType").exists()).andExpect(jsonPath("$.items[0].input").doesNotExist()).andExpect(jsonPath("$.items[0].definition").doesNotExist());
+        mvc.perform(get("/api/workflows/runs")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/api/workflows/runs").cookie(cookie).param("status", "invalid")).andExpect(status().isBadRequest());
+        mvc.perform(get("/api/workflows/runs").cookie(cookie).param("pageSize", "101")).andExpect(status().isBadRequest());
+        mvc.perform(get("/workflow-runs.html").cookie(cookie)).andExpect(status().isOk());
+    }
+    private static Map<String, Object> schedule(boolean enabled, int revision) {
+        return Map.of("enabled", enabled, "cron", "*/5 * * * * *", "timeZone", "Asia/Shanghai", "revision", revision,
+                "input", Map.of("items", List.of(Map.of("json", Map.of("value", 20)))));
     }
     private Map<String, Object> createPublished(WorkflowGraph graph) {
         var workflow = store.create("集成测试"); String id = text(workflow.get("id"));

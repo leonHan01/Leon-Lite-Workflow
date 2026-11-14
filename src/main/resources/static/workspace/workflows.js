@@ -1,3 +1,4 @@
+import { renderRunDetails } from './workflow-run-details.js';
 const templates = {
     javascript: `function main(input, ctx) {\n  return {\n    items: input.items.map(item => ({\n      json: { ...item.json, name: String(item.json.name ?? '').toUpperCase() }\n    }))\n  };\n}`,
     groovy: `def main(Map input, Map ctx) {\n    return [items: input.items.collect { item ->\n        [json: item.json + [name: (item.json.name ?: '').toUpperCase()]]\n    }]\n}`,
@@ -16,9 +17,10 @@ export function mount(pane, workspace) {
     if (!document.getElementById('workflow-css')) {
         const link = document.createElement('link'); link.id = 'workflow-css'; link.rel = 'stylesheet'; link.href = '/workspace/workflows.css'; document.head.append(link);
     }
+    if (!document.getElementById('workflow-runs-css')) { const link = document.createElement('link'); link.id = 'workflow-runs-css'; link.rel = 'stylesheet'; link.href = '/workspace/workflow-runs.css'; document.head.append(link); }
     const $ = selector => pane.querySelector(selector);
     let workflows = [], workflow = null, graph = null, selected = null, connecting = null;
-    let dirty = false, busy = false, active = false, initialized = false, timer = null, currentRun = null, capabilities = {}, credentials = [];
+    let dirty = false, busy = false, active = false, initialized = false, timer = null, currentRun = null, capabilities = {}, credentials = [], schedule = null;
     const notice = (message, error = false) => {
         $('[data-notice]').textContent = message; $('[data-notice]').classList.toggle('is-error', error);
         const dialog = pane.querySelector('dialog[open]');
@@ -61,7 +63,7 @@ export function mount(pane, workspace) {
         $('[data-run-detail]').innerHTML = '<div class="wf-empty">运行一次工作流，看看数据如何流转。</div>';
         picker(); renderCanvas(); inspector(); controls();
         workspace.replace('/workflows.html?id=' + encodeURIComponent(id));
-        await refreshRuns(); notice('草稿已载入。保存、发布后即可运行。');
+        await refreshRuns(); await refreshSchedule(); notice('草稿已载入。保存、发布后即可运行。');
     }
     function commitInspector() {
         const node = graph?.nodes.find(n => n.id === selected);
@@ -224,8 +226,7 @@ export function mount(pane, workspace) {
     function showRun(run) {
         currentRun = run; renderCanvas();
         const open = new Set([...pane.querySelectorAll('[data-step][open]')].map(d => d.dataset.step));
-        const elapsed = run.startedAt ? Math.max(0, new Date(run.finishedAt || Date.now()) - new Date(run.startedAt)) : 0;
-        $('[data-run-detail]').innerHTML = `<div class="wf-run-summary">${badge(run.status)}<span>发布版本 v${run.version}</span><span>${elapsed} ms</span><span>${esc(date(run.createdAt))}</span>${['RUNNING', 'QUEUED'].includes(run.status) ? '<button type="button" data-action="cancel-run">停止运行</button>' : ''}<button type="button" data-action="versions">版本记录</button></div>${run.error ? `<p class="wf-run-error">${esc(run.error)}</p>` : ''}${(run.nodes || []).map(step => `<details data-step="${esc(step.nodeId)}" ${open.has(step.nodeId) || step.status === 'FAILED' ? 'open' : ''}><summary>${badge(step.status)}<span>${esc(step.name)}</span><small>${step.startedAt && step.finishedAt ? new Date(step.finishedAt) - new Date(step.startedAt) + ' ms' : ''}</small></summary>${step.error ? `<p class="wf-run-error">${esc(step.error)}</p>` : ''}<h3>输入</h3><pre>${esc(pretty(step.input))}</pre><h3>输出</h3><pre>${esc(pretty(step.output))}</pre>${step.logs ? `<h3>日志</h3><pre>${esc(step.logs)}</pre>` : ''}</details>`).join('')}<details><summary>运行输出</summary><pre>${esc(pretty(run.output))}</pre></details>`;
+        $('[data-run-detail]').innerHTML = renderRunDetails(run, open, true);
     }
     async function viewRun(id) {
         const workflowId = workflow?.id, run = await api('/runs/' + id);
@@ -245,7 +246,38 @@ export function mount(pane, workspace) {
         $('[data-credential-form] button[type="submit"]').disabled = !capabilities.credentialsEnabled;
         $('[data-credential-hint]').textContent = capabilities.credentialsEnabled ? '凭据仅用于 HTTPS 请求。' : '凭据存储尚未启用，请联系管理员配置后使用。';
     }
+    async function refreshSchedule() {
+        const id = workflow?.id; if (!id) return;
+        const value = await api('/' + id + '/schedule'); if (workflow?.id !== id) return;
+        schedule = value;
+        const summary = $('[data-schedule-summary]');
+        summary.hidden = !value.enabled;
+        summary.textContent = value.enabled ? `◷ 定时已启用 · ${value.cron} · ${value.timeZone} · 下次 ${value.nextRunAt ? new Date(value.nextRunAt).toLocaleString('zh-CN', { timeZone: value.timeZone, hour12: false }) : '—'}${value.lastError ? ' · ' + value.lastError : ''}` : '';
+        $('[data-all-runs]').href = '/workflow-runs.html?workflowId=' + encodeURIComponent(id);
+    }
+    function scheduleBody() {
+        const form = $('[data-schedule-form]'); let input;
+        try { input = JSON.parse(form.elements.input.value); } catch { throw new Error('定时运行输入需要有效的 JSON'); }
+        return { enabled: form.elements.enabled.checked, cron: form.elements.cron.value, timeZone: form.elements.timeZone.value, input, revision: schedule?.revision ?? 0 };
+    }
+    async function previewSchedule() {
+        const form = $('[data-schedule-form]');
+        const value = await send('/schedule-preview', { cron: form.elements.cron.value, timeZone: form.elements.timeZone.value });
+        $('[data-schedule-preview]').innerHTML = '<strong>接下来 5 次执行（' + esc(value.timeZone) + '）</strong><ol>' + value.nextRuns.map(v => '<li>' + esc(new Date(v).toLocaleString('zh-CN', { timeZone: value.timeZone, hour12: false })) + '</li>').join('') + '</ol>';
+    }
     const actions = {
+        schedule: async () => {
+            await refreshSchedule();
+            const form = $('[data-schedule-form]');
+            form.elements.enabled.checked = schedule.enabled;
+            form.elements.cron.value = schedule.cron; form.elements.timeZone.value = schedule.timeZone;
+            form.elements.input.value = pretty(schedule.revision ? schedule.input : runInput());
+            form.elements.preset.value = [...form.elements.preset.options].some(o => o.value === schedule.cron) ? schedule.cron : 'custom';
+            $('[data-cron-label]').hidden = form.elements.preset.value !== 'custom';
+            $('[data-schedule-preview]').textContent = capabilities.scheduledExecution === false ? '定时调度服务当前已暂停，保存的配置会在服务启用后生效。' : schedule.lastError || '';
+            $('[data-schedule-dialog]').showModal();
+        },
+        'schedule-preview': previewSchedule,
         create: () => { $('[data-create-dialog]').showModal(); $('[data-create-form] input').focus(); },
         reload: async () => { if (!dirty || confirm('重新加载会丢弃未保存的草稿，是否继续？')) { await loadList(); if (workflow) await load(workflow.id); } },
         save,
@@ -287,6 +319,11 @@ export function mount(pane, workspace) {
     pane.addEventListener('scroll', event => { if (event.target.matches?.('[data-field="source"]')) highlight(); }, true);
     pane.addEventListener('change', event => {
         const target = event.target;
+        if (target.matches('[data-schedule-form] [name="preset"]')) {
+            const custom = target.value === 'custom'; $('[data-cron-label]').hidden = !custom;
+            if (!custom) $('[data-schedule-form]').elements.cron.value = target.value;
+            $('[data-schedule-preview]').textContent = '';
+        }
         if (target.matches('[data-workflows]')) { const id = target.value; if (dirty && !confirm('切换将丢弃未保存的草稿，是否继续？')) { picker(); return; } perform(() => load(id)); }
         if (target.matches('[data-credential-form] [name="kind"]')) $('[data-credential-user]').hidden = target.value === 'bearer';
         try {
@@ -312,6 +349,15 @@ export function mount(pane, workspace) {
         const end = () => { handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', end); handle.removeEventListener('pointercancel', end); if (moved) markDirty(); };
         handle.addEventListener('pointermove', move); handle.addEventListener('pointerup', end); handle.addEventListener('pointercancel', end);
     });
+    $('[data-schedule-form]').addEventListener('submit', event => {
+        event.preventDefault();
+        perform(async () => {
+            const id = workflow.id;
+            schedule = await send('/' + id + '/schedule', scheduleBody(), 'PUT');
+            $('[data-schedule-dialog]').close(); await refreshSchedule();
+            notice(schedule.enabled ? '定时执行已启用，将执行当前已发布版本。' : '定时执行已暂停，已有实例继续运行。');
+        });
+    });
     $('[data-create-form]').addEventListener('submit', event => {
         event.preventDefault(); const form = event.currentTarget;
         perform(async () => { if (dirty && !confirm('新建将离开当前未保存的草稿，是否继续？')) return; const result = await send('', { name: form.elements.name.value }); $('[data-create-dialog]').close(); form.reset(); await loadList(); await load(result.id); });
@@ -332,7 +378,13 @@ export function mount(pane, workspace) {
                     if (id) await load(id); else notice('从新建工作流开始，或创建后载入双语言示例。');
                     if (capabilities.sandbox === 'unavailable') notice('脚本运行环境尚未安装；HTTP 和条件节点可以正常使用。', true);
                 });
-            } else schedulePoll();
+            } else {
+                const requested = new URL(url).searchParams.get('id');
+                if (requested && requested !== workflow?.id) {
+                    if (dirty && !confirm('打开其他工作流会丢弃当前未保存的草稿，是否继续？')) { workspace.replace('/workflows.html?id=' + workflow.id); return; }
+                    await perform(() => load(requested));
+                } else { schedulePoll(); if (workflow) refreshSchedule().catch(e => notice(e.message, true)); }
+            }
         },
         deactivate() { active = false; clearTimeout(timer); },
     };

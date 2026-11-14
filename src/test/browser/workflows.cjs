@@ -5,6 +5,7 @@ const path = require('node:path');
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE_PATH || 'playwright');
 const root = path.resolve(__dirname, '../../main/resources/static');
 let workflow = null, versions = [], runs = [], credentials = [];
+let schedule = { enabled: false, cron: '0 0 9 * * *', timeZone: 'Asia/Shanghai', input: { items: [{ json: {} }] }, revision: 0, nextRunAt: null };
 const initial = () => ({ nodes: [{ id: 'start', name: '手动触发', type: 'manual', config: {}, position: { x: 80, y: 140 } }], edges: [] });
 const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
@@ -14,6 +15,17 @@ const server = http.createServer(async (req, res) => {
         let body = ''; for await (const part of req) body += part; const data = body ? JSON.parse(body) : {};
         if (req.method !== 'GET') assert.equal(req.headers['x-requested-with'], 'XMLHttpRequest');
         const route = url.pathname.slice('/api/workflows'.length);
+        if (route === '/workflow-1/schedule') {
+            if (req.method === 'PUT') schedule = { ...schedule, ...data, revision: schedule.revision + 1, nextRunAt: data.enabled ? new Date(Date.now() + 60000).toISOString() : null };
+            return reply(schedule);
+        }
+        if (route === '/schedule-preview') return reply({ timeZone: data.timeZone, nextRuns: Array.from({length:5}, (_,i) => new Date(Date.now() + (i+1)*60000).toISOString()) });
+        if (route === '/run-options') return reply(workflow ? [{id:workflow.id,name:workflow.name,deleted:false}] : []);
+        if (route === '/runs') {
+            const filtered = runs.filter(r => (!url.searchParams.get('workflowId') || r.workflowId === url.searchParams.get('workflowId')) && (!url.searchParams.get('status') || r.status === url.searchParams.get('status')) && (!url.searchParams.get('trigger') || r.triggerType === url.searchParams.get('trigger')) && (!url.searchParams.get('q') || r.id.includes(url.searchParams.get('q')) || r.workflowName.includes(url.searchParams.get('q'))));
+            const page = Number(url.searchParams.get('page') || 1), pageSize = Number(url.searchParams.get('pageSize') || 20);
+            return reply({ items: filtered.slice((page-1)*pageSize,page*pageSize), total:filtered.length, page,pageSize,summary:{total:filtered.length,active:filtered.filter(r=>['RUNNING','QUEUED'].includes(r.status)).length,succeeded:filtered.filter(r=>r.status==='SUCCEEDED').length,failed:filtered.filter(r=>r.status==='FAILED').length} });
+        }
         if (route === '/capabilities') return reply({ runtimes: { javascript: 'GraalJS', groovy: 'Groovy' }, sandbox: 'macOS Sandbox', credentialsEnabled: true });
         if (route === '/credentials') {
             if (req.method === 'POST') { const value = { id: 'credential-1', name: data.name, kind: data.kind }; credentials.push(value); return reply(value); }
@@ -33,7 +45,7 @@ const server = http.createServer(async (req, res) => {
         if (route === '/workflow-1/versions') return reply(versions);
         if (route === '/workflow-1/runs') {
             if (req.method === 'POST') {
-                const run = { id: 'run-1', version: workflow.publishedVersion, status: 'RUNNING', createdAt: new Date().toISOString(), startedAt: new Date().toISOString(), definition: versions[0].definition,
+                const run = { id: 'run-1', workflowId:workflow.id,workflowName:workflow.name,triggerType:'MANUAL',version: workflow.publishedVersion, status: 'RUNNING', createdAt: new Date().toISOString(), startedAt: new Date().toISOString(), definition: versions[0].definition,
                     input: data.input, output: null, nodes: versions[0].definition.nodes.map(n => ({ nodeId: n.id, name: n.name, status: 'PENDING', input: data.input, output: null })) };
                 runs.unshift(run);
                 setTimeout(() => { run.status = 'SUCCEEDED'; run.finishedAt = new Date().toISOString(); run.output = { items: [{ json: { name: 'leon', amount: 250 } }] }; run.nodes.forEach(n => { n.status = n.nodeId === 'rejected' ? 'SKIPPED' : 'SUCCEEDED'; n.output = run.output; n.logs = n.nodeId === 'calculate' ? 'Groovy：金额翻倍' : ''; }); }, 900);
@@ -41,7 +53,12 @@ const server = http.createServer(async (req, res) => {
             }
             return reply(runs);
         }
-        if (route === '/runs/run-1') return reply(runs[0]);
+        if (route.startsWith('/runs/')) {
+            const id=route.split('/')[2], run=runs.find(r=>r.id===id);
+            if(!run)return reply({message:'not found'},404);
+            if(route.endsWith('/cancel')) {run.status='CANCELLED';run.finishedAt=new Date().toISOString();}
+            return reply(run);
+        }
         return reply({ message: 'not found' }, 404);
     }
     const file = path.resolve(root, '.' + decodeURIComponent(url.pathname === '/' ? '/index.html' : url.pathname));
@@ -78,6 +95,21 @@ const server = http.createServer(async (req, res) => {
         assert.ok(workflow.definition.nodes[1].position.y > before.y, '拖动位置未保存');
         await page.getByRole('button', { name: '发布版本', exact: true }).click();
         await page.waitForFunction(() => document.querySelector('[data-action="run"]').textContent.includes('v1'));
+        await page.getByRole('button', {name:'定时执行',exact:true}).click();
+        await page.locator('[data-schedule-form] [name="enabled"]').check();
+        await page.locator('[data-schedule-form] [name="preset"]').selectOption('custom');
+        await page.getByRole('textbox',{name:'Cron 表达式',exact:true}).fill('0 30 8 * * *');
+        await page.getByRole('button',{name:'预览执行时间',exact:true}).click();
+        await page.waitForSelector('[data-schedule-preview] li');
+        assert.equal(await page.locator('[data-schedule-preview] li').count(),5);
+        await page.getByRole('button',{name:'保存定时配置',exact:true}).click();
+        await page.waitForSelector('[data-schedule-summary]:not([hidden])');
+        assert.equal(schedule.cron,'0 30 8 * * *');assert.equal(schedule.enabled,true);
+        await page.getByRole('button', {name:'定时执行',exact:true}).click();
+        await page.locator('[data-schedule-form] [name="enabled"]').uncheck();
+        await page.getByRole('button',{name:'保存定时配置',exact:true}).click();
+        await page.waitForSelector('[data-schedule-summary][hidden]',{state:'attached'});
+        assert.equal(schedule.enabled,false);
         await page.getByRole('button', { name: '▶ 运行 v1', exact: true }).click();
         await page.waitForFunction(() => document.querySelector('[data-run-detail] .wf-badge')?.textContent === '成功');
         assert.ok((await page.locator('[data-run-detail]').textContent()).includes('250'));
@@ -98,10 +130,35 @@ const server = http.createServer(async (req, res) => {
         await page.getByRole('button', { name: '保存草稿', exact: true }).click();
         await page.waitForFunction(() => document.querySelector('[data-version]').textContent.includes('草稿已保存'));
         await page.screenshot({ path: process.env.WORKFLOW_SCREENSHOT || '/private/tmp/leon-workflows-desktop.png', fullPage: true });
+        const originalRun = structuredClone(runs[0]);
+        runs.push(...Array.from({length:25},(_,i)=>({...originalRun,id:'history-'+i,status:i%2?'SUCCEEDED':'FAILED',triggerType:i%3?'MANUAL':'SCHEDULED'})));
+        runs.unshift({...originalRun,id:'scheduled-running',status:'RUNNING',triggerType:'SCHEDULED',scheduledAt:new Date().toISOString()});
+        await page.locator('[data-all-runs]').click();
+        await page.waitForSelector('[data-rows] [data-open]');
+        assert.equal(await page.locator('[data-rows] [data-open]').count(),20);
+        await page.locator('[data-next]').click();
+        await page.waitForFunction(()=>document.querySelector('[data-page-label]').textContent.includes('第 2'));
+        assert.equal(await page.locator('[data-rows] [data-open]').count(),7);
+        await page.getByRole('combobox',{name:'筛选状态',exact:true}).selectOption('RUNNING');
+        await page.getByRole('combobox',{name:'筛选触发方式',exact:true}).selectOption('SCHEDULED');
+        await page.getByRole('button',{name:'筛选',exact:true}).click();
+        await page.waitForFunction(()=>document.querySelector('[data-count="total"]').textContent==='1');
+        await page.getByRole('button',{name:'查看详情',exact:true}).click();
+        await page.waitForSelector('[data-details] [data-action="cancel-run"]');
+        assert.ok((await page.locator('[data-details]').textContent()).includes('定时触发'));
+        await page.getByRole('button',{name:'停止运行',exact:true}).click();
+        await page.waitForFunction(()=>document.querySelector('[data-details] .wf-badge')?.textContent==='已取消');
+        await page.locator('[data-reset]').click();
+        await page.waitForFunction(()=>document.querySelector('[data-count="total"]').textContent==='27');
+        await page.locator('[data-page-size]').selectOption('50');
+        await page.waitForFunction(()=>document.querySelectorAll('[data-rows] [data-open]').length===27);
+        await page.locator('[data-rows] [data-open]').first().click();
+        await page.waitForSelector('.wr-detail-title');
+        await page.screenshot({path:'/private/tmp/leon-workflow-runs-desktop.png',fullPage:true});
         await page.setViewportSize({ width: 390, height: 844 });
-        await page.screenshot({ path: '/private/tmp/leon-workflows-mobile.png', fullPage: true });
+        await page.screenshot({ path: '/private/tmp/leon-workflow-runs-mobile.png', fullPage: true });
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 2), false, '移动端出现页面横向溢出');
         assert.deepEqual(errors, []);
-        console.log('Workflow browser checks passed: create, mixed-language canvas, source retention, drag, save/publish/run, branches, preview, credentials, navigation, mobile.');
+        console.log('Workflow browser checks passed: canvas, languages, scheduling preview/save/pause, instances filtering/pagination/cancel, navigation and mobile.');
     } finally { await browser.close(); server.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; server.close(); });

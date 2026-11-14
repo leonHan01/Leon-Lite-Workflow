@@ -471,12 +471,18 @@ def workflow_checks(token):
         headers = {'Origin': BASE_URL, 'X-Requested-With': 'XMLHttpRequest', 'Content-Type': 'application/json'}
         data = json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(BASE_URL + path, headers=headers, data=data, method=method)
-        try:
-            with opener.open(req, timeout=40) as response:
-                payload = response.read()
-                return json.loads(payload) if payload else None
-        except urllib.error.HTTPError as error:
-            raise RuntimeError('workflow verification HTTP ' + str(error.code)) from None
+        attempts = 3 if req.get_method() in ('GET', 'HEAD') else 1
+        for attempt in range(attempts):
+            try:
+                with opener.open(req, timeout=40) as response:
+                    payload = response.read()
+                    return json.loads(payload) if payload else None
+            except urllib.error.HTTPError as error:
+                raise RuntimeError('workflow verification HTTP ' + str(error.code)) from None
+            except (urllib.error.URLError, OSError):
+                if attempt == attempts - 1:
+                    raise
+                time.sleep(.5 * (attempt + 1))
     try:
         for authorized, expected in [(False, 401), (True, 403)]:
             req = urllib.request.Request(BASE_URL + '/api/workflows', headers={'Authorization': 'Bearer ' + token} if authorized else {})
@@ -487,12 +493,26 @@ def workflow_checks(token):
                 code = error.code
             if code != expected:
                 raise RuntimeError('workflow management authentication interception failed')
+        print('WORKFLOW_VERIFY_STAGE=LOGIN', flush=True)
         request('/auth/login', {'token': token, 'remember': False})
         logged_in = True
-        for path in ['/workflows.html', '/workspace/views/workflows.html', '/workspace/workflows.js', '/workspace/workflows.css']:
-            with opener.open(BASE_URL + path, timeout=30) as response:
-                if response.getcode() != 200:
-                    raise RuntimeError('workflow management page unavailable')
+        print('WORKFLOW_VERIFY_STAGE=PAGES', flush=True)
+        for path in ['/workflows.html', '/workspace/views/workflows.html', '/workspace/workflows.js', '/workspace/workflows.css',
+                     '/workflow-runs.html', '/workspace/views/workflow-runs.html', '/workspace/workflow-runs.js', '/workspace/workflow-run-details.js']:
+            for attempt in range(3):
+                try:
+                    with opener.open(BASE_URL + path, timeout=30) as response:
+                        if response.getcode() != 200:
+                            raise RuntimeError('workflow management page unavailable')
+                        response.read()
+                    break
+                except urllib.error.HTTPError:
+                    raise
+                except (urllib.error.URLError, OSError):
+                    if attempt == 2:
+                        raise
+                    time.sleep(.5 * (attempt + 1))
+        print('WORKFLOW_VERIFY_STAGE=CONFIGURATION', flush=True)
         capabilities = request('/api/workflows/capabilities')
         if capabilities.get('sandbox') != 'bubblewrap' or not capabilities.get('credentialsEnabled'):
             raise RuntimeError('production workflow sandbox or credential storage unavailable')
@@ -519,6 +539,7 @@ def workflow_checks(token):
         workflow = request('/api/workflows/' + workflow_id, {'name': workflow['name'], 'revision': workflow['revision'],
             'definition': {'nodes': nodes, 'edges': edges}}, 'PUT')
         request('/api/workflows/' + workflow_id + '/publish', {'revision': workflow['revision']})
+        print('WORKFLOW_VERIFY_STAGE=MANUAL_RUN', flush=True)
         run = request('/api/workflows/' + workflow_id + '/runs', {'input': {'items': [{'json': {}}]}})
         run_id = run['id']
         deadline = time.monotonic() + 65
@@ -533,8 +554,46 @@ def workflow_checks(token):
         if len(run.get('nodes', [])) != 4 or any(step['status'] != 'SUCCEEDED' for step in run['nodes']):
             raise RuntimeError('production workflow node status mismatch')
         print('PUBLIC_WORKFLOW_JAVASCRIPT_GROOVY_HTTP_ENCRYPTED_CREDENTIAL=passed', flush=True)
+        print('WORKFLOW_VERIFY_STAGE=SCHEDULED_RUN', flush=True)
+        # One occurrence in the near future (the next matching date is a year away), avoiding repeated verification traffic.
+        preview = request('/api/workflows/schedule-preview', {'cron': '*/10 * * * * *', 'timeZone': 'UTC'})
+        planned = datetime.datetime.strptime(preview['nextRuns'][1], '%Y-%m-%dT%H:%M:%SZ')
+        cron = '{} {} {} {} {} *'.format(planned.second, planned.minute, planned.hour, planned.day, planned.month)
+        schedule = request('/api/workflows/' + workflow_id + '/schedule', {'enabled': True, 'cron': cron,
+            'timeZone': 'UTC', 'input': {'items': [{'json': {}}]}, 'revision': 0}, 'PUT')
+        deadline = time.monotonic() + 65
+        scheduled = None
+        while time.monotonic() < deadline:
+            instances = request('/api/workflows/runs?workflowId=' + workflow_id + '&trigger=SCHEDULED&pageSize=20')
+            if instances.get('items'):
+                summary = instances['items'][0]
+                if 'input' in summary or 'definition' in summary:
+                    raise RuntimeError('instance summary exposed unexpected payloads')
+                scheduled = request('/api/workflows/runs/' + summary['id'])
+                if schedule.get('enabled'):
+                    schedule['enabled'] = False
+                    schedule = request('/api/workflows/' + workflow_id + '/schedule', schedule, 'PUT')
+                if scheduled['status'] not in ('QUEUED', 'RUNNING'):
+                    break
+            time.sleep(.5)
+        if not scheduled or scheduled['status'] != 'SUCCEEDED' or not scheduled.get('scheduledAt'):
+            raise RuntimeError('production scheduled workflow failed')
+        if scheduled.get('output', {}).get('items', [{}])[0].get('json', {}).get('value') != 42:
+            raise RuntimeError('scheduled workflow result mismatch')
+        print('PUBLIC_WORKFLOW_SCHEDULE_AND_INSTANCE_LIST=passed', flush=True)
     finally:
         # Delete only the IDs created above. Existing workflows, credentials and browser sessions are untouched.
+        if workflow_id:
+            try:
+                schedule = request('/api/workflows/' + workflow_id + '/schedule')
+                if schedule.get('enabled'):
+                    schedule['enabled'] = False
+                    request('/api/workflows/' + workflow_id + '/schedule', schedule, 'PUT')
+                for instance in request('/api/workflows/' + workflow_id + '/runs'):
+                    if instance['status'] in ('QUEUED', 'RUNNING'):
+                        request('/api/workflows/runs/' + instance['id'] + '/cancel', {})
+            except Exception:
+                pass
         if run_id:
             try:
                 request('/api/workflows/runs/' + run_id + '/cancel', {})
@@ -568,6 +627,26 @@ def business_snapshot():
         if not isinstance(rows, list) or any('id' not in row for row in rows):
             raise RuntimeError('existing data inventory could not be verified')
         snapshot[path] = {str(row['id']) for row in rows}
+    cookies = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookies), urllib.request.HTTPSHandler(context=ssl.create_default_context()))
+    def management(path, body=None):
+        req = urllib.request.Request(BASE_URL + path, data=json.dumps(body).encode() if body is not None else None,
+            headers={'Content-Type': 'application/json', 'Origin': BASE_URL, 'X-Requested-With': 'XMLHttpRequest'})
+        with opener.open(req, timeout=30) as response:
+            data = response.read()
+            return json.loads(data) if data else None
+    try:
+        management('/auth/login', {'token': token, 'remember': False})
+        for path in ['/api/workflows', '/api/workflows/credentials']:
+            rows = management(path)
+            if not isinstance(rows, list) or any('id' not in row for row in rows):
+                raise RuntimeError('existing workflow inventory could not be verified')
+            snapshot[path] = {str(row['id']) for row in rows}
+    finally:
+        try:
+            management('/auth/logout', {})
+        except Exception:
+            pass
     return snapshot
 
 
@@ -660,5 +739,7 @@ if __name__ == '__main__':
     try:
         main()
     except Exception as error:
+        if isinstance(error, urllib.error.URLError):
+            print('DEPLOYMENT_NETWORK_FAILURE=' + type(error.reason).__name__ + ': ' + str(error.reason)[:240], file=sys.stderr, flush=True)
         print('DEPLOYMENT_FAILED=' + type(error).__name__ + (': ' + str(error) if isinstance(error, RuntimeError) else ''), file=sys.stderr, flush=True)
         sys.exit(1)

@@ -16,3 +16,5 @@
 
 - 工作流脚本由 `/usr/bin/setpriv` 清除继承能力后，在 `/usr/bin/bwrap` 隔离进程内运行，保留非特权用户命名空间、现有服务限制和清空子进程环境的策略。凭据主密钥由 `/etc/leon-lite-workflow-workflows.env`（root 所有、0600）提供 `LEON_WORKFLOW_CREDENTIAL_KEY`，systemd 的 `96-workflows.conf` 加载；升级保留原值，不重新生成或直接轮换已有密钥，不输出密钥或摘要。安装使用 `scripts/install_workflow_runtime.py`，该脚本只配置运行环境及受保护的代理路由，服务重启由部署脚本统一完成。
 - `/workflows.html` 与 `/workspace/` 资源使用管理页 Cookie 登录保护，`/api/workflows/**` 由服务端校验管理会话及写入来源，插件 Bearer 令牌不能直接管理或运行工作流。部署脚本在线执行 HTTP → JavaScript → Groovy 验收（包括加密凭据读取），成功后仅清理本次创建的测试流程、测试凭据及临时登录会话；不得删除既有流程或凭据。
+
+- 工作流定时配置持久化在 H2 的 `automation_schedule` 表，每次执行当前已发布版本；默认使用北京时间。已有实例运行时跳过本次触发，停机期间的执行点不补跑。`LEON_WORKFLOW_SCHEDULING_ENABLED` 默认启用，只控制工作流调度，不得据此启用待办日结。`/workflow-runs.html` 与编排页一样受管理 Cookie 登录保护，部署验收包含真实定时触发及实例列表；测试流程清理前先暂停其定时配置。

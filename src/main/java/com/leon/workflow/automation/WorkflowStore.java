@@ -37,6 +37,18 @@ public class WorkflowStore {
               FOREIGN KEY(workflow_id, version) REFERENCES automation_version(workflow_id, version))
             """);
         jdbc.execute("CREATE INDEX IF NOT EXISTS idx_automation_run_workflow ON automation_run(workflow_id, created_at)");
+        jdbc.execute("ALTER TABLE automation_run ADD COLUMN IF NOT EXISTS trigger_type VARCHAR(20) DEFAULT 'MANUAL' NOT NULL");
+        jdbc.execute("ALTER TABLE automation_run ADD COLUMN IF NOT EXISTS scheduled_at BIGINT");
+        jdbc.execute("CREATE INDEX IF NOT EXISTS idx_automation_run_created ON automation_run(created_at, id)");
+        jdbc.execute("""
+            CREATE TABLE IF NOT EXISTS automation_schedule (
+              workflow_id VARCHAR(36) PRIMARY KEY, enabled BOOLEAN NOT NULL DEFAULT FALSE,
+              cron VARCHAR(120) NOT NULL, time_zone VARCHAR(80) NOT NULL, input_json CLOB NOT NULL,
+              revision BIGINT NOT NULL DEFAULT 1, next_run_at BIGINT, last_scheduled_at BIGINT,
+              last_run_id VARCHAR(36), last_outcome VARCHAR(20), last_error VARCHAR(1000), updated_at BIGINT NOT NULL,
+              FOREIGN KEY(workflow_id) REFERENCES automation_workflow(id))
+            """);
+        jdbc.execute("CREATE INDEX IF NOT EXISTS idx_automation_schedule_due ON automation_schedule(enabled, next_run_at)");
         jdbc.execute("""
             CREATE TABLE IF NOT EXISTS automation_node_run (
               run_id VARCHAR(36) NOT NULL, node_id VARCHAR(64) NOT NULL, node_name VARCHAR(80) NOT NULL,
@@ -117,12 +129,16 @@ public class WorkflowStore {
         if (jdbc.queryForObject("SELECT COUNT(*) FROM automation_run WHERE workflow_id=? AND status IN ('QUEUED','RUNNING')", Integer.class, id) > 0)
             throw new ResponseStatusException(HttpStatus.CONFLICT, "请先停止正在执行的工作流");
         jdbc.update("UPDATE automation_workflow SET deleted=TRUE WHERE id=?", id);
+        jdbc.update("UPDATE automation_schedule SET enabled=FALSE,next_run_at=NULL,revision=revision+1 WHERE workflow_id=?", id);
     }
     @Transactional public String createRun(String workflowId, int version, WorkflowGraph graph, Object input) {
+        return createRun(workflowId, version, graph, input, "MANUAL", null);
+    }
+    @Transactional public String createRun(String workflowId, int version, WorkflowGraph graph, Object input, String trigger, Long scheduledAt) {
         jdbc.queryForList("SELECT id FROM automation_workflow WHERE id=? FOR UPDATE", workflowId); get(workflowId);
         String id = UUID.randomUUID().toString();
-        jdbc.update("INSERT INTO automation_run(id,workflow_id,version,status,input_json,created_at) VALUES(?,?,?,'QUEUED',?,?)",
-                id, workflowId, version, write(redact(input)), System.currentTimeMillis());
+        jdbc.update("INSERT INTO automation_run(id,workflow_id,version,status,input_json,created_at,trigger_type,scheduled_at) VALUES(?,?,?,'QUEUED',?,?,?,?)",
+                id, workflowId, version, write(redact(input)), System.currentTimeMillis(), trigger, scheduledAt);
         int order = 0;
         for (var node : graph.nodes()) jdbc.update("INSERT INTO automation_node_run(run_id,node_id,node_name,node_type,node_order,status) VALUES(?,?,?,?,?,'PENDING')",
                 id, node.id(), node.name(), node.type(), order++);
@@ -130,10 +146,10 @@ public class WorkflowStore {
     }
     public List<Map<String, Object>> runs(String workflowId) {
         get(workflowId);
-        return jdbc.query("SELECT * FROM automation_run WHERE workflow_id=? ORDER BY created_at DESC LIMIT 50", (rs, i) -> runRow(rs, false), workflowId);
+        return jdbc.query("SELECT r.*,w.name workflow_name,w.deleted workflow_deleted FROM automation_run r JOIN automation_workflow w ON w.id=r.workflow_id WHERE r.workflow_id=? ORDER BY r.created_at DESC,r.id DESC LIMIT 50", (rs, i) -> runRow(rs, false), workflowId);
     }
     public Map<String, Object> run(String id) {
-        var rows = jdbc.query("SELECT * FROM automation_run WHERE id=?", (rs, i) -> runRow(rs, true), id);
+        var rows = jdbc.query("SELECT r.*,w.name workflow_name,w.deleted workflow_deleted FROM automation_run r JOIN automation_workflow w ON w.id=r.workflow_id WHERE r.id=?", (rs, i) -> runRow(rs, true), id);
         if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "运行记录不存在");
         var result = rows.getFirst();
         result.put("nodes", jdbc.query("SELECT * FROM automation_node_run WHERE run_id=? ORDER BY node_order", (rs, i) -> {
@@ -148,6 +164,8 @@ public class WorkflowStore {
     private Map<String, Object> runRow(java.sql.ResultSet rs, boolean data) throws java.sql.SQLException {
         Map<String, Object> row = new LinkedHashMap<>();
         row.put("id", rs.getString("id")); row.put("workflowId", rs.getString("workflow_id")); row.put("version", rs.getInt("version"));
+        row.put("workflowName", rs.getString("workflow_name")); row.put("workflowDeleted", rs.getBoolean("workflow_deleted"));
+        row.put("triggerType", rs.getString("trigger_type")); row.put("scheduledAt", time(rs.getObject("scheduled_at")));
         row.put("status", rs.getString("status")); row.put("error", rs.getString("error"));
         row.put("createdAt", time(rs.getObject("created_at"))); row.put("startedAt", time(rs.getObject("started_at"))); row.put("finishedAt", time(rs.getObject("finished_at")));
         if (data) {
@@ -155,6 +173,35 @@ public class WorkflowStore {
             row.put("definition", read(jdbc.queryForObject("SELECT definition FROM automation_version WHERE workflow_id=? AND version=?", String.class, rs.getString("workflow_id"), rs.getInt("version"))));
         }
         return row;
+    }
+    public List<Map<String, Object>> runOptions() {
+        return jdbc.query("SELECT w.id,w.name,w.deleted FROM automation_workflow w WHERE w.deleted=FALSE OR EXISTS(SELECT 1 FROM automation_run r WHERE r.workflow_id=w.id) ORDER BY w.deleted,w.updated_at DESC",
+                (rs, i) -> Map.of("id", rs.getString(1), "name", rs.getString(2), "deleted", rs.getBoolean(3)));
+    }
+    public Map<String, Object> allRuns(String workflowId, String status, String trigger, String query, int page, int pageSize) {
+        if (page < 1 || page > 1_000_000 || pageSize < 1 || pageSize > 100) throw new IllegalArgumentException("分页参数无效，单页最多 100 条");
+        List<Object> args = new ArrayList<>();
+        StringBuilder where = new StringBuilder(" FROM automation_run r JOIN automation_workflow w ON w.id=r.workflow_id WHERE 1=1");
+        if (workflowId != null && !workflowId.isBlank()) { where.append(" AND r.workflow_id=?"); args.add(workflowId); }
+        if (status != null && !status.isBlank()) {
+            if (!Set.of("QUEUED", "RUNNING", "SUCCEEDED", "FAILED", "CANCELLED").contains(status)) throw new IllegalArgumentException("实例状态无效");
+            where.append(" AND r.status=?"); args.add(status);
+        }
+        if (trigger != null && !trigger.isBlank()) {
+            if (!Set.of("MANUAL", "SCHEDULED").contains(trigger)) throw new IllegalArgumentException("触发方式无效");
+            where.append(" AND r.trigger_type=?"); args.add(trigger);
+        }
+        if (query != null && !query.isBlank()) {
+            if (query.length() > 100) throw new IllegalArgumentException("搜索内容最多 100 个字符");
+            String value = "%" + query.trim().toLowerCase(Locale.ROOT).replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%";
+            where.append(" AND (LOWER(r.id) LIKE ? ESCAPE '!' OR LOWER(w.name) LIKE ? ESCAPE '!')"); args.add(value); args.add(value);
+        }
+        Map<String, Object> summary = jdbc.queryForObject("SELECT COUNT(*) total,COALESCE(SUM(CASE WHEN r.status='SUCCEEDED' THEN 1 ELSE 0 END),0) succeeded,COALESCE(SUM(CASE WHEN r.status='FAILED' THEN 1 ELSE 0 END),0) failed,COALESCE(SUM(CASE WHEN r.status IN ('QUEUED','RUNNING') THEN 1 ELSE 0 END),0) active" + where,
+                (rs, i) -> Map.of("total", rs.getLong(1), "succeeded", rs.getLong(2), "failed", rs.getLong(3), "active", rs.getLong(4)), args.toArray());
+        List<Object> paged = new ArrayList<>(args); paged.add(pageSize); paged.add((long)(page - 1) * pageSize);
+        var items = jdbc.query("SELECT r.id,r.workflow_id,r.version,r.status,r.error,r.created_at,r.started_at,r.finished_at,r.trigger_type,r.scheduled_at,w.name workflow_name,w.deleted workflow_deleted" + where + " ORDER BY r.created_at DESC,r.id DESC LIMIT ? OFFSET ?",
+                (rs, i) -> runRow(rs, false), paged.toArray());
+        return Map.of("items", items, "total", summary.get("total"), "summary", summary, "page", page, "pageSize", pageSize);
     }
     public boolean start(String id) { return jdbc.update("UPDATE automation_run SET status='RUNNING',started_at=? WHERE id=? AND status='QUEUED'", System.currentTimeMillis(), id) == 1; }
     public boolean cancelled(String id) { return "CANCELLED".equals(jdbc.queryForObject("SELECT status FROM automation_run WHERE id=?", String.class, id)); }

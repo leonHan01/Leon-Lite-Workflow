@@ -6,7 +6,9 @@ import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.*;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.beans.factory.annotation.Value;
 import java.util.*;
+import java.time.Instant;
 import static com.leon.workflow.automation.WorkflowJson.*;
 
 @RestController
@@ -16,8 +18,13 @@ public class WorkflowController {
     private final WorkflowEngine engine;
     private final WorkflowCredentials credentials;
     private final ApiTokenInterceptor auth;
-    public WorkflowController(WorkflowStore store, WorkflowEngine engine, WorkflowCredentials credentials, ApiTokenInterceptor auth) {
+    private final WorkflowSchedules schedules;
+    private final boolean schedulingEnabled;
+    public WorkflowController(WorkflowStore store, WorkflowEngine engine, WorkflowCredentials credentials, ApiTokenInterceptor auth, WorkflowSchedules schedules,
+            @Value("${leon.workflows.scheduling-enabled:true}") boolean schedulingEnabled) {
         this.store = store; this.engine = engine; this.credentials = credentials; this.auth = auth;
+        this.schedules = schedules;
+        this.schedulingEnabled = schedulingEnabled;
     }
     @ModelAttribute void authorize(HttpServletRequest request) {
         if (auth.enabled() && (!auth.validBrowserSession(request) || (!Set.of("GET", "HEAD", "OPTIONS").contains(request.getMethod()) && !auth.validAdminWrite(request))))
@@ -26,7 +33,7 @@ public class WorkflowController {
     }
     @GetMapping public ResponseEntity<?> list() { return response(store.list()); }
     @GetMapping("/capabilities") public ResponseEntity<?> capabilities() {
-        var value = new LinkedHashMap<>(engine.capabilities()); value.put("credentialsEnabled", credentials.enabled()); return response(value);
+        var value = new LinkedHashMap<>(engine.capabilities()); value.put("credentialsEnabled", credentials.enabled()); value.put("scheduledExecution", schedulingEnabled); return response(value);
     }
     @PostMapping public ResponseEntity<?> create(@RequestBody Map<String, Object> body) { return response(store.create(required(body.get("name"), "工作流名称需要 1–100 个字符", 100))); }
     @GetMapping("/{id}") public ResponseEntity<?> get(@PathVariable String id) { return response(store.get(id)); }
@@ -40,6 +47,16 @@ public class WorkflowController {
         return ResponseEntity.accepted().cacheControl(CacheControl.noStore()).body(engine.start(id, object(body.get("input"))));
     }
     @GetMapping("/{id}/runs") public ResponseEntity<?> runs(@PathVariable String id) { return response(store.runs(id)); }
+    @GetMapping("/runs") public ResponseEntity<?> instances(@RequestParam(required = false) String workflowId,
+            @RequestParam(required = false) String status, @RequestParam(required = false) String trigger,
+            @RequestParam(required = false) String q, @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int pageSize) { return response(store.allRuns(workflowId, status, trigger, q, page, pageSize)); }
+    @GetMapping("/run-options") public ResponseEntity<?> runOptions() { return response(store.runOptions()); }
+    @GetMapping("/{id}/schedule") public ResponseEntity<?> schedule(@PathVariable String id) { return response(schedules.get(id)); }
+    @PutMapping("/{id}/schedule") public ResponseEntity<?> saveSchedule(@PathVariable String id, @RequestBody Map<String, Object> body) { return response(schedules.save(id, body, Instant.now())); }
+    @PostMapping("/schedule-preview") public ResponseEntity<?> previewSchedule(@RequestBody Map<String, Object> body) {
+        var rule = WorkflowScheduleRule.parse(body.get("cron"), body.get("timeZone")); return response(Map.of("nextRuns", rule.preview(Instant.now()), "timeZone", rule.zone().getId()));
+    }
     @GetMapping("/runs/{id}") public ResponseEntity<?> run(@PathVariable String id) { return response(store.run(id)); }
     @PostMapping("/runs/{id}/cancel") public ResponseEntity<?> cancel(@PathVariable String id) { return response(engine.cancel(id)); }
     @PostMapping("/test-node") public ResponseEntity<?> test(@RequestBody Map<String, Object> body) { return response(engine.test(JSON.convertValue(body.get("node"), WorkflowGraph.Node.class), object(body.get("input")))); }

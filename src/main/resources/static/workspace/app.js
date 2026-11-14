@@ -1,4 +1,5 @@
 const routes = {
+    '/workflow-runs.html': ['workflow-runs', '运行实例', 'workspace-workflow-runs'],
     '/workflows.html': ['workflows', '工作流编排', 'workspace-workflows'],
     '/music-statistics.html': ['music-statistics', '歌曲统计', 'workspace-music'],
     '/music.html': ['music', '歌曲管理', 'workspace-music'],

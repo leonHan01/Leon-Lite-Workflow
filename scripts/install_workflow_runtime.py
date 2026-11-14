@@ -44,9 +44,10 @@ def configure_proxy():
     content = PROXY.read_text()
     page = 'location = /workflows.html {'
     api = 'location ~ ^/api/workflows(/|$) {'
-    if page in content and api in content:
+    instances = 'location = /workflow-runs.html {'
+    if page in content and api in content and instances in content:
         return
-    if page in content or api in content:
+    if (page in content) != (api in content):
         raise RuntimeError('partial workflow proxy configuration; preserved without changes')
     anchor = '        location / { return 403; }'
     if content.count(anchor) != 1:
@@ -56,7 +57,9 @@ def configure_proxy():
     backup = backup / (datetime.datetime.utcnow().strftime('%Y%m%dT%H%M%S') + '-' + secrets.token_hex(3))
     backup.mkdir(mode=0o700)
     shutil.copy2(str(PROXY), str(backup / 'nginx.conf'))
-    block = '''        location = /workflows.html {
+    block = ''
+    if page not in content:
+        block += '''        location = /workflows.html {
             auth_request /_admin_session;
             error_page 401 =302 /admin-login.html;
             proxy_pass http://127.0.0.1:80;
@@ -65,6 +68,15 @@ def configure_proxy():
         }
         location ~ ^/api/workflows(/|$) {
             client_max_body_size 1200k;
+            proxy_pass http://127.0.0.1:80;
+            proxy_set_header Host $host;
+            proxy_set_header X-Forwarded-Proto https;
+        }
+'''
+    if instances not in content:
+        block += '''        location = /workflow-runs.html {
+            auth_request /_admin_session;
+            error_page 401 =302 /admin-login.html;
             proxy_pass http://127.0.0.1:80;
             proxy_set_header Host $host;
             proxy_set_header X-Forwarded-Proto https;

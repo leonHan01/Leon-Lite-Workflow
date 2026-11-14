@@ -19,7 +19,7 @@ public class WorkflowEngine {
     public record NodeResult(Map<String, Object> output, String logs, String branch) {}
     public WorkflowEngine(WorkflowStore store, ScriptProcessRunner scripts, WorkflowHttp http) { this.store = store; this.scripts = scripts; this.http = http; }
     public Map<String, String> runtimes() { return Map.of("javascript", "GraalJS 25.0.2", "groovy", "Groovy " + groovy.lang.GroovySystem.getVersion()); }
-    public Map<String, Object> capabilities() { return Map.of("runtimes", runtimes(), "sandbox", scripts.sandbox(), "maxNodes", 64, "maxConcurrentRuns", 2); }
+    public Map<String, Object> capabilities() { return Map.of("runtimes", runtimes(), "sandbox", scripts.sandbox(), "maxNodes", 64, "maxConcurrentRuns", 2, "scheduledExecution", true); }
     public Map<String, Object> start(String workflowId, Map<String, Object> input) {
         envelope(input);
         var workflow = store.get(workflowId);
@@ -28,11 +28,14 @@ public class WorkflowEngine {
         Map<String, Object> isolated = read(write(input));
         WorkflowPrivacy initialPrivacy = new WorkflowPrivacy(); initialPrivacy.collect(isolated);
         String id = store.createRun(workflowId, version, graph, initialPrivacy.mask(isolated));
-        FutureTask<Void> task = new FutureTask<>(() -> { try { run(id, graph, isolated); } finally { tasks.remove(id); } return null; });
+        submit(id, graph, isolated);
+        return store.run(id);
+    }
+    void submit(String id, WorkflowGraph graph, Map<String, Object> input) {
+        FutureTask<Void> task = new FutureTask<>(() -> { try { run(id, graph, input); } finally { tasks.remove(id); } return null; });
         tasks.put(id, task);
         try { workers.execute(task); }
         catch (RejectedExecutionException error) { tasks.remove(id); store.finish(id, "FAILED", null, "执行队列已满，请稍后重试"); throw busy(); }
-        return store.run(id);
     }
     private void run(String id, WorkflowGraph graph, Map<String, Object> input) {
         if (!store.start(id)) return;

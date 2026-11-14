@@ -27,7 +27,23 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE_PATH || 'playwright')
         await page.waitForSelector('[data-run]');
         await page.locator('[data-run]').first().click();
         await page.waitForFunction(() => document.querySelector('[data-run-detail] .wf-badge')?.textContent === '成功');
+        await page.getByRole('button',{name:'定时执行',exact:true}).click();
+        await page.locator('[data-schedule-form] [name="preset"]').selectOption('0 */5 * * * *');
+        await page.locator('[data-schedule-form] [name="enabled"]').check();
+        await page.getByRole('button',{name:'保存定时配置',exact:true}).click();
+        await page.waitForSelector('[data-schedule-summary]:not([hidden])');
+        await page.getByRole('button',{name:'定时执行',exact:true}).click();
+        await page.locator('[data-schedule-form] [name="enabled"]').uncheck();
+        await page.getByRole('button',{name:'保存定时配置',exact:true}).click();
+        await page.waitForSelector('[data-schedule-summary][hidden]',{state:'attached'});
+        await page.locator('[data-all-runs]').click();
+        await page.waitForSelector('[data-rows] [data-open]');
+        await page.locator('[data-rows] [data-open]').first().click();
+        await page.waitForSelector('.wr-detail-title');
+        assert.ok((await page.locator('[data-details]').textContent()).includes('Groovy：金额翻倍'));
+        await page.evaluate(()=>window.scrollTo(0,0));
+        await page.screenshot({path:'/private/tmp/leon-workflow-runs-live.png',fullPage:true});
         assert.deepEqual(errors, []);
-        console.log('Live workflow UI passed: publish, real JS/Groovy execution, IF branch, logs and persisted history after refresh.');
+        console.log('Live workflow UI passed: execution, scheduling save/pause, instance list/details and persisted history.');
     } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

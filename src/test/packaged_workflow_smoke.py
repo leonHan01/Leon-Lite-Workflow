@@ -3,6 +3,7 @@
 Run after mvn package; optionally set PLAYWRIGHT_MODULE_PATH and CHROME_PATH to also exercise the real UI.
 """
 import json
+import datetime
 import os
 from pathlib import Path
 import re
@@ -60,6 +61,26 @@ def main():
                 assert run["status"] == "SUCCEEDED", run.get("error")
                 assert run["output"]["items"][0]["json"]["value"] == 42
                 print("Packaged JAR smoke passed: JavaScript → Groovy → 42, isolated database.", flush=True)
+                planned = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=6)
+                cron = f"{planned.second} {planned.minute} {planned.hour} {planned.day} {planned.month} *"
+                config = api('/' + workflow['id'] + '/schedule', {'enabled': True, 'cron': cron, 'timeZone': 'UTC',
+                    'input': {'items': [{'json': {'value': 20}}]}, 'revision': 0}, 'PUT')
+                deadline = time.monotonic() + 30
+                scheduled = None
+                while time.monotonic() < deadline:
+                    listing = api('/runs?workflowId=' + workflow['id'] + '&trigger=SCHEDULED')
+                    if listing['items']:
+                        scheduled = api('/runs/' + listing['items'][0]['id'])
+                        if config['enabled']:
+                            config['enabled'] = False
+                            config = api('/' + workflow['id'] + '/schedule', config, 'PUT')
+                        if scheduled['status'] not in ('QUEUED', 'RUNNING'):
+                            break
+                    time.sleep(.15)
+                assert scheduled and scheduled['status'] == 'SUCCEEDED', scheduled and scheduled.get('error')
+                assert scheduled['triggerType'] == 'SCHEDULED' and scheduled['scheduledAt']
+                assert scheduled['output']['items'][0]['json']['value'] == 42
+                print('Packaged scheduler smoke passed: automatic trigger, published version, instance list and pause.', flush=True)
                 if os.environ.get("PLAYWRIGHT_MODULE_PATH"):
                     subprocess.run(["node", str(ROOT / "src/test/browser/workflows-live.cjs")], check=True,
                                    env={**os.environ, "WORKFLOW_BASE_URL": base}, timeout=40)
