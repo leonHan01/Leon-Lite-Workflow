@@ -2,6 +2,32 @@
 .workspace-app .lw-shell { align-items:flex-start; }
 .workspace-app .lw-sidebar { border-radius:0; }
 .workspace-app .lw-topbar { border-radius:0; }
+.workspace-app .lw-nav-group { min-width:0; }
+.workspace-app .lw-nav-toggle { display:flex; align-items:center; gap:12px; width:100%; min-height:44px; padding:0 13px; border:0 !important; border-radius:9px; background:transparent !important; box-shadow:none !important; color:#7a8388 !important; font:600 13px var(--lw-font); text-align:left; cursor:pointer; }
+.workspace-app .lw-nav-toggle:hover { background:#f4f6fc !important; color:#4669e8 !important; }
+.workspace-app .lw-nav-group.has-active>.lw-nav-toggle { color:#4669e8 !important; }
+.workspace-app .lw-nav-toggle svg { width:18px; height:18px; flex:none; }
+.workspace-app .lw-nav-toggle .lw-nav-chevron { width:13px; height:13px; margin-left:auto; transition:transform .18s; }
+.workspace-app .lw-nav-toggle[aria-expanded=true] .lw-nav-chevron { transform:rotate(90deg); }
+.workspace-app .lw-nav-children { display:grid; gap:3px; margin:3px 0 2px 21px; padding-left:8px; border-left:1px solid #e5e9f0; }
+.workspace-app .lw-nav-children[hidden] { display:none !important; }
+.workspace-app .lw-nav-children .lw-nav-link { min-height:38px; padding:0 10px; gap:9px; font-size:12px; }
+.workspace-app .lw-nav-children .lw-nav-link svg { width:16px; height:16px; }
+@media (max-width:900px) {
+    .workspace-app .lw-nav-toggle { justify-content:center; padding:0; }
+    .workspace-app .lw-nav-toggle span,.workspace-app .lw-nav-toggle .lw-nav-chevron { display:none; }
+    .workspace-app .lw-nav-children { margin:3px 0 0; padding:0; border:0; }
+    .workspace-app .lw-nav-children .lw-nav-link { padding:0; }
+}
+.workspace-app.is-music-page .lw-nav-toggle { justify-content:center; padding:0; }
+.workspace-app.is-music-page .lw-nav-toggle span,.workspace-app.is-music-page .lw-nav-toggle .lw-nav-chevron { display:none; }
+.workspace-app.is-music-page .lw-nav-children { margin:3px 0 0; padding:0; border:0; }
+@media (max-width:680px) {
+    .workspace-app .lw-nav-group { display:flex; align-items:center; gap:4px; flex:none; }
+    .workspace-app .lw-nav-toggle { flex:none; width:34px; min-height:38px; }
+    .workspace-app .lw-nav-children { display:flex; align-items:center; gap:4px; margin:0; }
+    .workspace-app.is-music-page .lw-nav-children { margin:0; }
+}
 @media (max-width:700px) {
     .workspace-app .lw-sidebar { gap:12px; }
     .workspace-app .lw-brand { flex:none; }

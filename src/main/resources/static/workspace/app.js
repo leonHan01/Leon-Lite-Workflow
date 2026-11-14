@@ -61,6 +61,11 @@ async function getView(definition, url) {
     try { return await task; } finally { pending.delete(key); }
 }
 
+function expandNavigationGroup(group, expanded) {
+    group.querySelector('.lw-nav-toggle').setAttribute('aria-expanded', String(expanded));
+    group.querySelector('.lw-nav-children').hidden = !expanded;
+}
+
 function updateNavigation(definition) {
     document.body.classList.toggle('is-music-page', ['music', 'music-statistics'].includes(definition[0]));
     const key = definition[0] === 'detail' ? 'records' : definition[0] === 'music-statistics' ? 'music' : definition[0];
@@ -73,6 +78,11 @@ function updateNavigation(definition) {
         link.classList.toggle('is-active', selected);
         if (selected) link.setAttribute('aria-current', 'page');
         else link.removeAttribute('aria-current');
+    }
+    for (const group of document.querySelectorAll('.lw-nav-group')) {
+        const selected = !!group.querySelector('.lw-nav-link.is-active');
+        group.classList.toggle('has-active', selected);
+        if (selected) expandNavigationGroup(group, true);
     }
 }
 
@@ -117,6 +127,10 @@ export async function navigate(path, { historyMode = 'push', recall = false } = 
         retry.addEventListener('click', () => navigate(url.href, { historyMode }));
         status.append(' ', retry);
     }
+}
+
+for (const toggle of document.querySelectorAll('.lw-nav-toggle')) {
+    toggle.addEventListener('click', () => expandNavigationGroup(toggle.closest('.lw-nav-group'), toggle.getAttribute('aria-expanded') !== 'true'));
 }
 
 document.addEventListener('click', event => {
