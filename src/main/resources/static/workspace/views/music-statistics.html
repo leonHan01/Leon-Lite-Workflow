@@ -1,18 +1,36 @@
+<link rel="stylesheet" href="/workspace/music-statistics.css">
 <div class="music-content music-stats">
     <nav class="music-section-nav" aria-label="歌曲管理页面"><a href="/music.html">歌曲管理</a><a href="/music-statistics.html" aria-current="page">歌曲统计</a></nav>
-    <header class="music-stats-heading"><div><h1>歌曲统计</h1><p>了解在线曲库的收藏与试听情况</p></div><button type="button" data-refresh>↻ 刷新数据</button></header>
-    <p class="music-stats-note">播放次数从此功能启用后开始统计，仅包含歌曲管理页的试听；Sonora 客户端的本地播放记录不会同步到这里。</p>
+    <header class="music-stats-heading">
+        <div class="music-stats-hero-copy"><span class="music-stats-eyebrow"><i></i> YOUR MUSIC LIBRARY</span><h1>每一首歌，<br><em>都有它的故事。</em></h1><p>从收藏到聆听，看看你的音乐留下了哪些足迹。</p></div>
+        <div class="music-stats-hero-action"><div class="music-stats-record" aria-hidden="true"><span>♪</span></div><button type="button" data-refresh><span aria-hidden="true">↻</span> 刷新数据</button></div>
+    </header>
+    <div class="music-stats-intro"><div><span class="music-stats-kicker">LIBRARY OVERVIEW</span><h2>曲库概览</h2></div><span class="music-stats-live"><i></i> 在线曲库</span></div>
     <p data-status role="status" aria-live="polite"></p>
     <div data-results hidden>
         <div class="music-stats-summary" aria-label="曲库概览">
-            <div><span>歌曲总数</span><strong data-total>0</strong><small>首歌曲</small></div>
-            <div><span>艺术家</span><strong data-artists>0</strong><small>位艺术家</small></div>
-            <div><span>专辑</span><strong data-albums>0</strong><small>张专辑</small></div>
-            <div><span>试听次数</span><strong data-plays>0</strong><small>次播放</small></div>
+            <div class="music-stat-tile music-stat-songs"><div class="music-stat-top"><span>歌曲总数</span><i aria-hidden="true">♫</i></div><div class="music-stat-value"><strong data-total>0</strong><small>首</small></div><p>收藏的旋律</p></div>
+            <div class="music-stat-tile music-stat-artists"><div class="music-stat-top"><span>艺术家</span><i aria-hidden="true">✳</i></div><div class="music-stat-value"><strong data-artists>0</strong><small>位</small></div><p>不同的声音</p></div>
+            <div class="music-stat-tile music-stat-albums"><div class="music-stat-top"><span>专辑</span><i aria-hidden="true">◉</i></div><div class="music-stat-value"><strong data-albums>0</strong><small>张</small></div><p>收录的专辑</p></div>
+            <div class="music-stat-tile music-stat-plays"><div class="music-stat-top"><span>试听次数</span><i aria-hidden="true">▶</i></div><div class="music-stat-value"><strong data-plays>0</strong><small>次</small></div><p>网页试听记录</p></div>
         </div>
+        <div class="music-stats-insights" aria-label="更多曲库统计">
+            <div><span>已试听歌曲</span><strong data-played>0</strong><small data-played-detail></small></div>
+            <div><span>已知歌曲时长</span><strong data-duration>—</strong><small data-duration-detail></small></div>
+            <div><span>曲库文件大小</span><strong data-size>—</strong><small data-size-detail></small></div>
+        </div>
+        <div class="music-stats-section-title"><div><span class="music-stats-kicker">LIBRARY INSIGHTS</span><h2>曲库数据洞察</h2></div><p>用图表认识你的音乐收藏</p></div>
+        <p class="music-chart-status" data-chart-status role="status" aria-live="polite"></p>
+        <div class="music-chart-grid">
+            <section class="music-stats-card music-chart-card"><div class="music-stats-card-heading"><div class="music-stats-card-icon" aria-hidden="true">◉</div><div><h2>音频格式分布</h2><p>按文件格式统计曲库歌曲</p></div></div><div class="music-chart-pie" data-chart="formats" role="img" aria-label="音频格式分布图"></div><p class="music-chart-empty" data-formats-empty hidden>曲库为空，暂无格式数据。</p><ul class="music-chart-legend" data-format-legend aria-label="音频格式明细"></ul></section>
+            <section class="music-stats-card music-chart-card"><div class="music-stats-card-heading"><div class="music-stats-card-icon" aria-hidden="true">▶</div><div><h2>试听覆盖</h2><p>已试听与未试听的歌曲</p></div></div><div class="music-chart-pie" data-chart="coverage" role="img" aria-label="试听覆盖图"></div><p class="music-chart-empty" data-coverage-empty hidden>曲库为空，暂无试听数据。</p><ul class="music-chart-legend" data-coverage-legend aria-label="试听覆盖明细"></ul></section>
+            <section class="music-stats-card music-chart-card music-chart-monthly"><div class="music-stats-card-heading"><div class="music-stats-card-icon" aria-hidden="true">↗</div><div><h2>曲库新增趋势</h2><p>最近 12 个月的歌曲上传数量 · 按本地时间</p></div></div><div class="music-chart-trend" data-chart="uploads" role="img" aria-label="最近 12 个月歌曲上传数量图"></div><p class="music-chart-empty" data-uploads-empty hidden>近 12 个月没有可统计的上传记录。</p><details class="music-chart-details"><summary>查看每月明细</summary><ul data-upload-list></ul></details></section>
+        </div>
+        <div class="music-stats-section-title"><div><span class="music-stats-kicker">THE RANKINGS</span><h2>音乐排行榜</h2></div><p>发现你曲库里的热门声音</p></div>
         <div class="music-stats-grid">
-            <section class="music-stats-card"><div class="music-stats-card-heading"><div><h2>试听次数排行</h2><p>按播放次数从高到低排列</p></div><span>TOP SONGS</span></div><ol data-play-ranking class="music-stats-list"></ol><p data-play-empty hidden>还没有试听记录，播放歌曲后会显示在这里。</p></section>
-            <section class="music-stats-card"><div class="music-stats-card-heading"><div><h2>艺术家歌曲数量</h2><p>按曲库中的歌曲数量排列</p></div><span>ARTISTS</span></div><ol data-artist-ranking class="music-stats-list"></ol><p data-artist-empty hidden>曲库为空，上传歌曲后即可查看统计。</p></section>
+            <section class="music-stats-card music-stats-songs"><div class="music-stats-card-heading"><div class="music-stats-card-icon" aria-hidden="true">♫</div><div><h2>试听次数排行</h2><p>按试听次数从高到低排列</p></div><span>TOP SONGS</span></div><ol data-play-ranking class="music-stats-list"></ol><div class="music-stats-empty" data-play-empty hidden><div class="music-stats-empty-icon" aria-hidden="true"><span>♪</span></div><strong>还没有试听记录</strong><p>去歌曲管理页播放一首喜欢的歌，<br>这里就会记录你的聆听足迹。</p><a href="/music.html">去听听 <span aria-hidden="true">↗</span></a></div></section>
+            <section class="music-stats-card music-stats-artists"><div class="music-stats-card-heading"><div class="music-stats-card-icon" aria-hidden="true">✳</div><div><h2>艺术家歌曲数量</h2><p>按曲库中的歌曲数量排列</p></div><span>ARTISTS</span></div><ol data-artist-ranking class="music-stats-list"></ol><div class="music-stats-empty" data-artist-empty hidden><div class="music-stats-empty-icon" aria-hidden="true"><span>✳</span></div><strong>曲库还是空的</strong><p>上传歌曲后，即可查看艺术家统计。</p><a href="/music.html">添加歌曲 <span aria-hidden="true">↗</span></a></div></section>
         </div>
+        <p class="music-stats-note"><span aria-hidden="true">ⓘ</span> 播放次数从此功能启用后开始统计，仅包含歌曲管理页的试听；Sonora 客户端的本地播放记录不会同步到这里。</p>
     </div>
 </div>
