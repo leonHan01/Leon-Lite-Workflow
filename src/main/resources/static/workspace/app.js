@@ -1,4 +1,5 @@
 const routes = {
+    '/music-statistics.html': ['music-statistics', '歌曲统计', 'workspace-music'],
     '/music.html': ['music', '歌曲管理', 'workspace-music'],
     '/': ['home', '总览', 'workspace-overview'],
     '/index.html': ['home', '总览', 'workspace-overview'],
@@ -59,8 +60,8 @@ async function getView(definition, url) {
 }
 
 function updateNavigation(definition) {
-    document.body.classList.toggle('is-music-page', definition[0] === 'music');
-    const key = definition[0] === 'detail' ? 'records' : definition[0];
+    document.body.classList.toggle('is-music-page', ['music', 'music-statistics'].includes(definition[0]));
+    const key = definition[0] === 'detail' ? 'records' : definition[0] === 'music-statistics' ? 'music' : definition[0];
     document.getElementById('workspaceTitle').textContent = definition[1];
     document.title = definition[1] + ' · Leon Workflow';
     for (const link of document.querySelectorAll('.lw-nav-link')) {

@@ -296,7 +296,17 @@ export function mount(root) {
             audio.preload = 'none';
             audio.src = `/api/music/tracks/${encodeURIComponent(track.id)}/audio`;
             audio.setAttribute('aria-label', `试听 ${track.title}`);
-            audio.addEventListener('play', () => root.querySelectorAll('audio').forEach(other => { if (other !== audio) other.pause(); }));
+            let counted = false;
+            audio.addEventListener('playing', () => {
+                root.querySelectorAll('audio').forEach(other => { if (other !== audio) other.pause(); });
+                if (!counted) {
+                    counted = true;
+                    fetch(`/api/music/tracks/${encodeURIComponent(track.id)}/plays`, { method: 'POST' })
+                        .then(response => { if (!response.ok) throw new Error(); })
+                        .catch(() => { listStatus.textContent = '播放次数记录失败，歌曲仍可试听。'; });
+                }
+            });
+            audio.addEventListener('ended', () => { counted = false; });
             audio.addEventListener('error', () => { listStatus.textContent = '无法试听，请检查登录状态及浏览器音频格式支持。'; });
             const play = document.createElement('button');
             play.type = 'button';

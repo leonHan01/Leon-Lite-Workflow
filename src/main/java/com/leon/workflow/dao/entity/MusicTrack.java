@@ -14,6 +14,7 @@ public class MusicTrack {
     @Column(nullable = false, length = 240) private String album;
     @Column(nullable = false, length = 8) private String extension;
     @Column(nullable = false, length = 64) private String sha256;
+    private Long playCount = 0L;
     private long size;
     private double duration;
     private Instant uploadedAt;

@@ -1,0 +1,18 @@
+<div class="music-content music-stats">
+    <nav class="music-section-nav" aria-label="歌曲管理页面"><a href="/music.html">歌曲管理</a><a href="/music-statistics.html" aria-current="page">歌曲统计</a></nav>
+    <header class="music-stats-heading"><div><h1>歌曲统计</h1><p>了解在线曲库的收藏与试听情况</p></div><button type="button" data-refresh>↻ 刷新数据</button></header>
+    <p class="music-stats-note">播放次数从此功能启用后开始统计，仅包含歌曲管理页的试听；Sonora 客户端的本地播放记录不会同步到这里。</p>
+    <p data-status role="status" aria-live="polite"></p>
+    <div data-results hidden>
+        <div class="music-stats-summary" aria-label="曲库概览">
+            <div><span>歌曲总数</span><strong data-total>0</strong><small>首歌曲</small></div>
+            <div><span>艺术家</span><strong data-artists>0</strong><small>位艺术家</small></div>
+            <div><span>专辑</span><strong data-albums>0</strong><small>张专辑</small></div>
+            <div><span>试听次数</span><strong data-plays>0</strong><small>次播放</small></div>
+        </div>
+        <div class="music-stats-grid">
+            <section class="music-stats-card"><div class="music-stats-card-heading"><div><h2>试听次数排行</h2><p>按播放次数从高到低排列</p></div><span>TOP SONGS</span></div><ol data-play-ranking class="music-stats-list"></ol><p data-play-empty hidden>还没有试听记录，播放歌曲后会显示在这里。</p></section>
+            <section class="music-stats-card"><div class="music-stats-card-heading"><div><h2>艺术家歌曲数量</h2><p>按曲库中的歌曲数量排列</p></div><span>ARTISTS</span></div><ol data-artist-ranking class="music-stats-list"></ol><p data-artist-empty hidden>曲库为空，上传歌曲后即可查看统计。</p></section>
+        </div>
+    </div>
+</div>

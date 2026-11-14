@@ -58,6 +58,12 @@ public class MusicController {
                 .cacheControl(CacheControl.noStore()).body(new FileSystemResource(library.audio(track)));
     }
 
+    @PostMapping("/{id}/plays")
+    public ResponseEntity<Void> recordPlay(@PathVariable String id) {
+        library.recordPlay(id);
+        return ResponseEntity.noContent().cacheControl(CacheControl.noStore()).build();
+    }
+
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> delete(@PathVariable String id) throws IOException {
         library.delete(id);

@@ -58,6 +58,11 @@ public class MusicLibraryService {
         return tracks.findById(id).orElseThrow(MusicLibraryService::missing);
     }
 
+    @Transactional
+    public void recordPlay(String id) {
+        if (id == null || !id.matches("[0-9a-f-]{36}") || tracks.incrementPlayCount(id) == 0) throw missing();
+    }
+
     public Path audio(MusicTrack track) {
         Path path = root.resolve(track.getId() + "." + track.getExtension()).normalize();
         if (!path.getParent().equals(root) || !Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) throw missing();
