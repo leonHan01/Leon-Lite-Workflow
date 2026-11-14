@@ -2,6 +2,7 @@ package com.leon.workflow.controller;
 
 import com.leon.workflow.dao.entity.MusicTrack;
 import com.leon.workflow.service.MusicLibraryService;
+import com.leon.workflow.service.MusicArtwork;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.http.*;
@@ -39,6 +40,23 @@ public class MusicController {
                 .body(library.upload(file, title, artist, album, duration, reuseExisting));
     }
 
+    @PatchMapping("/metadata")
+    public ResponseEntity<List<MusicTrack>> editMetadata(@RequestBody MusicLibraryService.MetadataEdit edit) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(library.editMetadata(edit));
+    }
+
+    @PostMapping(value = "/{id}/artwork", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Void> setArtwork(@PathVariable String id, @RequestParam("file") MultipartFile image) throws IOException {
+        library.setArtwork(id, image);
+        return ResponseEntity.noContent().cacheControl(CacheControl.noStore()).build();
+    }
+
+    @DeleteMapping("/{id}/artwork")
+    public ResponseEntity<Void> clearArtwork(@PathVariable String id) {
+        library.clearArtwork(id);
+        return ResponseEntity.noContent().cacheControl(CacheControl.noStore()).build();
+    }
+
     @GetMapping("/{id}/audio")
     public ResponseEntity<Resource> audio(@PathVariable String id) {
         MusicTrack track = library.get(id);
@@ -62,6 +80,19 @@ public class MusicController {
     public ResponseEntity<Void> recordPlay(@PathVariable String id) {
         library.recordPlay(id);
         return ResponseEntity.noContent().cacheControl(CacheControl.noStore()).build();
+    }
+
+    @GetMapping("/{id}/artwork")
+    public ResponseEntity<byte[]> artwork(@PathVariable String id) throws IOException {
+        MusicTrack track = library.get(id);
+        if (track.getCustomArtwork() != null) return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType(track.getCustomArtworkType()))
+                .header("X-Content-Type-Options", "nosniff").cacheControl(CacheControl.noStore()).body(track.getCustomArtwork());
+        return MusicArtwork.read(library.audio(track), track.getExtension())
+                .map(image -> ResponseEntity.ok().contentType(MediaType.parseMediaType(image.type()))
+                        .header("X-Content-Type-Options", "nosniff")
+                        .cacheControl(CacheControl.noStore()).body(image.bytes()))
+                .orElseGet(() -> ResponseEntity.noContent().cacheControl(CacheControl.noStore()).build());
     }
 
     @DeleteMapping("/{id}")

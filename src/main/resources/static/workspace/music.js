@@ -283,6 +283,14 @@ export function mount(root) {
                 const index = document.createElement('span'); index.className = 'music-track-index';
                 index.textContent = String(list.trackIds.indexOf(track.id) + 1); selectionCell.append(index);
             }
+            const coverCell = row.insertCell(); coverCell.className = 'music-cover-cell';
+            const cover = document.createElement('div'); cover.className = 'music-cover';
+            cover.setAttribute('aria-hidden', 'true'); cover.textContent = '♪';
+            const image = document.createElement('img'); image.alt = ''; image.loading = 'lazy';
+            image.addEventListener('load', () => cover.classList.add('has-image'));
+            image.addEventListener('error', () => image.remove());
+            image.src = `/api/music/tracks/${encodeURIComponent(track.id)}/artwork`;
+            cover.append(image); coverCell.append(cover);
             const song = row.insertCell();
             const title = document.createElement('strong');
             title.textContent = track.title;

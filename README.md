@@ -136,6 +136,9 @@ curl -X POST http://127.0.0.1:8080/api/diamond -H 'Content-Type: application/jso
 | `GET /api/music/tracks` | 返回歌曲 JSON 数组，含稳定 UUID、标题、艺术家、专辑、格式、时长、字节数、SHA-256 和上传时间 |
 | `GET /api/music/tracks/radio?exclude=<UUID>` | 电台随机返回一首有音频文件的歌曲。多首时排除上一首，只有一首可播放时可重复；无可播放歌曲返回 204。沿用现有认证及 no-store |
 | `POST /api/music/tracks` | multipart 上传单个 `file`，可附带 `title`、`artist`、`album`、`duration`；成功返回 201 |
+| `PATCH /api/music/tracks/metadata` | JSON `{ "ids": ["UUID"], "title": "歌名", "artist": "歌手", "album": "专辑" }`；最多 100 首，字段可省略，整批事务提交。修改的是服务端记录，不改音频标签。 |
+| `POST /api/music/tracks/{id}/artwork` | multipart `file` 上传 JPEG 或 PNG（不超过 2 MiB，最多 1600 万像素），保存在服务端数据库，不改音频。 |
+| `DELETE /api/music/tracks/{id}/artwork` | 移除自定义封面，恢复读取音频内嵌封面。 |
 | `GET /api/music/tracks/{id}/audio` | 认证后下载音频，支持 Range 请求和浏览器试听 |
 | `DELETE /api/music/tracks/{id}` | 删除元数据及服务器文件，成功返回 204 |
 | `GET /api/music/playlists` | 返回在线歌单数组，每张包含 UUID、名称、有序 `trackIds` 和创建/更新时间 |

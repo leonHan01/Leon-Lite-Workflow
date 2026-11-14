@@ -56,6 +56,8 @@ class MusicIntegrationTest {
         mvc.perform(get("/api/music/tracks").header("Authorization", AUTH))
                 .andExpect(status().isOk()).andExpect(header().string("Cache-Control", "no-store"))
                 .andExpect(jsonPath("$[0].id").value(id)).andExpect(jsonPath("$[0].sha256").isString());
+        mvc.perform(get("/api/music/tracks/" + id + "/artwork")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/api/music/tracks/" + id + "/artwork").header("Authorization", AUTH)).andExpect(status().isNoContent());
         mvc.perform(get("/api/music/tracks/" + id + "/audio")).andExpect(status().isUnauthorized());
         mvc.perform(get("/api/music/tracks/" + id + "/audio").header("Authorization", AUTH))
                 .andExpect(status().isOk()).andExpect(content().bytes(audio("x.wav").getBytes()));
@@ -65,6 +67,28 @@ class MusicIntegrationTest {
         mvc.perform(delete("/api/music/tracks/" + id).header("Authorization", AUTH)).andExpect(status().isNoContent());
         assertFalse(Files.exists(ROOT.resolve(id + ".wav")));
         mvc.perform(get("/api/music/tracks/" + id + "/audio").header("Authorization", AUTH)).andExpect(status().isNotFound());
+    }
+
+    @Test void editsMetadataAtomicallyAndStoresArtworkWithoutChangingAudio() throws Exception {
+        var mvc = mvc();
+        var saved = mvc.perform(multipart("/api/music/tracks").file(audio("edit.wav")).header("Authorization", AUTH))
+                .andExpect(status().isCreated()).andReturn();
+        String id = com.alibaba.fastjson.JSON.parseObject(saved.getResponse().getContentAsString()).getString("id");
+        String edit = "{\"ids\":[\"" + id + "\"],\"title\":\"新歌名\",\"artist\":\"歌手\",\"album\":\"专辑\"}";
+        mvc.perform(patch("/api/music/tracks/metadata").contentType("application/json").content(edit)).andExpect(status().isUnauthorized());
+        mvc.perform(patch("/api/music/tracks/metadata").header("Authorization", AUTH).contentType("application/json").content(edit))
+                .andExpect(status().isOk()).andExpect(jsonPath("$[0].title").value("新歌名"));
+        String bad = "{\"ids\":[\"" + id + "\",\"00000000-0000-0000-0000-000000000000\"],\"artist\":\"不应保存\"}";
+        mvc.perform(patch("/api/music/tracks/metadata").header("Authorization", AUTH).contentType("application/json").content(bad)).andExpect(status().isNotFound());
+        assertEquals("歌手", library.get(id).getArtist());
+        var image = new java.awt.image.BufferedImage(1, 1, java.awt.image.BufferedImage.TYPE_INT_RGB);
+        var out = new java.io.ByteArrayOutputStream(); javax.imageio.ImageIO.write(image, "png", out); byte[] png = out.toByteArray();
+        mvc.perform(multipart("/api/music/tracks/" + id + "/artwork").file(new MockMultipartFile("file", "cover.png", "image/png", png)).header("Authorization", AUTH)).andExpect(status().isNoContent());
+        mvc.perform(get("/api/music/tracks/" + id + "/artwork").header("Authorization", AUTH)).andExpect(status().isOk()).andExpect(content().bytes(png));
+        mvc.perform(get("/api/music/tracks/" + id + "/audio").header("Authorization", AUTH)).andExpect(content().bytes(audio("edit.wav").getBytes()));
+        mvc.perform(delete("/api/music/tracks/" + id + "/artwork").header("Authorization", AUTH)).andExpect(status().isNoContent());
+        mvc.perform(get("/api/music/tracks/" + id + "/artwork").header("Authorization", AUTH)).andExpect(status().isNoContent());
+        mvc.perform(delete("/api/music/tracks/" + id).header("Authorization", AUTH)).andExpect(status().isNoContent());
     }
 
     @Test void browserUploadsAndDeletesRequireTrustedOrigin() throws Exception {
@@ -82,6 +106,7 @@ class MusicIntegrationTest {
                 .header("Origin", "https://example.test").header("X-Requested-With", "XMLHttpRequest"))
                 .andExpect(status().isCreated()).andReturn();
         String id = com.alibaba.fastjson.JSON.parseObject(saved.getResponse().getContentAsString()).getString("id");
+        mvc.perform(get("/api/music/tracks/" + id + "/artwork").cookie(cookie)).andExpect(status().isNoContent());
         mvc.perform(get("/api/music/tracks/" + id + "/audio").cookie(cookie)).andExpect(status().isOk());
         mvc.perform(delete("/api/music/tracks/" + id).cookie(cookie).header("Origin", "https://evil.test"))
                 .andExpect(status().isForbidden());

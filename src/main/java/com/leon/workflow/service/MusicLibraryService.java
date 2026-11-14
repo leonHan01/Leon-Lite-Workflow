@@ -10,6 +10,8 @@ import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.io.IOException;
+import java.io.ByteArrayInputStream;
+import javax.imageio.ImageIO;
 import java.nio.file.*;
 import java.security.DigestInputStream;
 import java.security.MessageDigest;
@@ -56,6 +58,68 @@ public class MusicLibraryService {
     public MusicTrack get(String id) {
         if (id == null || !id.matches("[0-9a-f-]{36}")) throw missing();
         return tracks.findById(id).orElseThrow(MusicLibraryService::missing);
+    }
+
+    public record MetadataEdit(List<String> ids, String title, String artist, String album) {}
+
+    @Transactional
+    public List<MusicTrack> editMetadata(MetadataEdit edit) {
+        if (edit == null || edit.ids() == null || edit.ids().isEmpty() || edit.ids().size() > 100
+                || new HashSet<>(edit.ids()).size() != edit.ids().size())
+            throw new IllegalArgumentException("请选择 1 到 100 首不同的歌曲");
+        if (edit.title() == null && edit.artist() == null && edit.album() == null)
+            throw new IllegalArgumentException("请至少修改一个字段");
+        String title = edit.title() == null ? null : editLabel(edit.title());
+        String artist = edit.artist() == null ? null : editLabel(edit.artist());
+        String album = edit.album() == null ? null : editLabel(edit.album());
+        List<MusicTrack> result = new ArrayList<>();
+        for (String id : edit.ids()) {
+            MusicTrack track = get(id);
+            if (title != null) track.setTitle(title);
+            if (artist != null) track.setArtist(artist);
+            if (album != null) track.setAlbum(album);
+            result.add(track);
+        }
+        return tracks.saveAll(result);
+    }
+
+    private static String editLabel(String value) {
+        String cleaned = value.replaceAll("[\\p{Cntrl}]", " ").strip();
+        if (cleaned.isEmpty() || cleaned.length() > 240)
+            throw new IllegalArgumentException("名称不能为空且不能超过 240 个字符");
+        return cleaned;
+    }
+
+    @Transactional
+    public void setArtwork(String id, MultipartFile image) throws IOException {
+        MusicTrack track = get(id);
+        if (image.isEmpty() || image.getSize() > 2 * 1024 * 1024)
+            throw new IllegalArgumentException("封面不能为空且不能超过 2 MB");
+        byte[] bytes = image.getBytes();
+        try (var stream = ImageIO.createImageInputStream(new ByteArrayInputStream(bytes))) {
+            var readers = ImageIO.getImageReaders(stream);
+            if (!readers.hasNext()) throw new IllegalArgumentException("封面必须是 JPEG 或 PNG");
+            var reader = readers.next();
+            try {
+                String format = reader.getFormatName().toLowerCase(Locale.ROOT);
+                if (!format.equals("jpeg") && !format.equals("png")) throw new IllegalArgumentException("封面必须是 JPEG 或 PNG");
+                reader.setInput(stream, true, true);
+                int width = reader.getWidth(0), height = reader.getHeight(0);
+                if (width <= 0 || height <= 0 || (long) width * height > 16_000_000 || reader.read(0) == null)
+                    throw new IllegalArgumentException("封面尺寸无效");
+                track.setCustomArtwork(bytes);
+                track.setCustomArtworkType(format.equals("png") ? "image/png" : "image/jpeg");
+            } finally { reader.dispose(); }
+        }
+        tracks.save(track);
+    }
+
+    @Transactional
+    public void clearArtwork(String id) {
+        MusicTrack track = get(id);
+        track.setCustomArtwork(null);
+        track.setCustomArtworkType(null);
+        tracks.save(track);
     }
 
     @Transactional

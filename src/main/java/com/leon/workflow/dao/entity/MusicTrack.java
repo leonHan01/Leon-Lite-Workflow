@@ -1,6 +1,7 @@
 package com.leon.workflow.dao.entity;
 
 import jakarta.persistence.*;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.Data;
 import java.time.Instant;
 
@@ -18,4 +19,6 @@ public class MusicTrack {
     private long size;
     private double duration;
     private Instant uploadedAt;
+    @Lob @JsonIgnore private byte[] customArtwork;
+    @JsonIgnore private String customArtworkType;
 }

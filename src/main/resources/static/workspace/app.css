@@ -157,6 +157,9 @@
 .music-table { width: 100%; border-collapse: collapse; text-align: left; }
 .music-table th,.music-table td { border-bottom: 1px solid #e3e9e5; padding: 10px 8px; }
 .music-table strong,.music-table small { display: block; max-width: 260px; overflow-wrap: anywhere; }
+.music-cover-heading,.music-cover-cell { width: 48px; }
+.music-cover { display: grid; place-items: center; position: relative; width: 44px; height: 44px; overflow: hidden; border-radius: 7px; background: #eaf0ed; color: #84978b; font-size: 21px; }
+.music-cover img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .music-table audio { display: block; width: clamp(360px, 30vw, 640px); height: 34px; }
 .music-content select { padding: 10px; border: 1px solid #cad8d0; border-radius: 8px; background: white; max-width: 100%; min-width: 0; }
 .music-collection { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 18px; align-items: start; }

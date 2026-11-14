@@ -45,6 +45,10 @@ const server = http.createServer((req, res) => {
             playlistWrites++; res.end(JSON.stringify(list));
         }); return;
     }
+    if (url.pathname.endsWith('/artwork')) {
+        if (url.pathname.includes(id)) { res.writeHead(200, { 'Content-Type': 'image/png' }); return res.end(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aV8AAAAASUVORK5CYII=', 'base64')); }
+        res.writeHead(204); return res.end();
+    }
     if (url.pathname === '/api/music/tracks' && req.method === 'POST') {
         assert.equal(req.headers['x-requested-with'], 'XMLHttpRequest');
         assert.match(req.headers['content-type'], /^multipart\/form-data; boundary=/);
@@ -116,7 +120,9 @@ const server = http.createServer((req, res) => {
         await page.getByText('已上传 1 首。').waitFor();
         assert.equal(await page.locator('[data-tracks] strong').innerText(), '<b>song</b>');
         assert.equal(await page.locator('[data-tracks] strong b').count(), 0, 'song metadata must be text');
-        assert.equal(await page.locator('audio').getAttribute('preload'), 'none');
+        await page.locator('.music-cover.has-image').waitFor();
+        assert.equal(await page.locator('.music-cover img').getAttribute('src'), `/api/music/tracks/${id}/artwork`);
+        assert.equal(await page.locator('audio').count(), 0, 'audio is attached only when preview is requested');
         assert.deepEqual(playlists[0].trackIds, [id], 'upload can join a server playlist');
         const secondList = await createPlaylist('通勤');
         const card = value => page.locator(`[data-playlist-id="${value}"]`);
@@ -383,6 +389,8 @@ const server = http.createServer((req, res) => {
         const abandoned = await filesTransfer(['cancel.mp3']);
         await page.locator('.music-content').dispatchEvent('dragenter', { dataTransfer: abandoned });
         await page.keyboard.press('Escape'); assert.ok(await page.locator('[data-file-drop]').isHidden()); await abandoned.dispose();
+        await page.evaluate(() => { HTMLMediaElement.prototype.play = () => new Promise(() => {}); });
+        await page.locator('[data-tracks] button').filter({ hasText: '▶ 播放' }).first().click();
         for (const width of [2200, 1440, 800, 390]) {
             await page.setViewportSize({ width, height: 900 });
             const audioWidth = (await page.locator('[data-tracks] audio').first().boundingBox()).width;
