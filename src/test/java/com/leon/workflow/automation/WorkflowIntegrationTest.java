@@ -70,17 +70,68 @@ class WorkflowIntegrationTest {
         mvc.perform(get("/api/workflows/capabilities").cookie(cookie)).andExpect(status().isOk()).andExpect(jsonPath("$.runtimes.javascript").exists()).andExpect(jsonPath("$.runtimes.groovy").exists());
         mvc.perform(get("/workflows.html").cookie(cookie)).andExpect(status().isOk());
     }
+    @Test void newWorkflowsContainProtectedTerminalsAndRejectMissingOrDuplicateTerminalsOnSave() throws Exception {
+        var workflow = request(post("/api/workflows").content(write(Map.of("name", "起止节点"))));
+        String id = text(workflow.get("id"));
+        var graph = WorkflowGraph.parse(workflow.get("definition"));
+        assertEquals(List.of("start", "end"), graph.nodes().stream().map(WorkflowGraph.Node::type).toList());
+        for (var nodes : List.of(List.of(node("start", "start", Map.of()), node("action", "http", Map.of())),
+                List.of(node("action", "http", Map.of()), node("end", "end", Map.of())),
+                List.of(node("start", "start", Map.of()), node("extra", "start", Map.of()), node("end", "end", Map.of())),
+                List.of(node("start", "start", Map.of()), node("end", "end", Map.of()), node("extra", "end", Map.of())),
+                List.of(node("start", "start", Map.of()), node("end", "end", Map.of()), node("extra", "manual", Map.of())))) {
+            mvc.perform(put("/api/workflows/" + id).cookie(cookie).header("Origin", "https://example.test").header("X-Requested-With", "XMLHttpRequest")
+                    .contentType(MediaType.APPLICATION_JSON).content(write(Map.of("name", "起止节点", "revision", 1, "definition", new WorkflowGraph(nodes, List.of())))))
+                    .andExpect(status().isBadRequest()).andExpect(jsonPath("$.message").exists());
+        }
+        assertEquals(1L, store.get(id).get("revision"));
+        request(post("/api/workflows/" + id + "/publish").content(write(Map.of("revision", 1))));
+        var run = await(text(engine.start(id, empty()).get("id")));
+        assertEquals("SUCCEEDED", run.get("status")); assertEquals(empty(), run.get("output"));
+        @SuppressWarnings("unchecked") var steps = (List<Map<String, Object>>) run.get("nodes");
+        assertEquals(List.of("start", "end"), steps.stream().map(n -> text(n.get("type"))).toList());
+        assertTrue(steps.stream().allMatch(n -> "SUCCEEDED".equals(n.get("status"))));
+    }
+    @Test void bothIfOutcomesExecuteTheSharedEndExactlyOnceAndKeepTheirOutput() throws Exception {
+        var graph = new WorkflowGraph(List.of(node("start", "start", Map.of()), node("check", "if", Map.of("left", "{{ input.items[0].json.flag }}", "operator", "truthy")), node("end", "end", Map.of())),
+                List.of(edge("start", "check", ""), new WorkflowGraph.Edge("true_end", "check", "end", "true"), new WorkflowGraph.Edge("false_end", "check", "end", "false")));
+        var workflow = createPublished(graph);
+        for (boolean flag : List.of(true, false)) {
+            var input = Map.<String, Object>of("items", List.of(Map.of("json", Map.of("flag", flag))));
+            var run = await(text(engine.start(text(workflow.get("id")), input).get("id")));
+            assertEquals("SUCCEEDED", run.get("status")); assertEquals(input, run.get("output"));
+            @SuppressWarnings("unchecked") var steps = (List<Map<String, Object>>) run.get("nodes");
+            assertEquals(3, steps.size()); assertTrue(steps.stream().allMatch(n -> "SUCCEEDED".equals(n.get("status"))));
+        }
+    }
+    @Test void legacyDraftsAndPublishedVersionsGainTerminalsWithoutRewritingHistory() throws Exception {
+        var legacy = new WorkflowGraph(List.of(node("entry", "manual", Map.of())), List.of());
+        String original = write(legacy), id = text(store.create("旧工作流").get("id"));
+        jdbc.update("UPDATE automation_workflow SET draft=?,published_version=1 WHERE id=?", original, id);
+        jdbc.update("INSERT INTO automation_version(workflow_id,version,definition,runtimes,created_at) VALUES(?,1,?,'{}',?)", id, original, System.currentTimeMillis());
+        String history = store.createRun(id, 1, legacy, empty()); store.finish(history, "SUCCEEDED", empty(), null);
+        var adapted = WorkflowGraph.parse(store.get(id).get("definition"));
+        assertEquals("entry", adapted.nodes().getFirst().id()); assertEquals("start", adapted.nodes().getFirst().type());
+        var run = await(text(engine.start(id, empty()).get("id")));
+        assertEquals("SUCCEEDED", run.get("status")); assertEquals(2, ((List<?>) run.get("nodes")).size());
+        assertEquals(2, WorkflowGraph.parse(run.get("definition")).nodes().size());
+        assertEquals(original, write(store.run(history).get("definition"))); assertEquals(1, ((List<?>)store.run(history).get("nodes")).size());
+        assertEquals(original, jdbc.queryForObject("SELECT definition FROM automation_version WHERE workflow_id=? AND version=1", String.class, id));
+        store.save(id, "旧工作流", adapted, 1);
+        assertEquals(adapted, WorkflowGraph.parse(read(jdbc.queryForObject("SELECT draft FROM automation_workflow WHERE id=?", String.class, id))));
+        assertEquals(1, store.versions(id).size());
+    }
     @Test void publishedMixedLanguageWorkflowRunsHttpAndOnlyTheSelectedBranchDespiteDraftChanges() throws Exception {
         int requests = skippedRequests.get();
-        var nodes = List.of(node("start", "manual", Map.of()), node("http", "http", Map.of("method", "GET", "url", base + "/data")),
+        var nodes = List.of(node("start", "start", Map.of()), node("http", "http", Map.of("method", "GET", "url", base + "/data")),
                 script("js", "javascript", "function main(i,c) { console.log('js-step'); return {items:[{json:{...i.items[0].json.body,amount:i.items[0].json.body.amount + c.params.increment}}]}; }", Map.of("increment", 5)),
                 script("groovy", "groovy", "def main(Map i,Map c) { println 'groovy-step'; return [items:i.items.collect{[json:it.json+[amount:it.json.amount*2]]}]}"),
                 node("check", "if", Map.of("left", "{{ input.items[0].json.amount }}", "operator", "gte", "right", 200)),
-                script("yes", "javascript", "function main(i,c){ return i; }"), node("no", "http", Map.of("method", "POST", "url", base + "/skipped")));
-        var graph = new WorkflowGraph(nodes, List.of(edge("start", "http", ""), edge("http", "js", ""), edge("js", "groovy", ""), edge("groovy", "check", ""), edge("check", "yes", "true"), edge("check", "no", "false")));
+                script("yes", "javascript", "function main(i,c){ return i; }"), node("no", "http", Map.of("method", "POST", "url", base + "/skipped")), node("end", "end", Map.of()));
+        var graph = new WorkflowGraph(nodes, List.of(edge("start", "http", ""), edge("http", "js", ""), edge("js", "groovy", ""), edge("groovy", "check", ""), edge("check", "yes", "true"), edge("check", "no", "false"), edge("yes", "end", ""), edge("no", "end", "")));
         Map<String, Object> workflow = createPublished(graph);
         String id = text(workflow.get("id"));
-        var changed = new WorkflowGraph(List.of(node("start", "manual", Map.of()), script("bad", "javascript", "function main(i,c){ throw Error('draft must not run'); }")), List.of(edge("start", "bad", "")));
+        var changed = new WorkflowGraph(List.of(node("start", "start", Map.of()), script("bad", "javascript", "function main(i,c){ throw Error('draft must not run'); }"), node("end", "end", Map.of())), List.of(edge("start", "bad", ""), edge("bad", "end", "")));
         store.save(id, "未发布修改", changed, ((Number) workflow.get("revision")).longValue());
         var started = request(post("/api/workflows/" + id + "/runs").content(write(Map.of("input", empty()))));
         var run = await(text(started.get("id")));
@@ -89,29 +140,29 @@ class WorkflowIntegrationTest {
         @SuppressWarnings("unchecked") var steps = (List<Map<String, Object>>) run.get("nodes");
         assertEquals("SKIPPED", steps.stream().filter(n -> n.get("nodeId").equals("no")).findFirst().orElseThrow().get("status"));
         assertTrue(steps.stream().anyMatch(n -> text(n.get("logs")).contains("groovy-step"))); assertEquals(requests, skippedRequests.get());
-        mvc.perform(get("/api/workflows/runs/" + run.get("id")).cookie(cookie)).andExpect(status().isOk()).andExpect(jsonPath("$.definition.nodes.length()").value(7));
+        mvc.perform(get("/api/workflows/runs/" + run.get("id")).cookie(cookie)).andExpect(status().isOk()).andExpect(jsonPath("$.definition.nodes.length()").value(8));
     }
     @Test void rejectsInvalidPublishingAndStaleDraftsButAllowsIncompleteDrafts() throws Exception {
         var workflow = store.create("未连接草稿"); String id = text(workflow.get("id"));
-        var disconnected = new WorkflowGraph(List.of(node("start", "manual", Map.of()), script("other", "javascript", "function main(i,c){return i;}")), List.of());
+        var disconnected = new WorkflowGraph(List.of(node("start", "start", Map.of()), script("other", "javascript", "function main(i,c){return i;}"), node("end", "end", Map.of())), List.of());
         store.save(id, "未连接草稿", disconnected, 1);
         assertThrows(IllegalArgumentException.class, () -> store.publish(id, 2, write(engine.runtimes())));
         assertThrows(org.springframework.web.server.ResponseStatusException.class, () -> store.save(id, "过期", disconnected, 1));
         var cycle = new WorkflowGraph(disconnected.nodes(), List.of(edge("start", "other", ""), edge("other", "start", "")));
         assertThrows(IllegalArgumentException.class, cycle::validate);
-        var unsupported = new WorkflowGraph(List.of(node("start", "manual", Map.of()), script("other", "python", "pass")), List.of(edge("start", "other", "")));
+        var unsupported = new WorkflowGraph(List.of(node("start", "start", Map.of()), script("other", "python", "pass"), node("end", "end", Map.of())), List.of(edge("start", "other", ""), edge("other", "end", "")));
         assertThrows(IllegalArgumentException.class, unsupported::validate);
         mvc.perform(post("/api/workflows/" + id + "/publish").cookie(cookie).header("Origin", "https://example.test").header("X-Requested-With", "XMLHttpRequest").contentType(MediaType.APPLICATION_JSON).content("{\"revision\":2}"))
                 .andExpect(status().isBadRequest()).andExpect(jsonPath("$.message").exists());
     }
     @Test void recordsScriptFailuresRedactsSecretsAndCanCancelRunningProcesses() throws Exception {
-        var graph = new WorkflowGraph(List.of(node("start", "manual", Map.of()), script("bad", "javascript", "function main(i,c){console.log('失败前日志',i.items[0].json.token);throw Error(i.items[0].json.token);}"), script("last", "groovy", "def main(Map i,Map c){return i}")), List.of(edge("start", "bad", ""), edge("bad", "last", "")));
+        var graph = new WorkflowGraph(List.of(node("start", "start", Map.of()), script("bad", "javascript", "function main(i,c){console.log('失败前日志',i.items[0].json.token);throw Error(i.items[0].json.token);}"), script("last", "groovy", "def main(Map i,Map c){return i}"), node("end", "end", Map.of())), List.of(edge("start", "bad", ""), edge("bad", "last", ""), edge("last", "end", "")));
         var workflow = createPublished(graph);
         var input = Map.<String, Object>of("items", List.of(Map.of("json", Map.of("token", "example-private-token"))));
         var run = await(text(engine.start(text(workflow.get("id")), input).get("id")));
         assertEquals("FAILED", run.get("status")); assertFalse(write(run).contains("example-private-token")); assertTrue(text(run.get("error")).contains("[已隐藏]"));
         assertTrue(write(run).contains("失败前日志"));
-        var loop = new WorkflowGraph(List.of(node("start", "manual", Map.of()), script("loop", "groovy", "def main(Map i,Map c){while(true){}}")), List.of(edge("start", "loop", "")));
+        var loop = new WorkflowGraph(List.of(node("start", "start", Map.of()), script("loop", "groovy", "def main(Map i,Map c){while(true){}}"), node("end", "end", Map.of())), List.of(edge("start", "loop", ""), edge("loop", "end", "")));
         var runningWorkflow = createPublished(loop);
         var running = engine.start(text(runningWorkflow.get("id")), empty());
         String runId = text(running.get("id"));
@@ -138,8 +189,8 @@ class WorkflowIntegrationTest {
         assertEquals("FAILED", store.run(id).get("status"));
     }
     @Test void scheduledRunsUsePublishedVersionsAndCarryTheirPlannedTimeWithoutDuplicateClaims() throws Exception {
-        var graph = new WorkflowGraph(List.of(node("start", "manual", Map.of()), script("js", "javascript", "function main(i,c){return {items:[{json:{value:i.items[0].json.value+1}}]};}"),
-                script("groovy", "groovy", "def main(Map i,Map c){return [items:[[json:[value:i.items[0].json.value*2]]]]}")), List.of(edge("start", "js", ""), edge("js", "groovy", "")));
+        var graph = new WorkflowGraph(List.of(node("start", "start", Map.of()), script("js", "javascript", "function main(i,c){return {items:[{json:{value:i.items[0].json.value+1}}]};}"),
+                script("groovy", "groovy", "def main(Map i,Map c){return [items:[[json:[value:i.items[0].json.value*2]]]]}"), node("end", "end", Map.of())), List.of(edge("start", "js", ""), edge("js", "groovy", ""), edge("groovy", "end", "")));
         var workflow = createPublished(graph); String id = text(workflow.get("id"));
         var config = schedules.save(id, schedule(true, 0), java.time.Instant.now());
         java.time.Instant due = java.time.Instant.parse(text(config.get("nextRunAt")));

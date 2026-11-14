@@ -3,7 +3,7 @@ const templates = {
     javascript: `function main(input, ctx) {\n  return {\n    items: input.items.map(item => ({\n      json: { ...item.json, name: String(item.json.name ?? '').toUpperCase() }\n    }))\n  };\n}`,
     groovy: `def main(Map input, Map ctx) {\n    return [items: input.items.collect { item ->\n        [json: item.json + [name: (item.json.name ?: '').toUpperCase()]]\n    }]\n}`,
 };
-const labels = { manual: '手动触发', http: 'HTTP 请求', script: '脚本', if: '条件判断' };
+const labels = { start: '开始', end: '结束', http: 'HTTP 请求', script: '脚本', if: '条件判断' };
 const statuses = { QUEUED: '排队中', PENDING: '等待', RUNNING: '运行中', SUCCEEDED: '成功', FAILED: '失败', CANCELLED: '已取消', SKIPPED: '已跳过' };
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const pretty = value => JSON.stringify(value, null, 2);
@@ -20,6 +20,8 @@ export function mount(pane, workspace) {
     if (!document.getElementById('workflow-runs-css')) { const link = document.createElement('link'); link.id = 'workflow-runs-css'; link.rel = 'stylesheet'; link.href = '/workspace/workflow-runs.css'; document.head.append(link); }
     const $ = selector => pane.querySelector(selector);
     let workflows = [], workflow = null, graph = null, selected = null, connecting = null;
+    const MAX_POSITION = 50000;
+    let zoom = 1, world = { width: 2400, height: 1600 }, focused = false, focusPanels = null;
     let dirty = false, busy = false, active = false, initialized = false, timer = null, currentRun = null, capabilities = {}, credentials = [], schedule = null;
     const notice = (message, error = false) => {
         $('[data-notice]').textContent = message; $('[data-notice]').classList.toggle('is-error', error);
@@ -56,7 +58,8 @@ export function mount(pane, workspace) {
     }
     async function loadList() { workflows = await api(); picker(); }
     async function load(id) {
-        clearTimeout(timer); currentRun = null;
+        clearTimeout(timer); currentRun = null; zoom = 1; world = { width: 2400, height: 1600 };
+        $('.wf-canvas-scroll').scrollTo(0, 0);
         workflow = await api('/' + encodeURIComponent(id)); graph = structuredClone(workflow.definition);
         graph.nodes ??= []; graph.edges ??= []; selected = graph.nodes[0]?.id || null; dirty = false; connecting = null;
         $('[data-editor]').hidden = false; $('[data-name]').value = workflow.name;
@@ -101,24 +104,67 @@ export function mount(pane, workspace) {
     function selectNode(id) { commitInspector(); selected = id; connecting = null; renderCanvas(); inspector(); }
     function nodeStyle(node) {
         const requested = node.type === 'script' ? (node.config?.language === 'groovy' ? 'groovy' : 'script') : node.type;
-        const kind = ['manual', 'http', 'script', 'groovy', 'if'].includes(requested) ? requested : 'script';
-        return { kind, icon: ({ manual: '▶', http: '↗', script: 'JS', groovy: 'G', if: '⑂' })[kind], label: node.type === 'script' ? (node.config.language === 'groovy' ? 'Groovy' : 'JavaScript') : labels[node.type] };
+        const kind = ['start', 'end', 'http', 'script', 'groovy', 'if'].includes(requested) ? requested : 'script';
+        return { kind, icon: ({ start: '▶', end: '■', http: '↗', script: 'JS', groovy: 'G', if: '⑂' })[kind], label: node.type === 'script' ? (node.config.language === 'groovy' ? 'Groovy' : 'JavaScript') : labels[node.type] };
     }
     function renderCanvas() {
         if (!graph) return;
         const runNodes = new Map((currentRun?.nodes || []).map(n => [n.nodeId, n.status]));
         $('[data-nodes]').innerHTML = graph.nodes.map(node => {
             const style = nodeStyle(node), status = runNodes.get(node.id), position = node.position || { x: 60, y: 100 };
-            const x = Math.max(15, Math.min(1250, Number(position.x) || 60)), y = Math.max(20, Math.min(850, Number(position.y) || 100));
+            const x = Math.max(15, Math.min(MAX_POSITION, Number(position.x) || 60)), y = Math.max(20, Math.min(MAX_POSITION, Number(position.y) || 100));
             return `<div class="wf-node ${node.type === 'if' ? 'is-if' : ''} ${selected === node.id ? 'is-selected' : ''} ${status ? 'status-' + esc(status) : ''}" data-node="${esc(node.id)}" style="left:${x}px;top:${y}px" tabindex="0" role="button" aria-label="配置节点 ${esc(node.name)}">
-                ${node.type !== 'manual' ? `<button type="button" class="wf-port wf-port-in" data-target="${esc(node.id)}" aria-label="连接到 ${esc(node.name)}"></button>` : ''}
+                ${node.type !== 'start' ? `<button type="button" class="wf-port wf-port-in" data-target="${esc(node.id)}" aria-label="连接到 ${esc(node.name)}"></button>` : ''}
                 <div class="wf-node-head" data-drag="${esc(node.id)}"><b class="wf-icon wf-${style.kind}">${style.icon}</b><div><span class="wf-node-name">${esc(node.name)}</span><span class="wf-node-type">${esc(style.label)}</span></div></div>
                 <div class="wf-node-foot"><span>${esc(node.id)}</span><span>${esc(statuses[status] || '')}</span></div>
-                ${(node.type === 'if' ? ['true', 'false'] : ['']).map(branch => `<button type="button" class="wf-port wf-port-out ${connecting?.source === node.id && connecting?.branch === branch ? 'is-connecting' : ''}" data-source="${esc(node.id)}" data-branch="${branch}" aria-label="${esc(node.name)} ${branch || '默认'}出口"></button>${branch ? `<span class="wf-branch-label ${branch}">${branch}</span>` : ''}`).join('')}
+                ${(node.type === 'end' ? [] : node.type === 'if' ? ['true', 'false'] : ['']).map(branch => `<button type="button" class="wf-port wf-port-out ${connecting?.source === node.id && connecting?.branch === branch ? 'is-connecting' : ''}" data-source="${esc(node.id)}" data-branch="${branch}" aria-label="${esc(node.name)} ${branch || '默认'}出口"></button>${branch ? `<span class="wf-branch-label ${branch}">${branch}</span>` : ''}`).join('')}
             </div>`;
         }).join('');
-        lines();
-        $('[data-canvas-hint]').textContent = connecting ? '正在连线：点击目标节点左侧圆点，或按 Esc 取消' : '点击节点配置 · 拖动标题移动 · 支持 true / false 分支';
+        syncWorld(); lines();
+        $('[data-canvas-hint]').textContent = connecting ? '正在连线：点击目标节点左侧圆点，或按 Esc 取消' : '拖拽空白移动 · Ctrl/⌘+滚轮缩放';
+    }
+    function syncWorld() {
+        const scroll = $('.wf-canvas-scroll'), canvas = $('.wf-canvas'), stage = $('.wf-canvas-stage');
+        for (const node of graph?.nodes || []) {
+            world.width = Math.max(world.width, (Number(node.position?.x) || 60) + 700);
+            world.height = Math.max(world.height, (Number(node.position?.y) || 100) + 500);
+        }
+        const width = Math.max(world.width, scroll.clientWidth / zoom), height = Math.max(world.height, scroll.clientHeight / zoom);
+        canvas.style.width = width + 'px'; canvas.style.height = height + 'px'; canvas.style.transform = `scale(${zoom})`;
+        stage.style.width = width * zoom + 'px'; stage.style.height = height * zoom + 'px';
+        $('[data-zoom]').textContent = Math.round(zoom * 100) + '%';
+    }
+    function setZoom(value, point) {
+        const scroll = $('.wf-canvas-scroll'), old = zoom;
+        const anchor = point || { x: scroll.clientWidth / 2, y: scroll.clientHeight / 2 };
+        const x = (scroll.scrollLeft + anchor.x) / old, y = (scroll.scrollTop + anchor.y) / old;
+        zoom = Math.max(.05, Math.min(2, Math.round(value * 100) / 100)); syncWorld();
+        scroll.scrollLeft = x * zoom - anchor.x; scroll.scrollTop = y * zoom - anchor.y;
+    }
+    function fitView() {
+        if (!graph?.nodes.length) return;
+        const scroll = $('.wf-canvas-scroll');
+        const positions = graph.nodes.map(n => ({ x: Number(n.position?.x) || 60, y: Number(n.position?.y) || 100 }));
+        const left = Math.min(...positions.map(p => p.x)), top = Math.min(...positions.map(p => p.y));
+        const width = Math.max(...positions.map(p => p.x + 208)) - left, height = Math.max(...positions.map(p => p.y + 130)) - top;
+        setZoom(Math.min((scroll.clientWidth - 80) / Math.max(width, 208), (scroll.clientHeight - 80) / Math.max(height, 130), 1.25));
+        scroll.scrollLeft = Math.max(0, (left + width / 2) * zoom - scroll.clientWidth / 2);
+        scroll.scrollTop = Math.max(0, (top + height / 2) * zoom - scroll.clientHeight / 2);
+    }
+    function panel(kind, hidden) {
+        const layout = $('.wf-layout'); layout.classList.toggle('is-' + kind + '-hidden', hidden);
+        const button = $(`[data-view="${kind}"]`);
+        button.setAttribute('aria-pressed', String(!hidden)); button.setAttribute('aria-label', (hidden ? '展开' : '收起') + (kind === 'library' ? '节点库' : '节点配置'));
+        requestAnimationFrame(syncWorld);
+    }
+    function focus(value) {
+        if (focused === value) return;
+        focused = value; $('[data-editor]').classList.toggle('is-focused', value); document.body.classList.toggle('wf-focus-open', value);
+        if (value) {
+            focusPanels = { library: $('.wf-layout').classList.contains('is-library-hidden'), inspector: $('.wf-layout').classList.contains('is-inspector-hidden') };
+            panel('library', true); panel('inspector', true);
+        } else if (focusPanels) { panel('library', focusPanels.library); panel('inspector', focusPanels.inspector); focusPanels = null; }
+        requestAnimationFrame(syncWorld);
     }
     function lines() {
         $('[data-lines]').innerHTML = graph.edges.map(edge => {
@@ -130,9 +176,10 @@ export function mount(pane, workspace) {
         }).join('');
     }
     function connectionFields(node) {
+        if (node.type === 'end') return '';
         return (node.type === 'if' ? ['true', 'false'] : ['']).map(branch => {
             const edge = graph.edges.find(e => e.source === node.id && (e.branch || '') === branch);
-            return field(branch ? `${branch} 分支` : '下一个节点', `<select data-connect="${branch}"><option value="">结束流程</option>${graph.nodes.filter(n => n.id !== node.id && n.type !== 'manual').map(n => `<option value="${esc(n.id)}" ${edge?.target === n.id ? 'selected' : ''}>${esc(n.name)}</option>`).join('')}</select>`);
+            return field(branch ? `${branch} 分支` : '下一个节点', `<select data-connect="${branch}"><option value="">未连接（发布前必须连接）</option>${graph.nodes.filter(n => n.id !== node.id && n.type !== 'start').map(n => `<option value="${esc(n.id)}" ${edge?.target === n.id ? 'selected' : ''}>${esc(n.name)}</option>`).join('')}</select>`);
         }).join('');
     }
     function inspector() {
@@ -140,7 +187,8 @@ export function mount(pane, workspace) {
         if (!node) { $('[data-inspector]').innerHTML = '<div class="wf-empty">选择一个节点进行配置。</div>'; return; }
         const c = node.config ||= {}, style = nodeStyle(node);
         let content = field('节点名称', inputField('name', node.name, 'maxlength="80"'));
-        if (node.type === 'manual') content += '<p class="wf-help">点击右上角运行按钮，将下方输入 JSON 传入已发布的工作流。</p>';
+        if (node.type === 'start') content += '<p class="wf-help">流程唯一的开始节点，不能删除。手动运行或定时触发时，将运行输入传入后续节点。</p>';
+        if (node.type === 'end') content += '<p class="wf-help">流程唯一的结束节点，不能删除。所有执行分支必须连接到这里，上一个节点的数据作为流程最终输出。</p>';
         if (node.type === 'script') {
             content += field('脚本语言', select('language', c.language, [['javascript', 'JavaScript'], ['groovy', 'Groovy']]));
             content += '<p class="wf-help">入口 main(input, ctx)，返回 { items: [{ json: … }] }。网络请求请使用 HTTP 节点。</p>';
@@ -163,8 +211,8 @@ export function mount(pane, workspace) {
             content += '<p class="wf-help">例如：左侧 {{ input.items[0].json.amount }}，条件“大于或等于”，右侧 100。</p>';
         }
         if (['http', 'script'].includes(node.type)) content += field('超时（毫秒，100–30000）', inputField('timeoutMs', c.timeoutMs || 10000, 'type="number" min="100" max="30000" step="100"'));
-        content += `<h3 class="wf-section-label">连接出口</h3>${connectionFields(node)}`;
-        content += `<div class="wf-node-actions"><button type="button" data-action="test">调试此节点</button>${node.type !== 'manual' ? '<button type="button" class="wf-danger" data-action="delete-node">删除节点</button>' : ''}</div>`;
+        if (node.type !== 'end') content += `<h3 class="wf-section-label">连接出口</h3>${connectionFields(node)}`;
+        content += `<div class="wf-node-actions"><button type="button" data-action="test">调试此节点</button>${!['start', 'end'].includes(node.type) ? '<button type="button" class="wf-danger" data-action="delete-node">删除节点</button>' : ''}</div>`;
         $('[data-inspector]').innerHTML = `<h2>${esc(style.label)}</h2><div class="wf-node-id">${esc(node.id)}</div>${content}`;
         highlight(); controls();
     }
@@ -179,8 +227,10 @@ export function mount(pane, workspace) {
         pre.innerHTML = html + esc(code.slice(end)) + '\n'; pre.scrollTop = textarea.scrollTop; pre.scrollLeft = textarea.scrollLeft;
     }
     function connect(source, target, branch) {
-        if (source === target || graph.nodes.find(n => n.id === target)?.type === 'manual') throw new Error('不能连接到自身或触发节点');
-        if (graph.edges.some(e => e.target === target && !(e.source === source && (e.branch || '') === branch))) throw new Error('一期暂不支持多路汇合，请为分支添加独立节点');
+        const sourceNode = graph.nodes.find(n => n.id === source), targetNode = graph.nodes.find(n => n.id === target);
+        if (sourceNode?.type === 'end') throw new Error('结束节点不能有出口');
+        if (source === target || targetNode?.type === 'start') throw new Error('不能连接到自身或开始节点');
+        if (targetNode?.type !== 'end' && graph.edges.some(e => e.target === target && !(e.source === source && (e.branch || '') === branch))) throw new Error('仅结束节点支持多路汇入，请为分支添加独立处理节点');
         const edges = graph.edges.filter(e => !(e.source === source && (e.branch || '') === branch));
         const seen = new Set(), queue = target ? [target] : [];
         while (queue.length) {
@@ -192,19 +242,29 @@ export function mount(pane, workspace) {
     }
     function add(kind) {
         if (!workflow) return notice('请先新建工作流。', true);
-        commitInspector(); if (graph.nodes.length >= 64) throw new Error('一个流程最多包含 64 个节点');
+        commitInspector(); const maxNodes = capabilities.maxNodes || 65;
+        if (graph.nodes.length >= maxNodes) throw new Error(`一个流程最多包含 ${maxNodes} 个节点`);
         const parent = graph.nodes.find(n => n.id === selected), id = 'n_' + crypto.randomUUID().replaceAll('-', '').slice(0, 10);
+        if (parent?.type === 'end') throw new Error('请选择开始或处理节点，再添加后续节点');
+        const end = graph.nodes.find(n => n.type === 'end');
         const type = ['javascript', 'groovy'].includes(kind) ? 'script' : kind;
         const config = type === 'script' ? { language: kind, source: templates[kind], sources: { [kind]: templates[kind] }, params: {}, timeoutMs: 10000 }
             : type === 'http' ? { method: 'GET', url: '', headers: {}, body: null, timeoutMs: 10000, failOnHttpError: true }
             : { left: '{{ input.items[0].json.amount }}', operator: 'gte', right: 100 };
         const node = { id, type, name: kind === 'groovy' ? 'Groovy 脚本' : kind === 'javascript' ? 'JavaScript 脚本' : labels[type], config,
-            position: { x: Math.min(1200, (parent?.position?.x || 60) + 280), y: parent?.position?.y || 140 } };
+            position: { x: Math.min(MAX_POSITION - 300, (parent?.position?.x || 60) + 280), y: parent?.position?.y || 140 } };
         graph.nodes.push(node);
         if (parent) {
-            const branch = (parent.type === 'if' ? ['true', 'false'] : ['']).find(b => !graph.edges.some(e => e.source === parent.id && (e.branch || '') === b));
-            if (branch !== undefined) graph.edges.push({ id: 'e_' + crypto.randomUUID(), source: parent.id, target: id, branch });
-            if (branch === 'false') node.position.y = Math.min(800, node.position.y + 180);
+            const branch = (parent.type === 'if' ? ['true', 'false'] : ['']).find(b => !graph.edges.some(e => e.source === parent.id && (e.branch || '') === b && e.target !== end?.id));
+            if (branch !== undefined) {
+                graph.edges = graph.edges.filter(e => !(e.source === parent.id && (e.branch || '') === branch));
+                graph.edges.push({ id: 'e_' + crypto.randomUUID(), source: parent.id, target: id, branch });
+            }
+            if (branch === 'false') node.position.y = Math.min(MAX_POSITION, node.position.y + 180);
+        }
+        if (end) {
+            for (const branch of type === 'if' ? ['true', 'false'] : ['']) graph.edges.push({ id: 'e_' + crypto.randomUUID(), source: id, target: end.id, branch });
+            if (node.position.x + 240 > (end.position?.x || 0)) end.position = { x: Math.min(MAX_POSITION, node.position.x + 280), y: node.position.y };
         }
         selected = id; markDirty(); renderCanvas(); inspector();
         const element = pane.querySelector(`[data-node="${CSS.escape(id)}"]`); element?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
@@ -214,7 +274,7 @@ export function mount(pane, workspace) {
         const node = (id, type, name, x, y, config = {}) => ({ id, type, name, position: { x, y }, config });
         const js = `function main(input, ctx) {\n  console.log('JavaScript：金额加 5');\n  return {items: input.items.map(item => ({json: {...item.json, amount: Number(item.json.amount ?? 0) + 5}}))};\n}`;
         const groovy = `def main(Map input, Map ctx) {\n    println 'Groovy：金额翻倍'\n    return [items: input.items.collect { [json: it.json + [amount: (it.json.amount ?: 0) * 2]] }]\n}`;
-        graph = { nodes: [node('start', 'manual', '手动触发', 50, 160), node('clean', 'script', 'JavaScript 整理', 330, 160, { language: 'javascript', source: js, params: {}, timeoutMs: 10000 }), node('calculate', 'script', 'Groovy 计算', 610, 160, { language: 'groovy', source: groovy, params: {}, timeoutMs: 10000 }), node('check', 'if', '金额是否达标', 890, 160, { left: '{{ input.items[0].json.amount }}', operator: 'gte', right: 200 }), node('accepted', 'script', '达标分支', 1170, 70, { language: 'javascript', source: 'function main(input, ctx) { return input; }', params: {}, timeoutMs: 10000 }), node('rejected', 'script', '未达标分支', 1170, 330, { language: 'groovy', source: 'def main(Map input, Map ctx) { return input }', params: {}, timeoutMs: 10000 })], edges: [['start', 'clean', ''], ['clean', 'calculate', ''], ['calculate', 'check', ''], ['check', 'accepted', 'true'], ['check', 'rejected', 'false']].map(([source, target, branch], i) => ({ id: 'example_' + i, source, target, branch })) };
+        graph = { nodes: [node('start', 'start', '开始', 50, 160), node('clean', 'script', 'JavaScript 整理', 330, 160, { language: 'javascript', source: js, params: {}, timeoutMs: 10000 }), node('calculate', 'script', 'Groovy 计算', 610, 160, { language: 'groovy', source: groovy, params: {}, timeoutMs: 10000 }), node('check', 'if', '金额是否达标', 890, 160, { left: '{{ input.items[0].json.amount }}', operator: 'gte', right: 200 }), node('accepted', 'script', '达标分支', 1170, 70, { language: 'javascript', source: 'function main(input, ctx) { return input; }', params: {}, timeoutMs: 10000 }), node('rejected', 'script', '未达标分支', 1170, 330, { language: 'groovy', source: 'def main(Map input, Map ctx) { return input }', params: {}, timeoutMs: 10000 }), node('end', 'end', '结束', 1450, 160)], edges: [['start', 'clean', ''], ['clean', 'calculate', ''], ['calculate', 'check', ''], ['check', 'accepted', 'true'], ['check', 'rejected', 'false'], ['accepted', 'end', ''], ['rejected', 'end', '']].map(([source, target, branch], i) => ({ id: 'example_' + i, source, target, branch })) };
         selected = 'clean'; currentRun = null; markDirty(); renderCanvas(); inspector(); notice('双语言示例已载入。默认输入 120 → JavaScript 加 5 → Groovy 翻倍得到 250 → true 分支。');
     }
     function runInput() { try { return JSON.parse($('[data-input]').value); } catch { throw new Error('运行输入需要有效的 JSON'); } }
@@ -284,7 +344,7 @@ export function mount(pane, workspace) {
         publish: async () => { await save(); workflow = await send('/' + workflow.id + '/publish', { revision: workflow.revision }); controls(); notice(`版本 v${workflow.publishedVersion} 已发布。后续编辑不会影响该版本。`); },
         run: async () => { const run = await send('/' + workflow.id + '/runs', { input: runInput() }); showRun(run); await refreshRuns(); schedulePoll(); notice(`正在运行已发布版本 v${run.version}${dirty ? '；当前草稿修改不参与本次运行' : ''}。`); },
         test: async () => { commitInspector(); const node = graph.nodes.find(n => n.id === selected); const result = await send('/test-node', { node, input: runInput() }); $('[data-run-detail]').innerHTML = `<div class="wf-run-summary"><span>草稿节点调试 · ${esc(node.name)}</span><span>${result.durationMs} ms</span>${result.branch ? `<span>分支 ${esc(result.branch)}</span>` : ''}</div><h3>输出</h3><pre>${esc(pretty(result.output))}</pre><h3>日志</h3><pre>${esc(result.logs || '无日志')}</pre>`; notice('节点调试成功。'); },
-        'delete-node': () => { const node = graph.nodes.find(n => n.id === selected); if (node?.type === 'manual') return; graph.nodes = graph.nodes.filter(n => n.id !== selected); graph.edges = graph.edges.filter(e => e.source !== selected && e.target !== selected); selected = graph.nodes[0]?.id; markDirty(); renderCanvas(); inspector(); },
+        'delete-node': () => { const node = graph.nodes.find(n => n.id === selected); if (['start', 'end'].includes(node?.type)) return; graph.nodes = graph.nodes.filter(n => n.id !== selected); graph.edges = graph.edges.filter(e => e.source !== selected && e.target !== selected); selected = graph.nodes[0]?.id; markDirty(); renderCanvas(); inspector(); },
         'delete-workflow': async () => { if (!workflow || !confirm(`删除“${workflow.name}”？历史运行记录会保留。`)) return; await api('/' + workflow.id, { method: 'DELETE' }); workflow = null; graph = null; dirty = false; currentRun = null; clearTimeout(timer); $('[data-editor]').hidden = true; workspace.replace('/workflows.html'); await loadList(); if (workflows.length) await load(workflows[0].id); else notice('工作流已删除。'); },
         'refresh-runs': refreshRuns,
         'cancel-run': async () => { if (currentRun) { showRun(await send('/runs/' + currentRun.id + '/cancel', {})); await refreshRuns(); notice('运行已停止。已经发送的 HTTP 请求可能已在对端生效。'); } },
@@ -294,6 +354,17 @@ export function mount(pane, workspace) {
     };
     pane.addEventListener('click', event => {
         const target = event.target.closest('button,[data-node]'); if (!target) return;
+        if (target.dataset.view) {
+            const action = target.dataset.view;
+            if (action === 'library' || action === 'inspector') panel(action, !$('.wf-layout').classList.contains('is-' + action + '-hidden'));
+            else if (action === 'zoom-in') setZoom(zoom + .1);
+            else if (action === 'zoom-out') setZoom(zoom - .1);
+            else if (action === 'fit') fitView();
+            else if (action === 'reset') setZoom(1);
+            else if (action === 'expand') { world.width = Math.min(MAX_POSITION + 1000, world.width + 1200); world.height = Math.min(MAX_POSITION + 1000, world.height + 800); syncWorld(); notice('画布已扩展，可以继续向右和向下编排节点。'); }
+            else if (action === 'focus') focus(!focused);
+            return;
+        }
         if (target.dataset.close) { pane.querySelector(`[data-${target.dataset.close}-dialog]`).close(); return; }
         if (target.dataset.action) { perform(actions[target.dataset.action]); return; }
         try {
@@ -302,7 +373,7 @@ export function mount(pane, workspace) {
             else if (target.dataset.target) { if (connecting) connect(connecting.source, target.dataset.target, connecting.branch); else selectNode(target.dataset.target); }
             else if (target.dataset.run) perform(() => viewRun(target.dataset.run));
             else if (target.dataset.deleteCredential) perform(async () => { if (!confirm('删除后，引用此凭据的节点需要重新选择凭据，是否继续？')) return; await api('/credentials/' + target.dataset.deleteCredential, { method: 'DELETE' }); credentials = await api('/credentials'); credentialList(); inspector(); });
-            else if (target.dataset.node && target.dataset.node !== selected) selectNode(target.dataset.node);
+            else if (target.dataset.node) { if (target.dataset.node !== selected) selectNode(target.dataset.node); panel('inspector', false); }
         } catch (error) { notice(error.message, true); }
     });
     pane.addEventListener('input', event => {
@@ -336,19 +407,43 @@ export function mount(pane, workspace) {
         } catch (error) { notice(error.message, true); }
     });
     pane.addEventListener('keydown', event => {
-        if (event.key === 'Escape') { connecting = null; if (graph) renderCanvas(); }
+        if (event.key === 'Escape') { connecting = null; if (graph) renderCanvas(); if (!pane.querySelector('dialog[open]')) focus(false); }
         if ((event.key === 'Enter' || event.key === ' ') && event.target.matches('[data-node]')) { event.preventDefault(); try { selectNode(event.target.dataset.node); } catch (e) { notice(e.message, true); } }
         if (event.key === 'Tab' && event.target.matches('[data-field="source"]')) { event.preventDefault(); const t = event.target; t.setRangeText('  ', t.selectionStart, t.selectionEnd, 'end'); t.dispatchEvent(new Event('input', { bubbles: true })); }
     });
     pane.addEventListener('pointerdown', event => {
         const handle = event.target.closest('[data-drag]'); if (!handle || event.button !== 0) return;
         const node = graph.nodes.find(n => n.id === handle.dataset.drag), element = handle.closest('[data-node]');
-        const start = { x: event.clientX, y: event.clientY, left: element.offsetLeft, top: element.offsetTop }; let moved = false;
+        const scroll = $('.wf-canvas-scroll');
+        const start = { x: event.clientX, y: event.clientY, left: element.offsetLeft, top: element.offsetTop, scrollLeft: scroll.scrollLeft, scrollTop: scroll.scrollTop }; let moved = false;
         handle.setPointerCapture(event.pointerId);
-        const move = e => { if (Math.abs(e.clientX - start.x) + Math.abs(e.clientY - start.y) > 3) moved = true; if (!moved) return; const x = Math.max(15, Math.min(1250, start.left + e.clientX - start.x)), y = Math.max(20, Math.min(850, start.top + e.clientY - start.y)); element.style.left = x + 'px'; element.style.top = y + 'px'; node.position = { x, y }; lines(); };
+        const move = e => {
+            if (Math.abs(e.clientX - start.x) + Math.abs(e.clientY - start.y) > 3) moved = true;
+            if (!moved) return;
+            const rect = scroll.getBoundingClientRect();
+            if (e.clientX > rect.right - 30) scroll.scrollLeft += 18; else if (e.clientX < rect.left + 30) scroll.scrollLeft -= 18;
+            if (e.clientY > rect.bottom - 30) scroll.scrollTop += 18; else if (e.clientY < rect.top + 30) scroll.scrollTop -= 18;
+            const x = Math.max(15, Math.min(MAX_POSITION, start.left + (e.clientX - start.x + scroll.scrollLeft - start.scrollLeft) / zoom));
+            const y = Math.max(20, Math.min(MAX_POSITION, start.top + (e.clientY - start.y + scroll.scrollTop - start.scrollTop) / zoom));
+            element.style.left = x + 'px'; element.style.top = y + 'px'; node.position = { x, y }; syncWorld(); lines();
+        };
         const end = () => { handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', end); handle.removeEventListener('pointercancel', end); if (moved) markDirty(); };
         handle.addEventListener('pointermove', move); handle.addEventListener('pointerup', end); handle.addEventListener('pointercancel', end);
     });
+    $('.wf-canvas-scroll').addEventListener('wheel', event => {
+        if (!event.ctrlKey && !event.metaKey) return;
+        event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect();
+        setZoom(zoom * Math.exp(-event.deltaY * .002), { x: event.clientX - rect.left, y: event.clientY - rect.top });
+    }, { passive: false });
+    $('.wf-canvas-scroll').addEventListener('pointerdown', event => {
+        if (event.button !== 0 || event.pointerType === 'touch' || event.target.closest('[data-node],button')) return;
+        const scroll = event.currentTarget, start = { x: event.clientX, y: event.clientY, left: scroll.scrollLeft, top: scroll.scrollTop };
+        scroll.setPointerCapture(event.pointerId); scroll.classList.add('is-panning');
+        const move = e => { scroll.scrollLeft = start.left - e.clientX + start.x; scroll.scrollTop = start.top - e.clientY + start.y; };
+        const end = () => { scroll.classList.remove('is-panning'); scroll.removeEventListener('pointermove', move); scroll.removeEventListener('pointerup', end); scroll.removeEventListener('pointercancel', end); };
+        scroll.addEventListener('pointermove', move); scroll.addEventListener('pointerup', end); scroll.addEventListener('pointercancel', end);
+    });
+    const resize = new ResizeObserver(() => { if (active && graph) syncWorld(); }); resize.observe($('.wf-canvas-scroll'));
     $('[data-schedule-form]').addEventListener('submit', event => {
         event.preventDefault();
         perform(async () => {
@@ -386,6 +481,6 @@ export function mount(pane, workspace) {
                 } else { schedulePoll(); if (workflow) refreshSchedule().catch(e => notice(e.message, true)); }
             }
         },
-        deactivate() { active = false; clearTimeout(timer); },
+        deactivate() { active = false; clearTimeout(timer); focus(false); },
     };
 }

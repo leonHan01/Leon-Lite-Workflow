@@ -497,14 +497,17 @@ def workflow_checks(token):
         request('/auth/login', {'token': token, 'remember': False})
         logged_in = True
         print('WORKFLOW_VERIFY_STAGE=PAGES', flush=True)
-        for path in ['/workflows.html', '/workspace/views/workflows.html', '/workspace/workflows.js', '/workspace/workflows.css',
-                     '/workflow-runs.html', '/workspace/views/workflow-runs.html', '/workspace/workflow-runs.js', '/workspace/workflow-run-details.js']:
+        shell_pages = ['/index.html', '/simple-kv.html', '/json-record-search.html', '/monitor.html', '/advanced-settings.html', '/music.html', '/workflows.html', '/workflow-runs.html']
+        for path in shell_pages + ['/workspace/views/workflows.html', '/workspace/workflows.js', '/workspace/workflows.css',
+                     '/workspace/views/workflow-runs.html', '/workspace/workflow-runs.js', '/workspace/workflow-run-details.js']:
             for attempt in range(3):
                 try:
                     with opener.open(BASE_URL + path, timeout=30) as response:
                         if response.getcode() != 200:
                             raise RuntimeError('workflow management page unavailable')
-                        response.read()
+                        page = response.read()
+                        if path in shell_pages and any(('href="' + route + '"').encode() not in page for route in ['/workflows.html', '/workflow-runs.html']):
+                            raise RuntimeError('workflow navigation missing from management page: ' + path)
                     break
                 except urllib.error.HTTPError:
                     raise
@@ -524,7 +527,7 @@ def workflow_checks(token):
         if set(credential) != {'id', 'name', 'kind'}:
             raise RuntimeError('credential interface exposed unexpected fields')
         nodes = [
-            {'id': 'start', 'name': 'Manual', 'type': 'manual', 'config': {}},
+            {'id': 'start', 'name': 'Start', 'type': 'start', 'config': {}},
             {'id': 'http', 'name': 'HTTPS credential roundtrip', 'type': 'http', 'config': {
                 'method': 'POST', 'url': BASE_URL + '/alfred/query', 'credentialId': credential_id,
                 'body': {'param': '1+2'}, 'timeoutMs': 15000}},
@@ -533,9 +536,10 @@ def workflow_checks(token):
                 'source': "function main(i,c){ const r=i.items[0].json; if(r.status!==200 || !Array.isArray(r.body) || !r.body.some(x=>x.title==='3'||x.msgNeedToCopy==='3')) throw Error('HTTP result mismatch'); console.log('JavaScript verification passed'); return {items:[{json:{value:7,httpStatus:r.status}}]}; }"}},
             {'id': 'groovy', 'name': 'Groovy', 'type': 'script', 'config': {
                 'language': 'groovy', 'timeoutMs': 15000,
-                'source': "def main(Map i,Map c){ println 'Groovy verification passed'; return [items:i.items.collect{[json:it.json+[value:it.json.value*6]]}]}"}}]
+                'source': "def main(Map i,Map c){ println 'Groovy verification passed'; return [items:i.items.collect{[json:it.json+[value:it.json.value*6]]}]}"}},
+            {'id': 'end', 'name': 'End', 'type': 'end', 'config': {}}]
         edges = [{'id': 'edge-' + str(n), 'source': source, 'target': target, 'branch': ''}
-            for n, (source, target) in enumerate([('start', 'http'), ('http', 'javascript'), ('javascript', 'groovy')])]
+            for n, (source, target) in enumerate([('start', 'http'), ('http', 'javascript'), ('javascript', 'groovy'), ('groovy', 'end')])]
         workflow = request('/api/workflows/' + workflow_id, {'name': workflow['name'], 'revision': workflow['revision'],
             'definition': {'nodes': nodes, 'edges': edges}}, 'PUT')
         request('/api/workflows/' + workflow_id + '/publish', {'revision': workflow['revision']})
@@ -551,7 +555,7 @@ def workflow_checks(token):
             raise RuntimeError('production workflow node failed: ' + failed)
         if run.get('output', {}).get('items', [{}])[0].get('json', {}).get('value') != 42:
             raise RuntimeError('production workflow result mismatch')
-        if len(run.get('nodes', [])) != 4 or any(step['status'] != 'SUCCEEDED' for step in run['nodes']):
+        if len(run.get('nodes', [])) != 5 or any(step['status'] != 'SUCCEEDED' for step in run['nodes']):
             raise RuntimeError('production workflow node status mismatch')
         print('PUBLIC_WORKFLOW_JAVASCRIPT_GROOVY_HTTP_ENCRYPTED_CREDENTIAL=passed', flush=True)
         print('WORKFLOW_VERIFY_STAGE=SCHEDULED_RUN', flush=True)

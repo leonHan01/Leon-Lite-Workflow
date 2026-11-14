@@ -3,7 +3,7 @@
         <div><div class="monitor-kicker"><span></span> SERVER MONITOR</div><h1>服务器监控<span>.</span></h1><p>查看运行状态、部署记录与工作空间访问趋势。</p></div>
         <div class="monitor-actions"><button class="monitor-refresh" type="button">刷新数据</button><button class="monitor-deploy" type="button" disabled>一键部署</button></div>
     </div>
-    <div class="monitor-deploy-progress" role="status" aria-live="polite"><strong data-deploy-stage>部署服务</strong><span data-deploy-progress>正在读取部署状态…</span><small>从 GitHub 的 main 分支拉取最新代码，构建完成后更新服务器。</small></div>
+    <div class="monitor-deploy-progress" role="status" aria-live="polite"><strong data-deploy-stage>部署服务</strong><span data-deploy-progress>正在读取部署状态…</span><button type="button" data-reload-workspace hidden>刷新界面，加载最新功能</button><small>从 GitHub 的 main 分支拉取最新代码，构建完成后更新服务器。</small></div>
     <div class="monitor-status" role="status" aria-live="polite">正在加载监控数据…</div>
     <div class="monitor-cards">
         <section class="monitor-stat"><div>CPU 使用率 <span>CPU</span></div><strong data-value="cpu">—</strong><small>系统整体负载</small></section>

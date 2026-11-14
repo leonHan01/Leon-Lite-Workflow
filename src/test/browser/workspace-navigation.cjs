@@ -162,6 +162,7 @@ const server = http.createServer((req, res) => {
   await page.getByText('部署成功，服务器已更新。',{exact:true}).waitFor({timeout:10000});
   assert.equal(deploymentRequests,1);
   assert.equal(await page.locator('.monitor-deploy').isEnabled(),true);
+  assert.equal(await page.getByRole('button',{name:'刷新界面，加载最新功能',exact:true}).isVisible(),true,'部署成功后应提供完整刷新入口以加载最新菜单');
   assert.equal(await page.locator('.monitor-deployment-scroll').isVisible(),true,'自动刷新不应收起已展开的记录');
   await page.setViewportSize({width:800,height:900});
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'部署列表使页面横向溢出');

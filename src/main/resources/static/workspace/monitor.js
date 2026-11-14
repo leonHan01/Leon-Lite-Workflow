@@ -97,6 +97,7 @@ export function mount(pane) {
         pane.querySelector('[data-deploy-stage]').textContent = control?.job ? stages[control.job.stage] || '部署服务' : '部署服务';
         pane.querySelector('[data-deploy-progress]').textContent = !control?.enabled ? '服务器尚未启用一键部署。'
             : control.job?.message || (deploying ? '已有部署正在执行，请等待完成。' : '就绪 · 点击即可部署 main 分支最新代码。');
+        pane.querySelector('[data-reload-workspace]').hidden = control?.job?.stage !== 'SUCCESS';
     }
     function schedule() {
         clearTimeout(timer);
@@ -140,6 +141,7 @@ export function mount(pane) {
         }
     }
     button.addEventListener('click', refresh);
+    pane.querySelector('[data-reload-workspace]').addEventListener('click', () => location.reload());
     pane.querySelector('[data-deployment-more]').addEventListener('click', () => {
         showAllDeployments = !showAllDeployments;
         renderDeployments(pane, latestDeployments, showAllDeployments);

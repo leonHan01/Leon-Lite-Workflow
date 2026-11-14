@@ -19,7 +19,7 @@ public class WorkflowEngine {
     public record NodeResult(Map<String, Object> output, String logs, String branch) {}
     public WorkflowEngine(WorkflowStore store, ScriptProcessRunner scripts, WorkflowHttp http) { this.store = store; this.scripts = scripts; this.http = http; }
     public Map<String, String> runtimes() { return Map.of("javascript", "GraalJS 25.0.2", "groovy", "Groovy " + groovy.lang.GroovySystem.getVersion()); }
-    public Map<String, Object> capabilities() { return Map.of("runtimes", runtimes(), "sandbox", scripts.sandbox(), "maxNodes", 64, "maxConcurrentRuns", 2, "scheduledExecution", true); }
+    public Map<String, Object> capabilities() { return Map.of("runtimes", runtimes(), "sandbox", scripts.sandbox(), "maxNodes", WorkflowGraph.MAX_NODES, "maxConcurrentRuns", 2, "scheduledExecution", true); }
     public Map<String, Object> start(String workflowId, Map<String, Object> input) {
         envelope(input);
         var workflow = store.get(workflowId);
@@ -40,7 +40,7 @@ public class WorkflowEngine {
     private void run(String id, WorkflowGraph graph, Map<String, Object> input) {
         if (!store.start(id)) return;
         WorkflowPrivacy privacy = new WorkflowPrivacy(); privacy.collect(input);
-        WorkflowGraph.Node current = graph.nodes().stream().filter(n -> "manual".equals(n.type())).findFirst().orElseThrow();
+        WorkflowGraph.Node current = graph.nodes().stream().filter(n -> "start".equals(n.type())).findFirst().orElseThrow();
         Map<String, WorkflowGraph.Node> nodes = new HashMap<>(); graph.nodes().forEach(n -> nodes.put(n.id(), n));
         Map<String, Object> data = input;
         long deadline = System.nanoTime() + TimeUnit.MINUTES.toNanos(5);
@@ -57,6 +57,7 @@ public class WorkflowEngine {
                     data = result.output();
                     String nodeId = current.id(), branch = result.branch();
                     var next = graph.edges().stream().filter(e -> e.source().equals(nodeId) && Objects.equals(Objects.requireNonNullElse(e.branch(), ""), branch)).findFirst();
+                    if (next.isEmpty() && !"end".equals(current.type())) throw new IllegalArgumentException("执行路径未连接到结束节点");
                     current = next.map(e -> nodes.get(e.target())).orElse(null);
                 } catch (InterruptedException error) { throw error; }
                 catch (Exception error) {
@@ -73,7 +74,7 @@ public class WorkflowEngine {
         Map<String, Object> config = node.settings();
         Map<String, Object> ctx = Map.of("runId", runId, "nodeId", node.id(), "params", config.getOrDefault("params", Map.of()));
         return switch (node.type()) {
-            case "manual" -> new NodeResult(input, "", "");
+            case "start", "end" -> new NodeResult(input, "", "");
             case "script" -> {
                 var result = scripts.execute(text(config.get("language")), text(config.get("source")), input, ctx, integer(config.get("timeoutMs"), 10_000, 100, 30_000));
                 yield new NodeResult(result.output(), result.logs(), "");

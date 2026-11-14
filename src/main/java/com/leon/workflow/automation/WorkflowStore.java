@@ -80,7 +80,7 @@ public class WorkflowStore {
     }
     public Map<String, Object> get(String id) {
         var rows = jdbc.query("SELECT * FROM automation_workflow WHERE id=? AND deleted=FALSE", (rs, i) -> {
-            Map<String, Object> result = summary(rs); result.put("definition", read(rs.getString("draft"))); return result;
+            Map<String, Object> result = summary(rs); result.put("definition", read(write(WorkflowGraph.stored(read(rs.getString("draft")))))); return result;
         }, id);
         if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "工作流不存在");
         return rows.getFirst();
@@ -93,8 +93,8 @@ public class WorkflowStore {
     public Map<String, Object> save(String id, String name, Object graph, long revision) {
         checkSize(graph);
         var definition = JSON.convertValue(graph, WorkflowGraph.class);
-        if (definition == null || definition.nodes() == null || definition.nodes().size() > 64 || definition.edges() == null || definition.edges().size() > 128)
-            throw new IllegalArgumentException("流程最多包含 64 个节点和 128 条连线");
+        if (definition == null) throw new IllegalArgumentException("请提供包含开始和结束节点的流程");
+        definition.validateDraft();
         get(id);
         int changed = jdbc.update("UPDATE automation_workflow SET name=?,draft=?,revision=revision+1,updated_at=? WHERE id=? AND revision=? AND deleted=FALSE",
                 name, write(definition), System.currentTimeMillis(), id, revision);
@@ -121,7 +121,7 @@ public class WorkflowStore {
     public WorkflowGraph version(String id, int version) {
         var rows = jdbc.queryForList("SELECT definition FROM automation_version WHERE workflow_id=? AND version=?", String.class, id, version);
         if (rows.isEmpty()) throw new IllegalArgumentException("请先发布工作流");
-        return WorkflowGraph.parse(read(rows.getFirst()));
+        return WorkflowGraph.stored(read(rows.getFirst())).validate();
     }
     @Transactional public void delete(String id) {
         jdbc.queryForList("SELECT id FROM automation_workflow WHERE id=? FOR UPDATE", id);
@@ -159,6 +159,9 @@ public class WorkflowStore {
             row.put("logs", rs.getString("logs")); row.put("error", rs.getString("error"));
             row.put("startedAt", time(rs.getObject("started_at"))); row.put("finishedAt", time(rs.getObject("finished_at"))); return row;
         }, id));
+        // New executions of legacy versions use the adapted graph; old histories keep their original definition.
+        if (jdbc.queryForObject("SELECT COUNT(*) FROM automation_node_run WHERE run_id=? AND node_type='start'", Integer.class, id) > 0)
+            result.put("definition", read(write(WorkflowGraph.stored(result.get("definition")))));
         return result;
     }
     private Map<String, Object> runRow(java.sql.ResultSet rs, boolean data) throws java.sql.SQLException {

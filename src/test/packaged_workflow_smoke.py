@@ -47,10 +47,11 @@ def main():
 
                 workflow = api("", {"name": "Packaged JS + Groovy smoke"})
                 graph = {"nodes": [
-                    {"id": "start", "type": "manual", "name": "Start", "config": {}},
+                    {"id": "start", "type": "start", "name": "Start", "config": {}},
                     {"id": "js", "type": "script", "name": "JavaScript", "config": {"language": "javascript", "source": "function main(i,c){return {items:[{json:{value:i.items[0].json.value+1}}]};}", "timeoutMs": 15000}},
-                    {"id": "groovy", "type": "script", "name": "Groovy", "config": {"language": "groovy", "source": "def main(Map i,Map c){return [items:[[json:[value:i.items[0].json.value*2]]]]}", "timeoutMs": 15000}}],
-                    "edges": [{"id": "one", "source": "start", "target": "js", "branch": ""}, {"id": "two", "source": "js", "target": "groovy", "branch": ""}]}
+                    {"id": "groovy", "type": "script", "name": "Groovy", "config": {"language": "groovy", "source": "def main(Map i,Map c){return [items:[[json:[value:i.items[0].json.value*2]]]]}", "timeoutMs": 15000}},
+                    {"id": "end", "type": "end", "name": "End", "config": {}}],
+                    "edges": [{"id": "one", "source": "start", "target": "js", "branch": ""}, {"id": "two", "source": "js", "target": "groovy", "branch": ""}, {"id": "three", "source": "groovy", "target": "end", "branch": ""}]}
                 workflow = api("/" + workflow["id"], {"name": workflow["name"], "revision": 1, "definition": graph}, "PUT")
                 api("/" + workflow["id"] + "/publish", {"revision": workflow["revision"]})
                 run = api("/" + workflow["id"] + "/runs", {"input": {"items": [{"json": {"value": 20}}]}})
