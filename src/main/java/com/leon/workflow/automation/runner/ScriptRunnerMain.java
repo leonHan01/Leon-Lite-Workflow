@@ -14,7 +14,7 @@ import java.util.*;
 public final class ScriptRunnerMain {
     private static final JsonMapper JSON = JsonMapper.builder().build();
     public static void main(String[] args) throws Exception {
-        PrintStream protocol = System.out;
+        PrintStream protocol = new PrintStream(new FileOutputStream(FileDescriptor.out), true, StandardCharsets.UTF_8);
         LimitedOutput logs = new LimitedOutput(16_384);
         System.setOut(new PrintStream(logs, true, StandardCharsets.UTF_8));
         System.setErr(new PrintStream(logs, true, StandardCharsets.UTF_8));

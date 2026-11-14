@@ -2,7 +2,7 @@ package com.leon.workflow.automation;
 
 import jakarta.annotation.PostConstruct;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.stereotype.Repository;
+import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.http.HttpStatus;
@@ -11,7 +11,7 @@ import java.util.*;
 import static com.leon.workflow.automation.WorkflowJson.*;
 
 /** Owns persistence and atomic state transitions; network/script work never holds a transaction. */
-@Repository
+@Component
 public class WorkflowStore {
     private final JdbcTemplate jdbc;
     public WorkflowStore(JdbcTemplate jdbc) { this.jdbc = jdbc; }
@@ -81,7 +81,7 @@ public class WorkflowStore {
     public Map<String, Object> save(String id, String name, Object graph, long revision) {
         checkSize(graph);
         var definition = JSON.convertValue(graph, WorkflowGraph.class);
-        if (definition.nodes() == null || definition.nodes().size() > 64 || definition.edges() == null || definition.edges().size() > 128)
+        if (definition == null || definition.nodes() == null || definition.nodes().size() > 64 || definition.edges() == null || definition.edges().size() > 128)
             throw new IllegalArgumentException("流程最多包含 64 个节点和 128 条连线");
         get(id);
         int changed = jdbc.update("UPDATE automation_workflow SET name=?,draft=?,revision=revision+1,updated_at=? WHERE id=? AND revision=? AND deleted=FALSE",

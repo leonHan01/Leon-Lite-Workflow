@@ -7,6 +7,7 @@ The --remote-action option is used internally on ECS (Python 3.6 compatible).
 import argparse
 import datetime
 import hashlib
+import http.cookiejar
 import json
 import os
 import pathlib
@@ -393,6 +394,8 @@ def apply(metadata):
                     b'LEON_AUTH_ADMIN_ORIGIN', b'LEON_ALFRED_API_KEY', b'YOUDAO_APP_KEY', b'YOUDAO_APP_SECRET', b'LEON_MUSIC_DIRECTORY']:
             if before.get(key) != after.get(key):
                 raise RuntimeError('existing private configuration changed')
+        if before.get(b'LEON_WORKFLOW_CREDENTIAL_KEY') and before.get(b'LEON_WORKFLOW_CREDENTIAL_KEY') != after.get(b'LEON_WORKFLOW_CREDENTIAL_KEY'):
+            raise RuntimeError('existing workflow encryption configuration changed')
         services()
         print('DEPLOYED=' + metadata['id'] + ' (awaiting public checks)', flush=True)
     except Exception:
@@ -454,6 +457,118 @@ def public_checks(metadata):
         if response.getcode() != 200 or not isinstance(json.load(response), list):
             raise RuntimeError('authorized music playlists failed')
     print('PUBLIC_HTTPS_AUTH_ALFRED_HISTORY_AND_MUSIC=passed', flush=True)
+    workflow_checks(token)
+
+
+def workflow_checks(token):
+    """Execute the real production nodes before marking a release successful. No token/response payload is logged."""
+    cookies = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookies),
+        urllib.request.HTTPSHandler(context=ssl.create_default_context()))
+    workflow_id = credential_id = run_id = None
+    logged_in = False
+    def request(path, body=None, method=None):
+        headers = {'Origin': BASE_URL, 'X-Requested-With': 'XMLHttpRequest', 'Content-Type': 'application/json'}
+        data = json.dumps(body).encode() if body is not None else None
+        req = urllib.request.Request(BASE_URL + path, headers=headers, data=data, method=method)
+        try:
+            with opener.open(req, timeout=40) as response:
+                payload = response.read()
+                return json.loads(payload) if payload else None
+        except urllib.error.HTTPError as error:
+            raise RuntimeError('workflow verification HTTP ' + str(error.code)) from None
+    try:
+        for authorized, expected in [(False, 401), (True, 403)]:
+            req = urllib.request.Request(BASE_URL + '/api/workflows', headers={'Authorization': 'Bearer ' + token} if authorized else {})
+            try:
+                with urllib.request.urlopen(req, context=ssl.create_default_context(), timeout=30) as response:
+                    code = response.getcode()
+            except urllib.error.HTTPError as error:
+                code = error.code
+            if code != expected:
+                raise RuntimeError('workflow management authentication interception failed')
+        request('/auth/login', {'token': token, 'remember': False})
+        logged_in = True
+        for path in ['/workflows.html', '/workspace/views/workflows.html', '/workspace/workflows.js', '/workspace/workflows.css']:
+            with opener.open(BASE_URL + path, timeout=30) as response:
+                if response.getcode() != 200:
+                    raise RuntimeError('workflow management page unavailable')
+        capabilities = request('/api/workflows/capabilities')
+        if capabilities.get('sandbox') != 'bubblewrap' or not capabilities.get('credentialsEnabled'):
+            raise RuntimeError('production workflow sandbox or credential storage unavailable')
+        workflow = request('/api/workflows', {'name': 'Deployment verification (temporary)'})
+        workflow_id = workflow['id']
+        credential = request('/api/workflows/credentials', {'name': 'Deployment verification (temporary)',
+            'kind': 'bearer', 'value': {'token': token}})
+        credential_id = credential['id']
+        if set(credential) != {'id', 'name', 'kind'}:
+            raise RuntimeError('credential interface exposed unexpected fields')
+        nodes = [
+            {'id': 'start', 'name': 'Manual', 'type': 'manual', 'config': {}},
+            {'id': 'http', 'name': 'HTTPS credential roundtrip', 'type': 'http', 'config': {
+                'method': 'POST', 'url': BASE_URL + '/alfred/query', 'credentialId': credential_id,
+                'body': {'param': '1+2'}, 'timeoutMs': 15000}},
+            {'id': 'javascript', 'name': 'JavaScript', 'type': 'script', 'config': {
+                'language': 'javascript', 'timeoutMs': 15000,
+                'source': "function main(i,c){ const r=i.items[0].json; if(r.status!==200 || !Array.isArray(r.body) || !r.body.some(x=>x.title==='3'||x.msgNeedToCopy==='3')) throw Error('HTTP result mismatch'); console.log('JavaScript verification passed'); return {items:[{json:{value:7,httpStatus:r.status}}]}; }"}},
+            {'id': 'groovy', 'name': 'Groovy', 'type': 'script', 'config': {
+                'language': 'groovy', 'timeoutMs': 15000,
+                'source': "def main(Map i,Map c){ println 'Groovy verification passed'; return [items:i.items.collect{[json:it.json+[value:it.json.value*6]]}]}"}}]
+        edges = [{'id': 'edge-' + str(n), 'source': source, 'target': target, 'branch': ''}
+            for n, (source, target) in enumerate([('start', 'http'), ('http', 'javascript'), ('javascript', 'groovy')])]
+        workflow = request('/api/workflows/' + workflow_id, {'name': workflow['name'], 'revision': workflow['revision'],
+            'definition': {'nodes': nodes, 'edges': edges}}, 'PUT')
+        request('/api/workflows/' + workflow_id + '/publish', {'revision': workflow['revision']})
+        run = request('/api/workflows/' + workflow_id + '/runs', {'input': {'items': [{'json': {}}]}})
+        run_id = run['id']
+        deadline = time.monotonic() + 65
+        while run['status'] in ('QUEUED', 'RUNNING') and time.monotonic() < deadline:
+            time.sleep(.5)
+            run = request('/api/workflows/runs/' + run_id)
+        if run['status'] != 'SUCCEEDED':
+            failed = next((step.get('type', 'unknown') for step in run.get('nodes', []) if step.get('status') == 'FAILED'), 'unknown')
+            raise RuntimeError('production workflow node failed: ' + failed)
+        if run.get('output', {}).get('items', [{}])[0].get('json', {}).get('value') != 42:
+            raise RuntimeError('production workflow result mismatch')
+        if len(run.get('nodes', [])) != 4 or any(step['status'] != 'SUCCEEDED' for step in run['nodes']):
+            raise RuntimeError('production workflow node status mismatch')
+        print('PUBLIC_WORKFLOW_JAVASCRIPT_GROOVY_HTTP_ENCRYPTED_CREDENTIAL=passed', flush=True)
+    finally:
+        # Delete only the IDs created above. Existing workflows, credentials and browser sessions are untouched.
+        if run_id:
+            try:
+                request('/api/workflows/runs/' + run_id + '/cancel', {})
+            except Exception:
+                pass
+        if workflow_id:
+            try:
+                request('/api/workflows/' + workflow_id, method='DELETE')
+            except Exception:
+                pass
+        if credential_id:
+            try:
+                request('/api/workflows/credentials/' + credential_id, method='DELETE')
+            except Exception:
+                pass
+        if logged_in:
+            try:
+                request('/auth/logout', {})
+            except Exception:
+                pass
+
+
+def business_snapshot():
+    """Keep only existing record IDs in memory; never log or store business payloads in release metadata."""
+    token = (pathlib.Path.home() / '.config/leon-workflow/api-token').read_text().strip()
+    snapshot = {}
+    for path in ['/api/simple-kv/list', '/api/music/tracks', '/api/music/playlists']:
+        req = urllib.request.Request(BASE_URL + path, headers={'Authorization': 'Bearer ' + token})
+        with urllib.request.urlopen(req, context=ssl.create_default_context(), timeout=30) as response:
+            rows = json.load(response)
+        if not isinstance(rows, list) or any('id' not in row for row in rows):
+            raise RuntimeError('existing data inventory could not be verified')
+        snapshot[path] = {str(row['id']) for row in rows}
+    return snapshot
 
 
 def local(description):
@@ -502,8 +617,13 @@ def local(description):
             return workbench(' '.join(shlex.quote(value) for value in ['python3', staged + '/deploy.py',
                 '--remote-action', action, '--metadata', staged + '/metadata.json']), 240)
         try:
+            existing_data = business_snapshot()
             print(remote('apply'), flush=True)
             public_checks(metadata)
+            after_data = business_snapshot()
+            if any(not identities.issubset(after_data[path]) for path, identities in existing_data.items()):
+                raise RuntimeError('existing data inventory changed; inspect database before retrying')
+            print('EXISTING_DATA_IDS_PRESERVED=passed', flush=True)
             print(remote('success'), flush=True)
         except Exception:
             print(remote('rollback'), flush=True)

@@ -5,12 +5,13 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ScriptProcessRunnerTest {
-    private final Map<String, Object> input = Map.of("items", List.of(Map.of("json", Map.of("name", "leon", "amount", 120))));
+    private final Map<String, Object> input = Map.of("items", List.of(Map.of("json", Map.of("name", "leon中文", "amount", 120))));
     @Test void runsBothLanguagesWithTheSameJsonContractAndBoundedLogs() throws Exception {
         try (var runner = new Runner()) {
-            var js = runner.execute("javascript", "function main(input, ctx) { console.log('js-ok'); return {items: input.items.map(i => ({json: {name: i.json.name.toUpperCase(), amount: i.json.amount + ctx.params.increment}}))}; }", input, Map.of("params", Map.of("increment", 5)), 15000);
-            var groovy = runner.execute("groovy", "def main(Map input, Map ctx) { println 'groovy-ok'; return [items: input.items.collect { [json: [name: it.json.name.toUpperCase(), amount: it.json.amount + ctx.params.increment]] }] }", input, Map.of("params", Map.of("increment", 5)), 15000);
-            assertEquals(js.output(), groovy.output()); assertTrue(js.logs().contains("js-ok")); assertTrue(groovy.logs().contains("groovy-ok"));
+            var js = runner.execute("javascript", "function main(input, ctx) { console.log('js-ok 中文'); return {items: input.items.map(i => ({json: {name: i.json.name.toUpperCase(), amount: i.json.amount + ctx.params.increment}}))}; }", input, Map.of("params", Map.of("increment", 5)), 15000);
+            var groovy = runner.execute("groovy", "def main(Map input, Map ctx) { println 'groovy-ok 中文'; return [items: input.items.collect { [json: [name: it.json.name.toUpperCase(), amount: it.json.amount + ctx.params.increment]] }] }", input, Map.of("params", Map.of("increment", 5)), 15000);
+            assertEquals(js.output(), groovy.output()); assertTrue(js.logs().contains("js-ok 中文")); assertTrue(groovy.logs().contains("groovy-ok 中文"));
+            assertTrue(WorkflowJson.write(js.output()).contains("LEON中文"));
         }
     }
     @Test void killsInfiniteLoopsAndRejectsInvalidOutput() throws Exception {

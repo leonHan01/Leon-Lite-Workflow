@@ -15,6 +15,11 @@ import static com.leon.workflow.automation.WorkflowJson.*;
 @Component
 public class ScriptProcessRunner {
     public record Result(Map<String, Object> output, String logs) {}
+    public static final class ScriptFailure extends IllegalArgumentException {
+        private final String logs;
+        public ScriptFailure(String message, String logs) { super(message); this.logs = logs; }
+        public String logs() { return logs; }
+    }
     private static final String MAIN = "com.leon.workflow.automation.runner.ScriptRunnerMain";
     private static final String LIBRARIES = "(?:polyglot|js-language|truffle-api|truffle-runtime|truffle-compiler|regex|icu4j|collections|nativeimage|word|jniutils|groovy|jackson-databind|jackson-core|jackson-annotations)-[0-9].*\\.jar";
     private Path runtime;
@@ -37,13 +42,13 @@ public class ScriptProcessRunner {
             CompletableFuture<byte[]> stderr = read(process.getErrorStream(), 8192);
             try (var in = process.getOutputStream()) {
                 in.write(write(Map.of("language", language, "source", source, "input", input, "ctx", ctx)).getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            }
+            } catch (IOException e) { throw new IllegalArgumentException("脚本进程启动失败，请检查服务器隔离环境"); }
             if (!process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)) throw new IllegalArgumentException("脚本执行超时（" + timeoutMs + " ms）");
             byte[] bytes = stdout.get(2, TimeUnit.SECONDS);
             stderr.get(2, TimeUnit.SECONDS); // Drain bounded stderr, but never include launch diagnostics or paths in run logs.
             if (process.exitValue() != 0 || bytes.length == 0) throw new IllegalArgumentException("脚本进程未能完成；请检查隔离环境及内存限制");
             Map<String, Object> response = WorkflowJson.read(new String(bytes, java.nio.charset.StandardCharsets.UTF_8));
-            if (!Boolean.TRUE.equals(response.get("success"))) throw new IllegalArgumentException(required(response.get("error"), "脚本执行失败", 1000));
+            if (!Boolean.TRUE.equals(response.get("success"))) throw new ScriptFailure(required(response.get("error"), "脚本执行失败", 1000), text(response.get("logs")));
             return new Result(envelope(response.get("output")), text(response.get("logs")));
         } catch (InterruptedException error) {
             Thread.currentThread().interrupt(); throw error;
@@ -70,6 +75,7 @@ public class ScriptProcessRunner {
             // No file writes, network, process forks, or access to the workspace/home directory.
             String profile = "(version 1)(deny default)(allow process-exec (literal \"" + escaped(jdk.resolve("bin/java")) + "\"))"
                     + "(allow process-info*)(allow signal (target self))(allow sysctl-read)(allow mach-lookup)"
+                    + "(allow file-read-metadata)(allow file-read-data (vnode-type DIRECTORY))"
                     + "(allow file-read* (subpath \"" + escaped(jdk) + "\") (subpath \"" + escaped(directory) + "\")"
                     + " (subpath \"/System/Library\") (subpath \"/usr/lib\") (subpath \"/private/var/db/dyld\")"
                     + " (literal \"/dev/random\") (literal \"/dev/urandom\") (literal \"/dev/null\") (literal \"/dev/dtracehelper\"))";
@@ -89,7 +95,7 @@ public class ScriptProcessRunner {
     private String escaped(Path path) { return path.toString().replace("\\", "\\\\").replace("\"", "\\\""); }
     private synchronized Path prepare() throws IOException {
         if (runtime != null) return runtime;
-        Path dir = Files.createTempDirectory("leon-script-runtime-", PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------")));
+        Path dir = Files.createTempDirectory("leon-script-runtime-", PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------"))).toRealPath();
         try {
             try (var jar = new JarOutputStream(Files.newOutputStream(dir.resolve("runner.jar")))) {
                 for (String name : List.of(MAIN, MAIN + "$LimitedOutput")) {

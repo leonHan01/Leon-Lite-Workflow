@@ -8,7 +8,7 @@ import java.util.regex.Pattern;
 public final class WorkflowJson {
     public static final JsonMapper JSON = JsonMapper.builder().build();
     public static final int MAX_BYTES = 1_048_576;
-    private static final Pattern SENSITIVE = Pattern.compile("(?i).*(authorization|cookie|password|secret|token|api[-_]?key|credential).* ".trim());
+    private static final Pattern SENSITIVE = Pattern.compile("(?i).*(authorization|cookie|password|secret|token|api[-_]?key|credential).*");
     private WorkflowJson() {}
 
     public static String write(Object value) { return JSON.writeValueAsString(value); }

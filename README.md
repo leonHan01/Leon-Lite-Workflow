@@ -93,6 +93,7 @@ curl -X POST http://127.0.0.1:8080/api/diamond -H 'Content-Type: application/jso
 | --- | --- |
 | `/` | 总览 |
 | `/simple-kv.html` | 快捷项 |
+| `/workflows.html` | 可视化工作流编排、双语言脚本和运行记录 |
 | `/json-record-search.html`、`/json-record.html` | JSON 记录与详情 |
 | `/monitor.html` | 服务器监控 |
 | `/music.html` | 声屿歌曲管理，支持多首上传、搜索、试听和删除 |
@@ -210,6 +211,28 @@ HTTPS 代理通过内部 `/auth/check` 校验管理页面和静态资源的会�
 5. 在副本上验证插件缓存、旧数据同步、断线失败及 CRUD。确认通过后，用备份和验证过的目标库切换服务。旧服务只保留作回滚，避免双写。确认新端正常后，再选择启用新端定时任务。回滚时停止新端任务，恢复切换前的数据和连接配置，并先处理切换后的新增写入。
 
 ## 开发约定
+
+### 工作流编排（一期）
+
+在管理页侧栏打开「工作流编排」，新建流程后添加 HTTP 请求、JavaScript、Groovy 或 IF 节点。拖动节点标题调整位置；点击右侧出口和目标节点左侧入口连线，也可在节点配置的「连接出口」中选择下一个节点。IF 分别配置 true / false 出口。一期支持单触发器、无环流程和条件分支，最多 64 个节点；不支持循环、汇合、并行、Webhook 或定时触发。
+
+「保存草稿」允许保存尚未连接完整的流程；「发布版本」先保存再校验连线、节点和配置，生成不可变版本。「运行 vN」始终执行该发布版本，未发布的编辑不参与运行。下方可以填写手动输入、调试当前草稿节点、查看最近 50 次运行的节点输入、输出、日志、错误和耗时，也可以停止运行。「载入双语言示例」提供一条可直接发布执行的示例：120 → JavaScript 加 5 → Groovy 翻倍 → IF 判断 → 250。
+
+两种脚本共用 JSON 协议：输入、返回值都为 `{"items":[{"json":{...}}]}`。JavaScript 入口为 `function main(input, ctx)`，Groovy 为 `def main(Map input, Map ctx)`；`ctx` 仅包含 `runId`、`nodeId` 和节点参数 `params`。切换语言分别保留源码。JavaScript 使用 GraalJS 25.0.2，Groovy 使用项目 Maven 管理的版本。脚本不是 Node.js 环境，不提供 npm、文件或网络能力；HTTP 调用使用专门的节点。HTTP 返回 `items[0].json` 包含 `status`、`headers` 和 `body`。配置字段支持 `{{ input.items[0].json.name }}`、`{{ ctx.params.name }}` 形式的字段引用，不执行任意表达式。
+
+脚本通过独立 Java 21 子进程运行，只传递 JSON 数据，并清空主应用环境变量。macOS 使用系统 `sandbox-exec`，Linux 必须安装 `/usr/bin/bwrap`（bubblewrap）且允许非特权用户命名空间。沙箱只提供只读语言运行时、JDK 和必要系统库，禁止宿主业务文件读取及网络访问；JavaScript 额外关闭 Java 主机访问。隔离环境缺失或不可用时拒绝执行脚本，不回退到主进程执行。脚本 JVM 堆上限 128 MB，元空间 96 MB，直接内存 16 MB；单节点超时 100–30000 ms（默认 10 秒，包含编译启动），工作流最长约 5 分钟，最多同时执行 2 个任务、排队 8 个。超时和取消会终止子进程及其后代。操作系统沙箱隔离访问权限，JVM 内存限制不等于整个进程或进程树的硬内存限额；部署到共享或不可信多租户环境前还应通过 cgroup / systemd 施加进程树资源配额。
+
+HTTP 节点仅接受 HTTP/HTTPS；默认阻止回环、内网、链路本地、云元数据及其他保留地址。连接时使用校验过的 DNS 地址，防止二次解析绕过限制；不自动重试、不跟随重定向。确需调用内部系统时，由运维通过 `LEON_WORKFLOW_HTTP_ALLOWED_ORIGINS` 明确配置允许的来源，例如 `http://127.0.0.1:9000`；多个来源用逗号分隔，准确匹配协议、主机和端口，不在节点中开放绕过选项。输入、输出和 HTTP 响应最大 1 MB、最多 1000 个 item；日志最多 16 KB。
+
+「管理凭据」支持 Bearer、Basic 和自定义 Header。启用前在应用私有环境配置中设置 `LEON_WORKFLOW_CREDENTIAL_KEY`，值为独立生成的 32 字节随机密钥的 Base64 编码。不要把密钥写进仓库、日志或网页存储，升级保留该配置；更换密钥前需安排凭据重新加密，不能直接替换。密钥不设置时仍可使用无凭据 HTTP 节点，凭据保存及读取会拒绝。凭据在 H2 中使用 AES-256-GCM 加密，接口只返回名称、类型和 ID，发送凭据必须使用 HTTPS。运行记录会隐藏常见敏感字段及已知凭据的回显，脚本和配置中应只引用凭据 ID。SQL 备份包含加密后的凭据记录，恢复后还需原有服务器加密密钥。
+
+新增接口统一位于 `/api/workflows/**`，正式环境只允许管理页 Cookie 会话访问；写入还必须通过现有的准确 Origin 和 `X-Requested-With` 校验。插件/Alfred 的 Bearer 令牌不能直接管理或运行工作流，原有接口认证规则不变。页面和 `/workspace/` 资源沿用 HTTPS 代理的登录保护。
+
+数据保存在原有 H2 内新增的 `automation_workflow`、`automation_version`、`automation_run`、`automation_node_run`、`automation_credential` 表，不替换现有数据。节点开始和结束分别持久化状态；正常关闭服务会取消任务，异常重启会将遗留未完成任务标为失败，均不自动重放。HTTP 已发出、结果尚未保存时不能断言对端是否成功，取消也不能撤销已发送的请求；请确认对端结果或使用业务幂等键后再手动重跑。删除工作流使用逻辑删除并保留历史，执行中的流程须先停止。
+
+工作流后端测试为 `WorkflowIntegrationTest`、`ScriptProcessRunnerTest`；浏览器测试为 `src/test/browser/workflows.cjs`，沿用 `PLAYWRIGHT_MODULE_PATH` 和 `CHROME_PATH`，验证新增节点、双语言源码保留、拖动、发布执行、分支状态、凭据及手机布局，不启动游戏。
+
+### 现有业务模块
 
 控制器负责 HTTP 参数、状态码和兼容响应。快捷项写入由 `SimpleKVService` 处理，配置写入及校验由 `DiamondService` 处理，图标文件读取由 `AlfredIconService` 处理。依赖通过构造器注入。
 

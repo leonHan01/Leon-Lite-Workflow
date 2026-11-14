@@ -2,6 +2,13 @@
 .workspace-app .lw-shell { align-items:flex-start; }
 .workspace-app .lw-sidebar { border-radius:0; }
 .workspace-app .lw-topbar { border-radius:0; }
+@media (max-width:700px) {
+    .workspace-app .lw-sidebar { gap:12px; }
+    .workspace-app .lw-brand { flex:none; }
+    .workspace-app .lw-nav { min-width:0; flex:1; overflow-x:auto; }
+    .workspace-app .lw-nav-link { flex:0 0 34px; width:34px; }
+}
+@media (max-width:500px) { .workspace-app .lw-brand-text { display:none; } }
 .workspace-app .ws-shell-note { color:#9aa5a0; font:600 10px var(--lw-mono); letter-spacing:.12em; }
 .workspace-app .ws-pane[hidden], .workspace-app .ws-load-status[hidden] { display:none !important; }
 .workspace-app .ws-pane { min-width:0; }

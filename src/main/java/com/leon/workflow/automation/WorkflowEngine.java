@@ -26,7 +26,8 @@ public class WorkflowEngine {
         int version = ((Number) workflow.get("publishedVersion")).intValue();
         WorkflowGraph graph = store.version(workflowId, version);
         Map<String, Object> isolated = read(write(input));
-        String id = store.createRun(workflowId, version, graph, isolated);
+        WorkflowPrivacy initialPrivacy = new WorkflowPrivacy(); initialPrivacy.collect(isolated);
+        String id = store.createRun(workflowId, version, graph, initialPrivacy.mask(isolated));
         FutureTask<Void> task = new FutureTask<>(() -> { try { run(id, graph, isolated); } finally { tasks.remove(id); } return null; });
         tasks.put(id, task);
         try { workers.execute(task); }
@@ -39,9 +40,11 @@ public class WorkflowEngine {
         WorkflowGraph.Node current = graph.nodes().stream().filter(n -> "manual".equals(n.type())).findFirst().orElseThrow();
         Map<String, WorkflowGraph.Node> nodes = new HashMap<>(); graph.nodes().forEach(n -> nodes.put(n.id(), n));
         Map<String, Object> data = input;
+        long deadline = System.nanoTime() + TimeUnit.MINUTES.toNanos(5);
         try {
             while (current != null) {
                 if (Thread.currentThread().isInterrupted() || store.cancelled(id)) throw new InterruptedException();
+                if (System.nanoTime() > deadline) throw new IllegalArgumentException("工作流运行超过 5 分钟，请拆分为较短流程");
                 store.startNode(id, current, privacy.mask(data));
                 try {
                     NodeResult result = execute(current, data, id, privacy);
@@ -54,7 +57,8 @@ public class WorkflowEngine {
                     current = next.map(e -> nodes.get(e.target())).orElse(null);
                 } catch (InterruptedException error) { throw error; }
                 catch (Exception error) {
-                    store.finishNode(id, current.id(), "FAILED", null, null, error(error, privacy)); throw error;
+                    String logs = error instanceof ScriptProcessRunner.ScriptFailure failure ? privacy.message(failure.logs()) : null;
+                    store.finishNode(id, current.id(), "FAILED", null, logs, error(error, privacy)); throw error;
                 }
             }
             store.finish(id, "SUCCEEDED", privacy.mask(data), null);
@@ -77,7 +81,7 @@ public class WorkflowEngine {
         };
     }
     public Map<String, Object> test(WorkflowGraph.Node node, Map<String, Object> input) {
-        if (node == null) throw new IllegalArgumentException("请选择需要调试的节点");
+        if (node == null || node.id() == null || !node.id().matches("[A-Za-z][A-Za-z0-9_-]{0,63}")) throw new IllegalArgumentException("请选择有效的调试节点");
         WorkflowGraph.validateNode(node); envelope(input);
         WorkflowPrivacy privacy = new WorkflowPrivacy(); privacy.collect(input); long started = System.currentTimeMillis();
         Future<NodeResult> task;
