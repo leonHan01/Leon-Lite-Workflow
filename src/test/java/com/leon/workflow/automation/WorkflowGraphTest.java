@@ -39,6 +39,17 @@ class WorkflowGraphTest {
         assertThrows(IllegalArgumentException.class, () -> new WorkflowGraph(nodes, intoStart).validate());
     }
 
+    @Test void oneOutletCanReachMultipleNodesButDuplicateConnectionsAreRejected() {
+        var nodes = List.of(node("start", "start", Map.of()), script("left", "javascript", "function main(i,c){return i;}"),
+                script("right", "javascript", "function main(i,c){return i;}"), node("end", "end", Map.of()));
+        var edges = List.of(edge("start", "left", ""), edge("start", "right", ""), edge("left", "end", ""), edge("right", "end", ""));
+        assertDoesNotThrow(() -> new WorkflowGraph(nodes, edges).validate());
+        var duplicate = new ArrayList<>(edges); duplicate.add(new WorkflowGraph.Edge("duplicate", "start", "left", ""));
+        assertThrows(IllegalArgumentException.class, () -> new WorkflowGraph(nodes, duplicate).validate());
+        var disconnectedCycle = new WorkflowGraph(nodes, List.of(edge("start", "end", ""), edge("left", "right", ""), edge("right", "left", "")));
+        assertThrows(IllegalArgumentException.class, disconnectedCycle::validate);
+    }
+
     @Test void adaptsLegacyLeavesAndMissingBranchesWithoutChangingIdsConfigOrOriginalDefinition() {
         var legacy = new WorkflowGraph(List.of(node("entry", "manual", Map.of()),
                 node("check", "if", Map.of("operator", "truthy")), node("end", "http", Map.of("url", "https://example.test"))),

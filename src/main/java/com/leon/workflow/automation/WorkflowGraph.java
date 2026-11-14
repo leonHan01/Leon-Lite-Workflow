@@ -73,7 +73,7 @@ public record WorkflowGraph(List<Node> nodes, List<Edge> edges) {
     public WorkflowGraph validate() {
         validateDraft();
         Map<String, Node> byId = new LinkedHashMap<>();
-        Set<String> edgeIds = new HashSet<>(), paths = new HashSet<>(), targets = new HashSet<>();
+        Set<String> edgeIds = new HashSet<>(), paths = new HashSet<>(), connections = new HashSet<>(), targets = new HashSet<>();
         for (Node node : nodes) {
             byId.put(node.id(), node);
             required(node.name(), "节点名称需要 1–80 个字符", 80);
@@ -90,7 +90,8 @@ public record WorkflowGraph(List<Node> nodes, List<Edge> edges) {
             String branch = edge.branch() == null ? "" : edge.branch();
             if ("if".equals(source.type()) ? !Set.of("true", "false").contains(branch) : !branch.isEmpty())
                 throw new IllegalArgumentException("IF 连线必须选择 true/false，其他节点使用默认出口");
-            if (!paths.add(edge.source() + ":" + branch)) throw new IllegalArgumentException("同一个出口只能连接一个节点");
+            paths.add(edge.source() + ":" + branch);
+            if (!connections.add(edge.source() + ":" + branch + ":" + edge.target())) throw new IllegalArgumentException("同一个出口不能重复连接同一个节点");
         }
         for (Node node : nodes) {
             if ("end".equals(node.type())) continue;

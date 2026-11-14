@@ -82,6 +82,26 @@ def main():
                 assert scheduled['triggerType'] == 'SCHEDULED' and scheduled['scheduledAt']
                 assert scheduled['output']['items'][0]['json']['value'] == 42
                 print('Packaged scheduler smoke passed: automatic trigger, published version, instance list and pause.', flush=True)
+                fork = api('', {'name': 'Packaged fan-out smoke'})
+                fork_graph = {'nodes': [
+                    {'id': 'start', 'type': 'start', 'name': 'Start', 'config': {}},
+                    {'id': 'source', 'type': 'script', 'name': 'Source', 'config': {'language': 'javascript', 'source': 'function main(i,c){return {items:[{json:{value:21}}]};}', 'timeoutMs': 15000}},
+                    {'id': 'left', 'type': 'script', 'name': 'Left', 'config': {'language': 'groovy', 'source': 'def main(Map i,Map c){return [items:[[json:[value:i.items[0].json.value*2]]]]}', 'timeoutMs': 15000}},
+                    {'id': 'right', 'type': 'script', 'name': 'Right', 'config': {'language': 'javascript', 'source': 'function main(i,c){return {items:[{json:{value:i.items[0].json.value+1}}]};}', 'timeoutMs': 15000}},
+                    {'id': 'end', 'type': 'end', 'name': 'End', 'config': {}}],
+                    'edges': [{'id': 'fork-' + str(n), 'source': source, 'target': target, 'branch': ''}
+                        for n, (source, target) in enumerate([('start', 'source'), ('source', 'left'), ('source', 'right'), ('left', 'end'), ('right', 'end')])]}
+                fork = api('/' + fork['id'], {'name': fork['name'], 'revision': fork['revision'], 'definition': fork_graph}, 'PUT')
+                api('/' + fork['id'] + '/publish', {'revision': fork['revision']})
+                fork_run = api('/' + fork['id'] + '/runs', {'input': {'items': [{'json': {}}]}})
+                deadline = time.monotonic() + 30
+                while fork_run['status'] in ('QUEUED', 'RUNNING') and time.monotonic() < deadline:
+                    time.sleep(.1)
+                    fork_run = api('/runs/' + fork_run['id'])
+                assert fork_run['status'] == 'SUCCEEDED', fork_run.get('error')
+                assert [item['json']['value'] for item in fork_run['output']['items']] == [42, 22]
+                assert len(fork_run['nodes']) == 5 and all(step['status'] == 'SUCCEEDED' for step in fork_run['nodes'])
+                print('Packaged fan-out smoke passed: one source, both successors executed, end output [42, 22].', flush=True)
                 if os.environ.get("PLAYWRIGHT_MODULE_PATH"):
                     subprocess.run(["node", str(ROOT / "src/test/browser/workflows-live.cjs")], check=True,
                                    env={**os.environ, "WORKFLOW_BASE_URL": base}, timeout=40)

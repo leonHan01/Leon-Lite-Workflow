@@ -19,7 +19,7 @@ export function mount(pane, workspace) {
     }
     if (!document.getElementById('workflow-runs-css')) { const link = document.createElement('link'); link.id = 'workflow-runs-css'; link.rel = 'stylesheet'; link.href = '/workspace/workflow-runs.css'; document.head.append(link); }
     const $ = selector => pane.querySelector(selector);
-    let workflows = [], workflow = null, graph = null, selected = null, connecting = null;
+    let workflows = [], workflow = null, graph = null, selected = null, selectedEdge = null, connecting = null;
     const MAX_POSITION = 50000;
     let zoom = 1, world = { width: 2400, height: 1600 }, focused = false, focusPanels = null;
     let dirty = false, busy = false, active = false, initialized = false, timer = null, currentRun = null, capabilities = {}, credentials = [], schedule = null;
@@ -61,7 +61,7 @@ export function mount(pane, workspace) {
         clearTimeout(timer); currentRun = null; zoom = 1; world = { width: 2400, height: 1600 };
         $('.wf-canvas-scroll').scrollTo(0, 0);
         workflow = await api('/' + encodeURIComponent(id)); graph = structuredClone(workflow.definition);
-        graph.nodes ??= []; graph.edges ??= []; selected = graph.nodes[0]?.id || null; dirty = false; connecting = null;
+        graph.nodes ??= []; graph.edges ??= []; selected = graph.nodes[0]?.id || null; selectedEdge = null; dirty = false; connecting = null;
         $('[data-editor]').hidden = false; $('[data-name]').value = workflow.name;
         $('[data-run-detail]').innerHTML = '<div class="wf-empty">运行一次工作流，看看数据如何流转。</div>';
         picker(); renderCanvas(); inspector(); controls();
@@ -98,10 +98,15 @@ export function mount(pane, workspace) {
         commitInspector();
         const result = await send('/' + workflow.id, { name: $('[data-name]').value, definition: graph, revision: workflow.revision }, 'PUT');
         workflow = result; graph = structuredClone(result.definition); dirty = false;
-        workflows = workflows.map(w => w.id === result.id ? result : w); picker(); controls(); renderCanvas();
+        workflows = workflows.map(w => w.id === result.id ? result : w); picker(); controls(); renderCanvas(); inspector();
         notice('草稿已保存。');
     }
-    function selectNode(id) { commitInspector(); selected = id; connecting = null; renderCanvas(); inspector(); }
+    function selectNode(id) { commitInspector(); selected = id; selectedEdge = null; connecting = null; renderCanvas(); inspector(); }
+    function selectEdge(id) {
+        commitInspector(); selected = null; selectedEdge = id; connecting = null;
+        renderCanvas(); inspector(); panel('inspector', false);
+        pane.querySelector(`[data-edge="${CSS.escape(id)}"]`)?.focus({ preventScroll: true });
+    }
     function nodeStyle(node) {
         const requested = node.type === 'script' ? (node.config?.language === 'groovy' ? 'groovy' : 'script') : node.type;
         const kind = ['start', 'end', 'http', 'script', 'groovy', 'if'].includes(requested) ? requested : 'script';
@@ -121,7 +126,7 @@ export function mount(pane, workspace) {
             </div>`;
         }).join('');
         syncWorld(); lines();
-        $('[data-canvas-hint]').textContent = connecting ? '正在连线：点击目标节点左侧圆点，或按 Esc 取消' : '拖拽空白移动 · Ctrl/⌘+滚轮缩放';
+        $('[data-canvas-hint]').textContent = connecting ? (connecting.endpoint === 'source' ? '重新连接起点：点击节点右侧出口，Esc 取消' : '连接到节点左侧入口，Esc 取消') : '点击连线编辑 · 拖拽空白移动 · Ctrl/⌘+滚轮缩放';
     }
     function syncWorld() {
         const scroll = $('.wf-canvas-scroll'), canvas = $('.wf-canvas'), stage = $('.wf-canvas-stage');
@@ -138,7 +143,7 @@ export function mount(pane, workspace) {
         const scroll = $('.wf-canvas-scroll'), old = zoom;
         const anchor = point || { x: scroll.clientWidth / 2, y: scroll.clientHeight / 2 };
         const x = (scroll.scrollLeft + anchor.x) / old, y = (scroll.scrollTop + anchor.y) / old;
-        zoom = Math.max(.05, Math.min(2, Math.round(value * 100) / 100)); syncWorld();
+        zoom = Math.max(.05, Math.min(2, Math.round(value * 100) / 100)); syncWorld(); if (graph) lines();
         scroll.scrollLeft = x * zoom - anchor.x; scroll.scrollTop = y * zoom - anchor.y;
     }
     function fitView() {
@@ -166,29 +171,66 @@ export function mount(pane, workspace) {
         } else if (focusPanels) { panel('library', focusPanels.library); panel('inspector', focusPanels.inspector); focusPanels = null; }
         requestAnimationFrame(syncWorld);
     }
+    const edgeName = edge => {
+        const name = id => graph.nodes.find(n => n.id === id)?.name || id;
+        return `${name(edge.source)} → ${name(edge.target)}${edge.branch ? ' (' + edge.branch + ')' : ''}`;
+    };
+    function edgePoints(edge) {
+        const source = pane.querySelector(`[data-node="${CSS.escape(edge.source)}"]`), target = pane.querySelector(`[data-node="${CSS.escape(edge.target)}"]`);
+        if (!source || !target) return null;
+        return { x: source.offsetLeft + 208, y: source.offsetTop + (edge.branch === 'true' ? 64 : edge.branch === 'false' ? 94 : 50), tx: target.offsetLeft, ty: target.offsetTop + 50 };
+    }
+    function curve({ x, y, tx, ty }) {
+        const bend = Math.max(60, Math.abs(tx - x) * .5);
+        return `M${x},${y} C${x + bend},${y} ${tx - bend},${ty} ${tx},${ty}`;
+    }
     function lines() {
-        $('[data-lines]').innerHTML = graph.edges.map(edge => {
-            const source = pane.querySelector(`[data-node="${CSS.escape(edge.source)}"]`), target = pane.querySelector(`[data-node="${CSS.escape(edge.target)}"]`);
-            if (!source || !target) return '';
-            const x = source.offsetLeft + 208, y = source.offsetTop + (edge.branch === 'true' ? 64 : edge.branch === 'false' ? 94 : 50), tx = target.offsetLeft, ty = target.offsetTop + 50;
-            const bend = Math.max(60, Math.abs(tx - x) * .5);
-            return `<path class="wf-edge" d="M${x},${y} C${x + bend},${y} ${tx - bend},${ty} ${tx},${ty}" marker-end="url(#wf-arrow)"/>${edge.branch ? `<text class="wf-edge-label" x="${x + 20}" y="${y - 8}">${esc(edge.branch)}</text>` : ''}`;
+        let handles = '';
+        const content = graph.edges.map(edge => {
+            const points = edgePoints(edge); if (!points) return '';
+            const chosen = edge.id === selectedEdge, path = curve(points), label = esc(edgeName(edge));
+            if (chosen) handles = ['source', 'target'].map(endpoint => {
+                const offset = Math.min(22 / zoom, Math.max(8, Math.abs(points.tx - points.x) / 4));
+                const x = endpoint === 'source' ? points.x + offset : points.tx - offset, y = endpoint === 'source' ? points.y : points.ty;
+                return `<circle class="wf-edge-handle" cx="${x}" cy="${y}" r="${7 / zoom}" data-reconnect="${endpoint}" data-edge-id="${esc(edge.id)}" tabindex="0" role="button" aria-label="拖动连线${endpoint === 'source' ? '起点' : '终点'}"/>`;
+            }).join('');
+            return `<g class="wf-edge-group ${chosen ? 'is-selected' : ''} ${connecting?.edgeId === edge.id ? 'is-reconnecting' : ''}" data-edge="${esc(edge.id)}" tabindex="0" role="button" aria-label="选择连线 ${label}"><path class="wf-edge" d="${path}" marker-end="url(#${chosen ? 'wf-arrow-selected' : 'wf-arrow'})"/><path class="wf-edge-hit" d="${path}"/>${edge.branch ? `<text class="wf-edge-label" x="${points.x + 20}" y="${points.y - 8}">${esc(edge.branch)}</text>` : ''}</g>`;
         }).join('');
+        let preview = '';
+        if (connecting?.point) {
+            const edge = connecting.edgeId ? graph.edges.find(e => e.id === connecting.edgeId) : { source: connecting.source, branch: connecting.branch, target: connecting.source };
+            const points = edge && edgePoints(edge);
+            if (points) {
+                const { x, y } = connecting.point;
+                if (connecting.endpoint === 'source') { points.x = x; points.y = y; }
+                else { points.tx = x; points.ty = y; }
+                preview = `<path class="wf-edge wf-edge-preview" d="${curve(points)}"/>`;
+            }
+        }
+        $('[data-lines]').innerHTML = content + handles + preview;
     }
     function connectionFields(node) {
         if (node.type === 'end') return '';
         return (node.type === 'if' ? ['true', 'false'] : ['']).map(branch => {
-            const edge = graph.edges.find(e => e.source === node.id && (e.branch || '') === branch);
-            return field(branch ? `${branch} 分支` : '下一个节点', `<select data-connect="${branch}"><option value="">未连接（发布前必须连接）</option>${graph.nodes.filter(n => n.id !== node.id && n.type !== 'start').map(n => `<option value="${esc(n.id)}" ${edge?.target === n.id ? 'selected' : ''}>${esc(n.name)}</option>`).join('')}</select>`);
+            const edges = graph.edges.filter(e => e.source === node.id && (e.branch || '') === branch);
+            const rows = edges.map(edge => `<div class="wf-connection-row"><button type="button" data-select-edge="${esc(edge.id)}" title="编辑连线 ${esc(edgeName(edge))}">${esc(graph.nodes.find(n => n.id === edge.target)?.name || edge.target)} ↗</button><button type="button" data-delete-edge="${esc(edge.id)}" aria-label="删除连线 ${esc(edgeName(edge))}">×</button></div>`).join('');
+            return `<div class="wf-connection-list">${field(branch ? `${branch} 分支 · 添加连接` : '添加后续节点', `<select data-connect="${branch}"><option value="">选择节点添加连接…</option>${graph.nodes.filter(n => n.id !== node.id && n.type !== 'start' && !edges.some(e => e.target === n.id)).map(n => `<option value="${esc(n.id)}">${esc(n.name)}</option>`).join('')}</select>`)}${rows || '<p class="wf-help">尚未连接，发布前必须连接到结束节点。</p>'}</div>`;
         }).join('');
     }
+    function edgeInspector(edge) {
+        const source = graph.nodes.find(n => n.id === edge.source);
+        const options = (nodes, value) => nodes.map(n => `<option value="${esc(n.id)}" ${n.id === value ? 'selected' : ''}>${esc(n.name)}</option>`).join('');
+        $('[data-inspector]').innerHTML = `<h2>连线配置</h2><p class="wf-help">可删除或修改两端节点，也可拖动蓝色端点重新连接；Esc 取消时保留原连线。</p>${field('起点节点', `<select data-edge-field="source">${options(graph.nodes.filter(n => n.type !== 'end'), edge.source)}</select>`)}<label data-edge-branch ${source?.type === 'if' ? '' : 'hidden'}>起点出口<select data-edge-field="branch">${(source?.type === 'if' ? ['true', 'false'] : ['']).map(b => `<option value="${b}" ${b === (edge.branch || '') ? 'selected' : ''}>${b || '默认'}</option>`).join('')}</select></label>${field('终点节点', `<select data-edge-field="target">${options(graph.nodes.filter(n => n.type !== 'start'), edge.target)}</select>`)}<div class="wf-edge-actions"><button type="button" data-action="apply-edge">保存连线修改</button><button type="button" data-action="reconnect-source">重新连接起点</button><button type="button" data-action="reconnect-target">重新连接终点</button><button type="button" class="wf-danger" data-action="delete-edge">删除连线</button></div><p class="wf-help">也可按 Delete / Backspace 删除选中连线。同一出口可以连接多个后续节点。</p>`;
+    }
     function inspector() {
+        const edge = graph?.edges.find(e => e.id === selectedEdge);
+        if (edge) { edgeInspector(edge); return; }
         const node = graph?.nodes.find(n => n.id === selected);
-        if (!node) { $('[data-inspector]').innerHTML = '<div class="wf-empty">选择一个节点进行配置。</div>'; return; }
+        if (!node) { $('[data-inspector]').innerHTML = '<div class="wf-empty">选择节点或连线进行配置。</div>'; return; }
         const c = node.config ||= {}, style = nodeStyle(node);
         let content = field('节点名称', inputField('name', node.name, 'maxlength="80"'));
         if (node.type === 'start') content += '<p class="wf-help">流程唯一的开始节点，不能删除。手动运行或定时触发时，将运行输入传入后续节点。</p>';
-        if (node.type === 'end') content += '<p class="wf-help">流程唯一的结束节点，不能删除。所有执行分支必须连接到这里，上一个节点的数据作为流程最终输出。</p>';
+        if (node.type === 'end') content += '<p class="wf-help">流程唯一的结束节点，不能删除。所有执行分支必须连接到这里；多条执行路径的 items 按到达顺序汇总为最终输出。</p>';
         if (node.type === 'script') {
             content += field('脚本语言', select('language', c.language, [['javascript', 'JavaScript'], ['groovy', 'Groovy']]));
             content += '<p class="wf-help">入口 main(input, ctx)，返回 { items: [{ json: … }] }。网络请求请使用 HTTP 节点。</p>';
@@ -226,19 +268,57 @@ export function mount(pane, workspace) {
         }
         pre.innerHTML = html + esc(code.slice(end)) + '\n'; pre.scrollTop = textarea.scrollTop; pre.scrollLeft = textarea.scrollLeft;
     }
-    function connect(source, target, branch) {
+    function connect(source, target, branch = '', edgeId = null) {
         const sourceNode = graph.nodes.find(n => n.id === source), targetNode = graph.nodes.find(n => n.id === target);
-        if (sourceNode?.type === 'end') throw new Error('结束节点不能有出口');
-        if (source === target || targetNode?.type === 'start') throw new Error('不能连接到自身或开始节点');
-        if (targetNode?.type !== 'end' && graph.edges.some(e => e.target === target && !(e.source === source && (e.branch || '') === branch))) throw new Error('仅结束节点支持多路汇入，请为分支添加独立处理节点');
-        const edges = graph.edges.filter(e => !(e.source === source && (e.branch || '') === branch));
-        const seen = new Set(), queue = target ? [target] : [];
+        if (!sourceNode || !targetNode) throw new Error('请选择有效的起点和终点节点');
+        if (sourceNode.type === 'end') throw new Error('结束节点不能有出口');
+        if (source === target || targetNode.type === 'start') throw new Error('不能连接到自身或开始节点');
+        if (sourceNode.type === 'if' ? !['true', 'false'].includes(branch) : branch !== '') throw new Error('请选择正确的起点出口');
+        if (edgeId && !graph.edges.some(e => e.id === edgeId)) throw new Error('连线已不存在，请重新选择');
+        const edges = graph.edges.filter(e => e.id !== edgeId);
+        if (edges.some(e => e.source === source && e.target === target && (e.branch || '') === branch)) throw new Error('这两个节点已经通过该出口连接');
+        if (targetNode.type !== 'end' && edges.some(e => e.target === target)) throw new Error('仅结束节点支持多路汇入，请为分支添加独立处理节点');
+        if (edges.length >= 128) throw new Error('一个流程最多包含 128 条连线');
+        const seen = new Set(), queue = [target];
         while (queue.length) {
             const id = queue.pop(); if (id === source) throw new Error('不能创建循环连线'); if (seen.has(id)) continue; seen.add(id);
             edges.filter(e => e.source === id).forEach(e => queue.push(e.target));
         }
-        if (target) edges.push({ id: 'e_' + crypto.randomUUID(), source, target, branch });
-        graph.edges = edges; connecting = null; markDirty(); renderCanvas(); inspector();
+        const edge = { id: edgeId || 'e_' + crypto.randomUUID(), source, target, branch };
+        // Reconnection preserves the execution order and every other outgoing connection.
+        graph.edges = edgeId ? graph.edges.map(e => e.id === edgeId ? edge : e) : [...edges, edge];
+        selected = null; selectedEdge = edge.id; connecting = null; markDirty(); renderCanvas(); inspector(); panel('inspector', false);
+        pane.querySelector(`[data-edge="${CSS.escape(edge.id)}"]`)?.focus({ preventScroll: true });
+        notice(edgeId ? '连线已重新连接。' : '连线已添加，同一出口可继续连接其他节点。');
+    }
+    function deleteEdge(id = selectedEdge) {
+        if (!graph?.edges.some(e => e.id === id)) return;
+        commitInspector();
+        graph.edges = graph.edges.filter(e => e.id !== id);
+        if (selectedEdge === id) selectedEdge = null;
+        connecting = null; markDirty(); renderCanvas(); inspector();
+        $('.wf-canvas-scroll').focus({ preventScroll: true });
+        notice('连线已删除。发布前请确保所有执行路径连接到结束节点。');
+    }
+    function beginReconnect(id, endpoint) {
+        commitInspector(); const edge = graph.edges.find(e => e.id === id); if (!edge) return;
+        selected = null; selectedEdge = id; connecting = { edgeId: id, endpoint };
+        renderCanvas(); inspector();
+        $('.wf-canvas-scroll').focus({ preventScroll: true });
+        notice(endpoint === 'source' ? '点击新起点的出口圆点；Esc 取消。' : '点击新终点的入口圆点；Esc 取消。');
+    }
+    function connectPort(kind, nodeId, branch = '') {
+        if (connecting?.edgeId) {
+            const edge = graph.edges.find(e => e.id === connecting.edgeId); if (!edge) return;
+            if (connecting.endpoint === 'source' && kind === 'source') connect(nodeId, edge.target, branch, edge.id);
+            else if (connecting.endpoint === 'target' && kind === 'target') connect(edge.source, nodeId, edge.branch || '', edge.id);
+            else throw new Error('请点击' + (connecting.endpoint === 'source' ? '起点出口' : '终点入口'));
+        } else if (kind === 'source') {
+            commitInspector(); selectedEdge = null; selected = nodeId; connecting = { source: nodeId, branch };
+            renderCanvas(); inspector();
+            $('.wf-canvas-scroll').focus({ preventScroll: true });
+        } else if (connecting) connect(connecting.source, nodeId, connecting.branch);
+        else selectNode(nodeId);
     }
     function add(kind) {
         if (!workflow) return notice('请先新建工作流。', true);
@@ -266,7 +346,7 @@ export function mount(pane, workspace) {
             for (const branch of type === 'if' ? ['true', 'false'] : ['']) graph.edges.push({ id: 'e_' + crypto.randomUUID(), source: id, target: end.id, branch });
             if (node.position.x + 240 > (end.position?.x || 0)) end.position = { x: Math.min(MAX_POSITION, node.position.x + 280), y: node.position.y };
         }
-        selected = id; markDirty(); renderCanvas(); inspector();
+        selected = id; selectedEdge = null; markDirty(); renderCanvas(); inspector();
         const element = pane.querySelector(`[data-node="${CSS.escape(id)}"]`); element?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
     }
     function example() {
@@ -275,7 +355,7 @@ export function mount(pane, workspace) {
         const js = `function main(input, ctx) {\n  console.log('JavaScript：金额加 5');\n  return {items: input.items.map(item => ({json: {...item.json, amount: Number(item.json.amount ?? 0) + 5}}))};\n}`;
         const groovy = `def main(Map input, Map ctx) {\n    println 'Groovy：金额翻倍'\n    return [items: input.items.collect { [json: it.json + [amount: (it.json.amount ?: 0) * 2]] }]\n}`;
         graph = { nodes: [node('start', 'start', '开始', 50, 160), node('clean', 'script', 'JavaScript 整理', 330, 160, { language: 'javascript', source: js, params: {}, timeoutMs: 10000 }), node('calculate', 'script', 'Groovy 计算', 610, 160, { language: 'groovy', source: groovy, params: {}, timeoutMs: 10000 }), node('check', 'if', '金额是否达标', 890, 160, { left: '{{ input.items[0].json.amount }}', operator: 'gte', right: 200 }), node('accepted', 'script', '达标分支', 1170, 70, { language: 'javascript', source: 'function main(input, ctx) { return input; }', params: {}, timeoutMs: 10000 }), node('rejected', 'script', '未达标分支', 1170, 330, { language: 'groovy', source: 'def main(Map input, Map ctx) { return input }', params: {}, timeoutMs: 10000 }), node('end', 'end', '结束', 1450, 160)], edges: [['start', 'clean', ''], ['clean', 'calculate', ''], ['calculate', 'check', ''], ['check', 'accepted', 'true'], ['check', 'rejected', 'false'], ['accepted', 'end', ''], ['rejected', 'end', '']].map(([source, target, branch], i) => ({ id: 'example_' + i, source, target, branch })) };
-        selected = 'clean'; currentRun = null; markDirty(); renderCanvas(); inspector(); notice('双语言示例已载入。默认输入 120 → JavaScript 加 5 → Groovy 翻倍得到 250 → true 分支。');
+        selected = 'clean'; selectedEdge = null; connecting = null; currentRun = null; markDirty(); renderCanvas(); inspector(); notice('双语言示例已载入。默认输入 120 → JavaScript 加 5 → Groovy 翻倍得到 250 → true 分支。');
     }
     function runInput() { try { return JSON.parse($('[data-input]').value); } catch { throw new Error('运行输入需要有效的 JSON'); } }
     async function refreshRuns() {
@@ -326,6 +406,10 @@ export function mount(pane, workspace) {
         $('[data-schedule-preview]').innerHTML = '<strong>接下来 5 次执行（' + esc(value.timeZone) + '）</strong><ol>' + value.nextRuns.map(v => '<li>' + esc(new Date(v).toLocaleString('zh-CN', { timeZone: value.timeZone, hour12: false })) + '</li>').join('') + '</ol>';
     }
     const actions = {
+        'apply-edge': () => connect($('[data-edge-field="source"]').value, $('[data-edge-field="target"]').value, $('[data-edge-field="branch"]').value, selectedEdge),
+        'delete-edge': () => deleteEdge(),
+        'reconnect-source': () => beginReconnect(selectedEdge, 'source'),
+        'reconnect-target': () => beginReconnect(selectedEdge, 'target'),
         schedule: async () => {
             await refreshSchedule();
             const form = $('[data-schedule-form]');
@@ -353,7 +437,8 @@ export function mount(pane, workspace) {
         credentials: async () => { credentials = await api('/credentials'); credentialList(); $('[data-credentials-dialog]').showModal(); },
     };
     pane.addEventListener('click', event => {
-        const target = event.target.closest('button,[data-node]'); if (!target) return;
+        const target = event.target.closest('button,[data-node],[data-edge],[data-reconnect]'); if (!target) return;
+        if (target.dataset.reconnect) return;
         if (target.dataset.view) {
             const action = target.dataset.view;
             if (action === 'library' || action === 'inspector') panel(action, !$('.wf-layout').classList.contains('is-' + action + '-hidden'));
@@ -368,9 +453,11 @@ export function mount(pane, workspace) {
         if (target.dataset.close) { pane.querySelector(`[data-${target.dataset.close}-dialog]`).close(); return; }
         if (target.dataset.action) { perform(actions[target.dataset.action]); return; }
         try {
-            if (target.dataset.add) add(target.dataset.add);
-            else if (target.dataset.source) { commitInspector(); connecting = { source: target.dataset.source, branch: target.dataset.branch }; renderCanvas(); }
-            else if (target.dataset.target) { if (connecting) connect(connecting.source, target.dataset.target, connecting.branch); else selectNode(target.dataset.target); }
+            if (target.dataset.edge || target.dataset.selectEdge) selectEdge(target.dataset.edge || target.dataset.selectEdge);
+            else if (target.dataset.deleteEdge) deleteEdge(target.dataset.deleteEdge);
+            else if (target.dataset.add) add(target.dataset.add);
+            else if (target.dataset.source) connectPort('source', target.dataset.source, target.dataset.branch);
+            else if (target.dataset.target) connectPort('target', target.dataset.target);
             else if (target.dataset.run) perform(() => viewRun(target.dataset.run));
             else if (target.dataset.deleteCredential) perform(async () => { if (!confirm('删除后，引用此凭据的节点需要重新选择凭据，是否继续？')) return; await api('/credentials/' + target.dataset.deleteCredential, { method: 'DELETE' }); credentials = await api('/credentials'); credentialList(); inspector(); });
             else if (target.dataset.node) { if (target.dataset.node !== selected) selectNode(target.dataset.node); panel('inspector', false); }
@@ -398,16 +485,24 @@ export function mount(pane, workspace) {
         if (target.matches('[data-workflows]')) { const id = target.value; if (dirty && !confirm('切换将丢弃未保存的草稿，是否继续？')) { picker(); return; } perform(() => load(id)); }
         if (target.matches('[data-credential-form] [name="kind"]')) $('[data-credential-user]').hidden = target.value === 'bearer';
         try {
+            if (target.matches('[data-edge-field="source"]')) {
+                const isIf = graph.nodes.find(n => n.id === target.value)?.type === 'if';
+                $('[data-edge-branch]').hidden = !isIf;
+                $('[data-edge-field="branch"]').innerHTML = (isIf ? ['true', 'false'] : ['']).map(b => `<option value="${b}">${b || '默认'}</option>`).join('');
+            }
             if (target.matches('[data-field="language"]')) {
                 commitInspector(); const node = graph.nodes.find(n => n.id === selected); node.config.sources ||= {};
                 node.config.sources[node.config.language] = node.config.source; node.config.language = target.value;
                 node.config.source = node.config.sources[target.value] || templates[target.value]; markDirty(); renderCanvas(); inspector();
             }
-            if (target.matches('[data-connect]')) { commitInspector(); connect(selected, target.value, target.dataset.connect); }
+            if (target.matches('[data-connect]') && target.value) { commitInspector(); connect(selected, target.value, target.dataset.connect); }
         } catch (error) { notice(error.message, true); }
     });
     pane.addEventListener('keydown', event => {
-        if (event.key === 'Escape') { connecting = null; if (graph) renderCanvas(); if (!pane.querySelector('dialog[open]')) focus(false); }
+        if (event.key === 'Escape') { const wasConnecting = !!connecting; connecting = null; if (graph) renderCanvas(); if (!wasConnecting && !pane.querySelector('dialog[open]')) focus(false); }
+        if (['Delete', 'Backspace'].includes(event.key) && selectedEdge && !event.target.closest('input,textarea,select,[contenteditable="true"],dialog')) { event.preventDefault(); deleteEdge(); }
+        if ((event.key === 'Enter' || event.key === ' ') && event.target.matches('[data-edge]')) { event.preventDefault(); try { selectEdge(event.target.dataset.edge); } catch (e) { notice(e.message, true); } }
+        if ((event.key === 'Enter' || event.key === ' ') && event.target.matches('[data-reconnect]')) { event.preventDefault(); beginReconnect(event.target.dataset.edgeId, event.target.dataset.reconnect); }
         if ((event.key === 'Enter' || event.key === ' ') && event.target.matches('[data-node]')) { event.preventDefault(); try { selectNode(event.target.dataset.node); } catch (e) { notice(e.message, true); } }
         if (event.key === 'Tab' && event.target.matches('[data-field="source"]')) { event.preventDefault(); const t = event.target; t.setRangeText('  ', t.selectionStart, t.selectionEnd, 'end'); t.dispatchEvent(new Event('input', { bubbles: true })); }
     });
@@ -430,13 +525,47 @@ export function mount(pane, workspace) {
         const end = () => { handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', end); handle.removeEventListener('pointercancel', end); if (moved) markDirty(); };
         handle.addEventListener('pointermove', move); handle.addEventListener('pointerup', end); handle.addEventListener('pointercancel', end);
     });
+    $('.wf-canvas-scroll').addEventListener('pointerdown', event => {
+        const handle = event.target.closest('[data-reconnect]'); if (!handle || event.button !== 0) return;
+        event.preventDefault(); event.stopPropagation();
+        const scroll = event.currentTarget, edgeId = handle.dataset.edgeId, endpoint = handle.dataset.reconnect;
+        const start = { x: event.clientX, y: event.clientY }; let moved = false;
+        beginReconnect(edgeId, endpoint); scroll.setPointerCapture(event.pointerId);
+        const move = e => {
+            if (!connecting || connecting.edgeId !== edgeId) return;
+            moved ||= Math.abs(e.clientX - start.x) + Math.abs(e.clientY - start.y) > 4;
+            if (!moved) return;
+            const rect = scroll.getBoundingClientRect();
+            connecting.point = { x: (e.clientX - rect.left + scroll.scrollLeft) / zoom, y: (e.clientY - rect.top + scroll.scrollTop) / zoom };
+            lines();
+        };
+        const end = e => {
+            scroll.removeEventListener('pointermove', move); scroll.removeEventListener('pointerup', end); scroll.removeEventListener('pointercancel', end);
+            if (scroll.hasPointerCapture(event.pointerId)) scroll.releasePointerCapture(event.pointerId);
+            try {
+                if (e.type === 'pointerup' && moved && connecting?.edgeId === edgeId) {
+                    const element = document.elementFromPoint(e.clientX, e.clientY);
+                    const port = element?.closest(endpoint === 'source' ? '[data-source]' : '[data-target]');
+                    const node = graph.nodes.find(n => n.id === element?.closest('[data-node]')?.dataset.node);
+                    if (port) connectPort(endpoint, endpoint === 'source' ? port.dataset.source : port.dataset.target, port.dataset.branch || '');
+                    else if (node && (endpoint === 'target' || node.type !== 'if')) connectPort(endpoint, node.id);
+                    else notice('未连接到有效端口，已保留原连线。', true);
+                }
+            } catch (error) { notice(error.message, true); }
+            finally {
+                connecting = null; renderCanvas(); inspector();
+                pane.querySelector(`[data-edge="${CSS.escape(edgeId)}"]`)?.focus({ preventScroll: true });
+            }
+        };
+        scroll.addEventListener('pointermove', move); scroll.addEventListener('pointerup', end); scroll.addEventListener('pointercancel', end);
+    });
     $('.wf-canvas-scroll').addEventListener('wheel', event => {
         if (!event.ctrlKey && !event.metaKey) return;
         event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect();
         setZoom(zoom * Math.exp(-event.deltaY * .002), { x: event.clientX - rect.left, y: event.clientY - rect.top });
     }, { passive: false });
     $('.wf-canvas-scroll').addEventListener('pointerdown', event => {
-        if (event.button !== 0 || event.pointerType === 'touch' || event.target.closest('[data-node],button')) return;
+        if (event.button !== 0 || event.pointerType === 'touch' || event.target.closest('[data-node],button,[data-edge],[data-reconnect]')) return;
         const scroll = event.currentTarget, start = { x: event.clientX, y: event.clientY, left: scroll.scrollLeft, top: scroll.scrollTop };
         scroll.setPointerCapture(event.pointerId); scroll.classList.add('is-panning');
         const move = e => { scroll.scrollLeft = start.left - e.clientX + start.x; scroll.scrollTop = start.top - e.clientY + start.y; };

@@ -508,6 +508,8 @@ def workflow_checks(token):
                         page = response.read()
                         if path in shell_pages and any(('href="' + route + '"').encode() not in page for route in ['/workflows.html', '/workflow-runs.html']):
                             raise RuntimeError('workflow navigation missing from management page: ' + path)
+                        if path == '/workspace/workflows.js' and any(marker not in page for marker in [b'data-edge-field', b'data-reconnect', b'function connectPort']):
+                            raise RuntimeError('workflow connection editor is missing from deployed assets')
                     break
                 except urllib.error.HTTPError:
                     raise
@@ -585,6 +587,29 @@ def workflow_checks(token):
         if scheduled.get('output', {}).get('items', [{}])[0].get('json', {}).get('value') != 42:
             raise RuntimeError('scheduled workflow result mismatch')
         print('PUBLIC_WORKFLOW_SCHEDULE_AND_INSTANCE_LIST=passed', flush=True)
+        print('WORKFLOW_VERIFY_STAGE=FAN_OUT', flush=True)
+        # Reuse only this temporary workflow after pausing its schedule.
+        nodes.insert(-1, {'id': 'fork', 'name': 'Additional successor', 'type': 'script', 'config': {
+            'language': 'javascript', 'timeoutMs': 15000,
+            'source': 'function main(i,c){return {items:i.items.map(x=>({json:{value:x.json.value+1}}))};}'}})
+        edges.extend([{'id': 'fork-input', 'source': 'javascript', 'target': 'fork', 'branch': ''},
+            {'id': 'fork-end', 'source': 'fork', 'target': 'end', 'branch': ''}])
+        workflow = request('/api/workflows/' + workflow_id)
+        workflow = request('/api/workflows/' + workflow_id, {'name': workflow['name'], 'revision': workflow['revision'],
+            'definition': {'nodes': nodes, 'edges': edges}}, 'PUT')
+        request('/api/workflows/' + workflow_id + '/publish', {'revision': workflow['revision']})
+        run = request('/api/workflows/' + workflow_id + '/runs', {'input': {'items': [{'json': {}}]}})
+        run_id = run['id']
+        deadline = time.monotonic() + 65
+        while run['status'] in ('QUEUED', 'RUNNING') and time.monotonic() < deadline:
+            time.sleep(.5)
+            run = request('/api/workflows/runs/' + run_id)
+        values = [item.get('json', {}).get('value') for item in run.get('output', {}).get('items', [])] if run.get('output') else []
+        if run['status'] != 'SUCCEEDED' or values != [42, 8]:
+            raise RuntimeError('production workflow fan-out result mismatch')
+        if len(run.get('nodes', [])) != 6 or any(step['status'] != 'SUCCEEDED' for step in run['nodes']):
+            raise RuntimeError('production workflow fan-out node status mismatch')
+        print('PUBLIC_WORKFLOW_FAN_OUT_AND_END_AGGREGATION=passed', flush=True)
     finally:
         # Delete only the IDs created above. Existing workflows, credentials and browser sessions are untouched.
         if workflow_id:

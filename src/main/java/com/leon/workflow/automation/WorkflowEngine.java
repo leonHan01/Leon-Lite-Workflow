@@ -17,6 +17,7 @@ public class WorkflowEngine {
             Thread.ofPlatform().daemon().name("workflow-", 0).factory(), new ThreadPoolExecutor.AbortPolicy());
     private final Map<String, FutureTask<Void>> tasks = new ConcurrentHashMap<>();
     public record NodeResult(Map<String, Object> output, String logs, String branch) {}
+    private record PendingNode(WorkflowGraph.Node node, Map<String, Object> input) {}
     public WorkflowEngine(WorkflowStore store, ScriptProcessRunner scripts, WorkflowHttp http) { this.store = store; this.scripts = scripts; this.http = http; }
     public Map<String, String> runtimes() { return Map.of("javascript", "GraalJS 25.0.2", "groovy", "Groovy " + groovy.lang.GroovySystem.getVersion()); }
     public Map<String, Object> capabilities() { return Map.of("runtimes", runtimes(), "sandbox", scripts.sandbox(), "maxNodes", WorkflowGraph.MAX_NODES, "maxConcurrentRuns", 2, "scheduledExecution", true); }
@@ -40,35 +41,59 @@ public class WorkflowEngine {
     private void run(String id, WorkflowGraph graph, Map<String, Object> input) {
         if (!store.start(id)) return;
         WorkflowPrivacy privacy = new WorkflowPrivacy(); privacy.collect(input);
-        WorkflowGraph.Node current = graph.nodes().stream().filter(n -> "start".equals(n.type())).findFirst().orElseThrow();
+        WorkflowGraph.Node start = graph.nodes().stream().filter(n -> "start".equals(n.type())).findFirst().orElseThrow();
+        WorkflowGraph.Node end = graph.nodes().stream().filter(n -> "end".equals(n.type())).findFirst().orElseThrow();
         Map<String, WorkflowGraph.Node> nodes = new HashMap<>(); graph.nodes().forEach(n -> nodes.put(n.id(), n));
-        Map<String, Object> data = input;
+        Deque<PendingNode> pending = new ArrayDeque<>(); pending.add(new PendingNode(start, input));
+        List<Map<String, Object>> outputs = new ArrayList<>();
         long deadline = System.nanoTime() + TimeUnit.MINUTES.toNanos(5);
         try {
-            while (current != null) {
-                if (Thread.currentThread().isInterrupted() || store.cancelled(id)) throw new InterruptedException();
-                if (System.nanoTime() > deadline) throw new IllegalArgumentException("工作流运行超过 5 分钟，请拆分为较短流程");
-                store.startNode(id, current, privacy.mask(data));
-                try {
-                    NodeResult result = execute(current, data, id, privacy);
-                    privacy.collect(result.output());
-                    if (Thread.currentThread().isInterrupted() || store.cancelled(id)) throw new InterruptedException();
-                    store.finishNode(id, current.id(), "SUCCEEDED", privacy.mask(result.output()), privacy.message(result.logs()), null);
-                    data = result.output();
-                    String nodeId = current.id(), branch = result.branch();
-                    var next = graph.edges().stream().filter(e -> e.source().equals(nodeId) && Objects.equals(Objects.requireNonNullElse(e.branch(), ""), branch)).findFirst();
-                    if (next.isEmpty() && !"end".equals(current.type())) throw new IllegalArgumentException("执行路径未连接到结束节点");
-                    current = next.map(e -> nodes.get(e.target())).orElse(null);
-                } catch (InterruptedException error) { throw error; }
-                catch (Exception error) {
-                    String logs = error instanceof ScriptProcessRunner.ScriptFailure failure ? privacy.message(failure.logs()) : null;
-                    store.finishNode(id, current.id(), "FAILED", null, logs, error(error, privacy)); throw error;
+            while (!pending.isEmpty()) {
+                checkRun(id, deadline);
+                PendingNode current = pending.removeFirst();
+                NodeResult result = runNode(id, current.node(), current.input(), privacy);
+                var next = graph.edges().stream().filter(e -> e.source().equals(current.node().id()) && Objects.equals(Objects.requireNonNullElse(e.branch(), ""), result.branch())).toList();
+                if (next.isEmpty()) throw new IllegalArgumentException("执行路径未连接到结束节点");
+                for (var edge : next) {
+                    Map<String, Object> data = read(write(result.output()));
+                    if (edge.target().equals(end.id())) outputs.add(data);
+                    else pending.addLast(new PendingNode(nodes.get(edge.target()), data));
                 }
             }
-            store.finish(id, "SUCCEEDED", privacy.mask(data), null);
+            checkRun(id, deadline);
+            NodeResult result = runNode(id, end, terminalInput(outputs), privacy);
+            store.finish(id, "SUCCEEDED", privacy.mask(result.output()), null);
         } catch (InterruptedException error) {
             Thread.currentThread().interrupt(); store.finish(id, "CANCELLED", null, "执行已取消；已发送的 HTTP 请求可能已在对端生效");
         } catch (Exception error) { store.finish(id, "FAILED", null, error(error, privacy)); }
+    }
+    private void checkRun(String id, long deadline) throws InterruptedException {
+        if (Thread.currentThread().isInterrupted() || store.cancelled(id)) throw new InterruptedException();
+        if (System.nanoTime() > deadline) throw new IllegalArgumentException("工作流运行超过 5 分钟，请拆分为较短流程");
+    }
+    private Map<String, Object> terminalInput(List<Map<String, Object>> outputs) {
+        if (outputs.isEmpty()) throw new IllegalArgumentException("执行路径未连接到结束节点");
+        if (outputs.size() == 1) return outputs.getFirst();
+        List<Object> items = new ArrayList<>();
+        for (var output : outputs) {
+            items.addAll((List<?>) output.get("items"));
+            if (items.size() > 1000) throw new IllegalArgumentException("分支汇总结果超过 1000 条，请减少输出数据");
+        }
+        return envelope(Map.of("items", items));
+    }
+    private NodeResult runNode(String id, WorkflowGraph.Node node, Map<String, Object> input, WorkflowPrivacy privacy) throws Exception {
+        store.startNode(id, node, privacy.mask(input));
+        try {
+            NodeResult result = execute(node, input, id, privacy);
+            privacy.collect(result.output());
+            if (Thread.currentThread().isInterrupted() || store.cancelled(id)) throw new InterruptedException();
+            store.finishNode(id, node.id(), "SUCCEEDED", privacy.mask(result.output()), privacy.message(result.logs()), null);
+            return result;
+        } catch (InterruptedException error) { throw error; }
+        catch (Exception error) {
+            String logs = error instanceof ScriptProcessRunner.ScriptFailure failure ? privacy.message(failure.logs()) : null;
+            store.finishNode(id, node.id(), "FAILED", null, logs, error(error, privacy)); throw error;
+        }
     }
     private NodeResult execute(WorkflowGraph.Node node, Map<String, Object> input, String runId, WorkflowPrivacy privacy) throws Exception {
         Map<String, Object> config = node.settings();

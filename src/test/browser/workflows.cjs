@@ -89,12 +89,82 @@ const server = http.createServer(async (req, res) => {
         const condition = workflow.definition.nodes.find(n => n.type === 'if');
         assert.equal(workflow.definition.nodes.length, 4);
         assert.equal(workflow.definition.edges.filter(e => e.source === condition.id && e.target === 'end').length, 2);
-        await page.locator('[data-connect="false"]').selectOption('end');
-        assert.ok(!(await page.locator('[data-notice]').getAttribute('class')).includes('is-error'), '结束节点不能接收多个分支');
+        assert.equal(await page.locator('[data-connect="false"] option[value="end"]').count(), 0, '添加连接列表不应重复显示已有连接');
+        const scriptId = workflow.definition.nodes.find(n => n.type === 'script').id;
+        const originalEdge = workflow.definition.edges.find(e => e.source === scriptId && e.target === condition.id);
+        const saveGraph = async () => {
+            await page.getByRole('button', {name:'保存草稿',exact:true}).click();
+            await page.waitForFunction(() => document.querySelector('[data-version]').textContent.includes('草稿已保存'));
+        };
+        const clickEdge = async id => {
+            await page.getByRole('button',{name:'适应视图',exact:true}).click();
+            const point = await page.locator(`[data-edge="${id}"] .wf-edge-hit`).evaluate(path => {
+                for (const fraction of [.5,...Array.from({length:19},(_,i)=>(i+1)/20)]) {
+                    const point = path.getPointAtLength(path.getTotalLength() * fraction).matrixTransform(path.getScreenCTM());
+                    if (document.elementFromPoint(point.x,point.y)?.closest('[data-edge]') === path.parentElement) return {x:point.x,y:point.y};
+                }
+            });
+            assert.ok(point, '连线没有可点击的可见区域');
+            await page.mouse.click(point.x, point.y);
+            assert.equal(await page.locator('[data-edge].is-selected').getAttribute('data-edge'), id);
+        };
+        const connectPorts = async (source, target) => {
+            await page.locator(`[data-source="${source}"]`).click();
+            await page.locator(`[data-target="${target}"]`).click();
+        };
+        const dragEndpoint = async (endpoint, port) => {
+            const handle = await page.locator(`[data-reconnect="${endpoint}"]`).boundingBox();
+            const target = await page.locator(port).boundingBox();
+            await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2); await page.mouse.down();
+            await page.mouse.move(target.x + target.width / 2, target.y + target.height / 2, {steps:10}); await page.mouse.up();
+        };
+        await clickEdge(originalEdge.id);
+        assert.equal(await page.locator('.wf-edge-handle').count(),2);
+        await page.keyboard.press('Delete'); await saveGraph();
+        assert.ok(!workflow.definition.edges.some(e=>e.id===originalEdge.id),'Delete 未删除选中连线');
+        await connectPorts('start', condition.id); await saveGraph();
+        assert.equal(workflow.definition.edges.filter(e=>e.source==='start').length,2,'新增连接覆盖了原有出口');
+        const editedId = workflow.definition.edges.find(e=>e.source==='start' && e.target===condition.id).id;
+        await page.locator('[data-edge-field="target"]').selectOption('end');
+        await page.getByRole('button',{name:'保存连线修改',exact:true}).click(); await saveGraph();
+        assert.equal(workflow.definition.edges.find(e=>e.id===editedId).target,'end');
+        await page.locator('[data-edge-field="source"]').selectOption(scriptId);
+        await page.getByRole('button',{name:'保存连线修改',exact:true}).click(); await saveGraph();
+        assert.equal(workflow.definition.edges.find(e=>e.id===editedId).source,scriptId);
+        await page.getByRole('button',{name:'重新连接终点',exact:true}).click(); await page.keyboard.press('Escape');
+        assert.equal(await page.locator('[data-edge-field="target"]').inputValue(),'end','取消重新连接时丢失原连线');
+        await page.getByRole('button',{name:'重新连接终点',exact:true}).click();
+        await page.locator(`[data-target="${condition.id}"]`).click(); await saveGraph();
+        assert.equal(workflow.definition.edges.find(e=>e.id===editedId).target,condition.id);
+        const beforeDuplicate = workflow.definition.edges.length;
+        await connectPorts(scriptId,condition.id);
+        assert.ok((await page.locator('[data-notice]').textContent()).includes('已经'));
+        await page.keyboard.press('Escape'); await saveGraph();
+        assert.equal(workflow.definition.edges.length,beforeDuplicate);
+        await clickEdge(editedId);
+        await page.locator('[data-edge-field="target"]').selectOption(scriptId);
+        await page.getByRole('button',{name:'保存连线修改',exact:true}).click(); await saveGraph();
+        assert.equal(workflow.definition.edges.find(e=>e.id===editedId).target,condition.id,'无效重连改变了原连线');
+        await clickEdge(editedId);
+        await dragEndpoint('target','[data-target="end"]'); await saveGraph();
+        assert.equal(workflow.definition.edges.find(e=>e.id===editedId).target,'end','拖动终点未更新连线');
+        await clickEdge(editedId);
+        await dragEndpoint('source','[data-source="start"]'); await saveGraph();
+        assert.equal(workflow.definition.edges.find(e=>e.id===editedId).source,'start','拖动起点未更新连线');
+        assert.equal(workflow.definition.edges.filter(e=>e.source==='start').length,2);
+        await page.locator('[data-edge-field="source"]').selectOption(scriptId);
+        await page.locator('[data-edge-field="target"]').selectOption(condition.id);
+        await page.getByRole('button',{name:'保存连线修改',exact:true}).click(); await saveGraph();
+        await clickEdge(editedId);
+        await page.screenshot({path:'/private/tmp/leon-workflow-edge-editing.png',fullPage:false});
+        await page.getByRole('button',{name:'删除连线',exact:true}).click(); await saveGraph();
+        assert.ok(!workflow.definition.edges.some(e=>e.id===editedId));
+        await connectPorts(scriptId,condition.id); await saveGraph();
         await page.locator('[data-node="end"]').click();
         assert.equal(await page.locator('[data-action="delete-node"]').count(), 0);
         assert.equal(await page.locator('[data-connect]').count(), 0);
         await page.getByRole('button', { name: '载入双语言示例', exact: true }).click();
+        await page.getByRole('button',{name:'重置画布缩放',exact:true}).click();
         assert.equal(await page.locator('[data-node]').count(), 7);
         const original = await page.getByRole('textbox', { name: '脚本代码' }).inputValue();
         await page.locator('[data-field="language"]').selectOption('groovy');
