@@ -2,6 +2,7 @@
 .workspace-app .lw-shell { align-items:flex-start; }
 .workspace-app .lw-sidebar { border-radius:0; }
 .workspace-app .lw-topbar { border-radius:0; }
+.workspace-app.is-workflow-page .lw-topbar { height:48px; padding:0 24px; }
 .workspace-app .lw-nav-group { min-width:0; }
 .workspace-app .lw-nav-toggle { display:flex; align-items:center; gap:12px; width:100%; min-height:44px; padding:0 13px; border:0 !important; border-radius:9px; background:transparent !important; box-shadow:none !important; color:#7a8388 !important; font:600 13px var(--lw-font); text-align:left; cursor:pointer; }
 .workspace-app .lw-nav-toggle:hover { background:#f4f6fc !important; color:#4669e8 !important; }

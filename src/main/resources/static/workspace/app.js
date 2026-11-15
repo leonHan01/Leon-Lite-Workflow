@@ -103,6 +103,7 @@ function expandNavigationGroup(group, expanded) {
 
 function updateNavigation(definition) {
     document.body.classList.toggle('is-music-page', ['music', 'music-statistics'].includes(definition[0]));
+    document.body.classList.toggle('is-workflow-page', definition[0] === 'workflows');
     const key = definition[0] === 'detail' ? 'records' : definition[0] === 'music-statistics' ? 'music' : definition[0];
     document.getElementById('workspaceTitle').textContent = definition[1];
     document.title = definition[1] + ' · Leon Workflow';

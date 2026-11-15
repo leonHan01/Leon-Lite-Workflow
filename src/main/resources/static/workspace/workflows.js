@@ -6,6 +6,9 @@ const templates = {
 const labels = { start: '开始', end: '结束', http: 'HTTP 请求', script: '脚本', if: '条件判断', feishu: '飞书消息', email: '发送邮件', 'github-trending': 'GitHub Trending 分析' };
 const feishuIcon = '<img src="/workspace/icons/feishu.png" alt="" aria-hidden="true">';
 const githubIcon = '<img src="/workspace/icons/github.png" alt="" aria-hidden="true">';
+const javascriptIcon = '<img src="/workspace/icons/javascript.png" alt="" aria-hidden="true">';
+const groovyIcon = '<img src="/workspace/icons/groovy.png" alt="" aria-hidden="true">';
+const emailIcon = '<img src="/workspace/icons/email.png" alt="" aria-hidden="true">';
 const trendingSources = [['https://github.com/trending', '日榜'], ['https://github.com/trending?since=weekly', '周榜'], ['https://github.com/trending?since=monthly', '月榜']];
 const statuses = { QUEUED: '排队中', PENDING: '等待', RUNNING: '运行中', SUCCEEDED: '成功', FAILED: '失败', CANCELLED: '已取消', SKIPPED: '已跳过' };
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -166,7 +169,7 @@ export function mount(pane, workspace) {
     function nodeStyle(node) {
         const requested = node.type === 'script' ? (node.config?.language === 'groovy' ? 'groovy' : 'script') : node.type;
         const kind = ['start', 'end', 'http', 'script', 'groovy', 'if', 'feishu', 'email', 'github-trending'].includes(requested) ? requested : 'script';
-        return { kind, icon: ({ start: '▶', end: '■', http: '↗', script: 'JS', groovy: 'G', if: '⑂', feishu: feishuIcon, email: '✉', 'github-trending': githubIcon })[kind], label: node.type === 'script' ? (node.config.language === 'groovy' ? 'Groovy' : 'JavaScript') : labels[node.type] };
+        return { kind, icon: ({ start: '▶', end: '■', http: '↗', script: javascriptIcon, groovy: groovyIcon, if: '⑂', feishu: feishuIcon, email: emailIcon, 'github-trending': githubIcon })[kind], label: node.type === 'script' ? (node.config.language === 'groovy' ? 'Groovy' : 'JavaScript') : labels[node.type] };
     }
     function renderCanvas() {
         if (!graph) return;
@@ -177,7 +180,7 @@ export function mount(pane, workspace) {
             return `<div class="wf-node ${node.type === 'if' ? 'is-if' : ''} ${selected === node.id ? 'is-selected' : ''} ${status ? 'status-' + esc(status) : ''}" data-node="${esc(node.id)}" style="left:${x}px;top:${y}px" tabindex="0" role="button" aria-label="配置节点 ${esc(node.name)}">
                 ${node.type !== 'start' ? `<button type="button" class="wf-port wf-port-in" data-target="${esc(node.id)}" aria-label="连接到 ${esc(node.name)}"></button>` : ''}
                 <div class="wf-node-head" data-drag="${esc(node.id)}"><b class="wf-icon wf-${style.kind}">${style.icon}</b><div><span class="wf-node-name">${esc(node.name)}</span><span class="wf-node-type">${esc(style.label)}</span></div></div>
-                <div class="wf-node-foot"><span>${esc(node.id)}</span><span>${esc(statuses[status] || '')}</span></div>
+                <div class="wf-node-foot"><span>${esc(statuses[status] || '')}</span></div>
                 ${(node.type === 'end' ? [] : node.type === 'if' ? ['true', 'false'] : ['']).map(branch => `<button type="button" class="wf-port wf-port-out ${connecting?.source === node.id && connecting?.branch === branch ? 'is-connecting' : ''}" data-source="${esc(node.id)}" data-branch="${branch}" aria-label="${esc(node.name)} ${branch || '默认'}出口"></button>${branch ? `<span class="wf-branch-label ${branch}">${branch}</span>` : ''}`).join('')}
             </div>`;
         }).join('');
@@ -349,7 +352,7 @@ export function mount(pane, workspace) {
         if (['http', 'script', 'feishu', 'email'].includes(node.type)) content += field('超时（毫秒，100–30000）', inputField('timeoutMs', c.timeoutMs || 10000, 'type="number" min="100" max="30000" step="100"'));
         if (node.type !== 'end') content += `<h3 class="wf-section-label">连接出口</h3>${connectionFields(node)}`;
         content += `<div class="wf-node-actions"><button type="button" data-action="test">${node.type === 'feishu' ? '发送测试消息' : node.type === 'email' ? '发送测试邮件' : node.type === 'github-trending' ? '生成 Trending 分析' : '调试此节点'}</button>${!['start', 'end'].includes(node.type) ? '<button type="button" class="wf-danger" data-action="delete-node">删除节点</button>' : ''}</div>`;
-        $('[data-inspector]').innerHTML = `<h2>${esc(style.label)}</h2><div class="wf-node-id">${esc(node.id)}</div><div data-node-error></div>${content}<div data-node-debug></div>`;
+        $('[data-inspector]').innerHTML = `<h2>${esc(style.label)}</h2><div data-node-error></div>${content}<div data-node-debug></div>`;
         nodeError(); highlight(); controls();
     }
     function nodeError() {

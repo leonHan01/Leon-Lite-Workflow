@@ -129,6 +129,15 @@ const server = http.createServer(async (req, res) => {
             const added = workflow.definition.nodes.find(n=>!['start','end'].includes(n.type));
             assert.equal(added.type,['javascript','groovy'].includes(kind)?'script':kind);
             if (added.type==='script') assert.equal(added.config.language,kind);
+            const iconFile = ({javascript:'javascript',groovy:'groovy',email:'email'})[kind];
+            if (iconFile) {
+                const icon = page.locator('.wf-node.is-selected .wf-icon img');
+                assert.equal(await icon.getAttribute('src'),`/workspace/icons/${iconFile}.png`);
+                await icon.evaluate(img => img.decode());
+                assert.equal(await icon.evaluate(img => getComputedStyle(img).width),'40px');
+            }
+            assert.equal((await page.locator('.wf-node.is-selected').innerText()).includes(added.id),false,'画布不应展示节点 ID');
+            assert.equal(await page.locator('.wf-node-id').count(),0,'节点配置不应展示节点 ID');
             assert.ok(Math.abs(added.position.x-expected.x)<1 && Math.abs(added.position.y-expected.y)<1,`缩放 ${scale} 或滚动后落点错误`);
             assert.deepEqual(workflow.definition.edges,beforeEdges,'拖入节点改变了现有连线');
             assert.deepEqual(workflow.definition.nodes.find(n=>n.id==='end').position,endPosition,'拖入节点移动了结束节点');
@@ -527,7 +536,12 @@ const server = http.createServer(async (req, res) => {
         assert.equal(schedule.enabled,false);
         await page.getByRole('button', { name: '▶ 运行 v1', exact: true }).click();
         await page.locator('[data-step="start"][open] [data-debug-logs]').filter({hasText:'节点运行中'}).waitFor();
+        assert.equal(await page.locator('[data-node="start"]').evaluate(node => getComputedStyle(node.querySelector('.wf-icon'),'::after').animationName),'wf-node-running','运行节点应显示旋转动画');
+        assert.equal(await page.locator('[data-node="start"] .wf-icon').evaluate(icon => getComputedStyle(icon).width),'44px');
+        await page.screenshot({path:'/private/tmp/leon-workflow-running-node.png',fullPage:false});
         await page.waitForFunction(() => document.querySelector('[data-run-detail] .wf-badge')?.textContent === '成功');
+        assert.equal(await page.locator('.wf-node.status-RUNNING').count(),0,'执行完成后应停止旋转动画');
+        assert.equal(await page.locator('[data-node="start"]').evaluate(node => getComputedStyle(node.querySelector('.wf-icon'),'::after').animationName),'none');
         assert.ok((await page.locator('[data-run-detail]').textContent()).includes('250'));
         assert.equal(await page.locator('[data-node="rejected"]').getAttribute('class').then(c => c.includes('status-SKIPPED')), true);
         await page.locator('[data-node="calculate"]').click();
