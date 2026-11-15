@@ -3,14 +3,15 @@ const templates = {
     javascript: `function main(input, ctx) {\n  return {\n    items: input.items.map(item => ({\n      json: { ...item.json, name: String(item.json.name ?? '').toUpperCase() }\n    }))\n  };\n}`,
     groovy: `def main(Map input, Map ctx) {\n    return [items: input.items.collect { item ->\n        [json: item.json + [name: (item.json.name ?: '').toUpperCase()]]\n    }]\n}`,
 };
-const labels = { start: '开始', end: '结束', http: 'HTTP 请求', script: '脚本', if: '条件判断', feishu: '飞书消息', email: '发送邮件', 'github-trending': 'GitHub Trending 分析' };
+const labels = { start: '开始', end: '结束', http: 'HTTP 请求', script: '脚本', if: '条件判断', feishu: '飞书消息', email: '发送邮件', 'github-trending': 'GitHub Trending 分析', 'tech-weekly': '科技爱好者周刊分析' };
 const feishuIcon = '<img src="/workspace/icons/feishu.png" alt="" aria-hidden="true">';
 const githubIcon = '<img src="/workspace/icons/github.png" alt="" aria-hidden="true">';
 const javascriptIcon = '<img src="/workspace/icons/javascript.png" alt="" aria-hidden="true">';
 const groovyIcon = '<img src="/workspace/icons/groovy.png" alt="" aria-hidden="true">';
 const emailIcon = '<img src="/workspace/icons/email.png" alt="" aria-hidden="true">';
 const httpIcon = '<img src="/workspace/icons/http.png" alt="" aria-hidden="true">';
-const trendingSources = [['https://github.com/trending', '日榜'], ['https://github.com/trending?since=weekly', '周榜'], ['https://github.com/trending?since=monthly', '月榜']];
+const trendingSources = [['https://github.com/trending?since=weekly', '周榜'], ['https://github.com/trending?since=monthly', '月榜']];
+const trendingSource = value => !value || value === 'https://github.com/trending' || value === 'https://github.com/trending?since=daily' ? trendingSources[0][0] : value;
 const statuses = { QUEUED: '排队中', PENDING: '等待', RUNNING: '运行中', SUCCEEDED: '成功', FAILED: '失败', CANCELLED: '已取消', SKIPPED: '已跳过' };
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const pretty = value => JSON.stringify(value, null, 2);
@@ -174,6 +175,8 @@ export function mount(pane, workspace) {
         } else if (node.type === 'email') {
             for (const key of ['credentialId', 'to', 'cc', 'bcc', 'subject', 'body', 'format']) node.config[key] = get(key);
             node.config.timeoutMs = Number(get('timeoutMs'));
+        } else if (node.type === 'tech-weekly') {
+            node.config.timeoutMs = Number(get('timeoutMs'));
         } else if (node.type === 'github-trending') {
             node.config.sourceUrl = get('sourceUrl');
             node.config.maxProjects = Number(get('maxProjects')); node.config.timeoutMs = Number(get('timeoutMs'));
@@ -229,8 +232,8 @@ export function mount(pane, workspace) {
     }
     function nodeStyle(node) {
         const requested = node.type === 'script' ? (node.config?.language === 'groovy' ? 'groovy' : 'script') : node.type;
-        const kind = ['start', 'end', 'http', 'script', 'groovy', 'if', 'feishu', 'email', 'github-trending'].includes(requested) ? requested : 'script';
-        return { kind, icon: ({ start: '▶', end: '■', http: httpIcon, script: javascriptIcon, groovy: groovyIcon, if: '⑂', feishu: feishuIcon, email: emailIcon, 'github-trending': githubIcon })[kind], label: node.type === 'script' ? (node.config.language === 'groovy' ? 'Groovy' : 'JavaScript') : labels[node.type] };
+        const kind = ['start', 'end', 'http', 'script', 'groovy', 'if', 'feishu', 'email', 'github-trending', 'tech-weekly'].includes(requested) ? requested : 'script';
+        return { kind, icon: ({ start: '▶', end: '■', http: httpIcon, script: javascriptIcon, groovy: groovyIcon, if: '⑂', feishu: feishuIcon, email: emailIcon, 'github-trending': githubIcon, 'tech-weekly': githubIcon })[kind], label: node.type === 'script' ? (node.config.language === 'groovy' ? 'Groovy' : 'JavaScript') : labels[node.type] };
     }
     function renderCanvas() {
         if (!graph) return;
@@ -381,8 +384,8 @@ export function mount(pane, workspace) {
             content += '<p class="wf-help">例如：左侧 {{ input.items[0].json.amount }}，条件“大于或等于”，右侧 100。</p>';
         }
         if (node.type === 'github-trending') {
-            content += field('榜单周期', select('sourceUrl', c.sourceUrl || trendingSources[0][0], trendingSources));
-            content += field('榜单地址', `<input value="${esc(c.sourceUrl || trendingSources[0][0])}" readonly data-trending-url aria-label="Trending 榜单地址">`);
+            content += field('榜单周期', select('sourceUrl', trendingSource(c.sourceUrl), trendingSources));
+            content += field('榜单地址', `<input value="${esc(trendingSource(c.sourceUrl))}" readonly data-trending-url aria-label="Trending 榜单地址">`);
             content += field('最多分析项目数（1–25）', inputField('maxProjects', c.maxProjects ?? 25, 'type="number" min="1" max="25" step="1"'));
             content += field('总超时（毫秒，1000–240000）', inputField('timeoutMs', c.timeoutMs || 180000, 'type="number" min="1000" max="240000" step="1000"'));
             content += '<p class="wf-help">服务器抓取榜单，再由 DeepSeek 逐个分析项目用途和使用场景。复用高级设置中的 DeepSeek API Key；此节点只生成内容。</p>';
@@ -391,7 +394,13 @@ export function mount(pane, workspace) {
                 ['飞书正文（Markdown 卡片）', 'feishuMarkdown'], ['飞书正文（纯文本）', 'feishuText'], ['邮件主题', 'emailSubject'], ['邮件正文（纯文本）', 'emailBody'], ['邮件正文（HTML）', 'emailHtml'],
             ].map(([title, key]) => field(title, `<input readonly value="{{ input.items[0].json.${key} }}" aria-label="${title}引用">`)).join('') + '<p class="wf-help">将出口连接到飞书或邮件节点，在后续节点点击“使用 Trending 分析结果”即可填入引用。</p></div>';
         }
+        if (node.type === 'tech-weekly') {
+            content += field('总超时（毫秒，1000–240000）', inputField('timeoutMs', c.timeoutMs || 180000, 'type="number" min="1000" max="240000" step="1000"'));
+            content += '<p class="wf-help">每次运行读取仓库索引和最新一期正文，由 DeepSeek 分析并生成飞书卡片和邮件内容。使用高级设置中的 DeepSeek API Key。</p>';
+            content += '<div class="wf-trending-output"><h3>后续节点可引用</h3>' + [['飞书卡片正文','feishuMarkdown'],['飞书卡片标题','title'],['邮件主题','emailSubject'],['邮件正文','emailBody'],['邮件正文（HTML）','emailHtml']].map(([title,key]) => field(title, `<input readonly value="{{ input.items[0].json.${key} }}" aria-label="${title}引用">`)).join('') + '</div>';
+        }
         if (node.type === 'feishu') {
+            content += '<button type="button" data-action="use-trending-feishu">使用周刊分析结果</button>';
             content += '<button type="button" data-action="use-trending-feishu">使用 Trending 分析结果</button>';
             content += field('飞书机器人', select('credentialId', c.credentialId || '', [['', '请选择机器人凭据'], ...credentials.filter(v => v.kind === 'feishu').map(v => [v.id, v.name])]));
             content += '<button type="button" data-action="feishu-credentials">添加飞书机器人</button>';
@@ -402,6 +411,7 @@ export function mount(pane, workspace) {
             content += '<p class="wf-help">可引用 {{ input.items[0].json.name }} 等上游字段。每次执行发送一条消息，成功后继续传递原输入。调试和运行会真实发送消息。</p>';
         }
         if (node.type === 'email') {
+            content += '<button type="button" data-action="use-trending-email">使用周刊分析结果</button>';
             content += '<button type="button" data-action="use-trending-email">使用 Trending 分析结果</button>';
             content += field('SMTP 邮箱', select('credentialId', c.credentialId || '', [['', '请选择邮箱凭据'], ...credentials.filter(v => v.kind === 'smtp').map(v => [v.id, v.name])]));
             content += '<button type="button" data-action="smtp-credentials">添加 SMTP 邮箱</button>';
@@ -416,7 +426,7 @@ export function mount(pane, workspace) {
         }
         if (['http', 'script', 'feishu', 'email'].includes(node.type)) content += field('超时（毫秒，100–30000）', inputField('timeoutMs', c.timeoutMs || 10000, 'type="number" min="100" max="30000" step="100"'));
         if (node.type !== 'end') content += `<h3 class="wf-section-label">连接出口</h3>${connectionFields(node)}`;
-        content += `<div class="wf-node-actions"><button type="button" data-action="test">${node.type === 'feishu' ? '发送测试消息' : node.type === 'email' ? '发送测试邮件' : node.type === 'github-trending' ? '生成 Trending 分析' : '调试此节点'}</button>${!['start', 'end'].includes(node.type) ? '<button type="button" class="wf-danger" data-action="delete-node">删除节点</button>' : ''}</div>`;
+        content += `<div class="wf-node-actions"><button type="button" data-action="test">${node.type === 'feishu' ? '发送测试消息' : node.type === 'email' ? '发送测试邮件' : node.type === 'tech-weekly' ? '生成周刊分析' : node.type === 'github-trending' ? '生成 Trending 分析' : '调试此节点'}</button>${!['start', 'end'].includes(node.type) ? '<button type="button" class="wf-danger" data-action="delete-node">删除节点</button>' : ''}</div>`;
         $('[data-inspector]').innerHTML = `<h2>${esc(style.label)}</h2><div data-node-error></div>${content}<div data-node-debug></div>`;
         nodeError(); highlight(); controls();
     }
@@ -500,7 +510,8 @@ export function mount(pane, workspace) {
             : type === 'http' ? { method: 'GET', url: '', headers: {}, body: null, timeoutMs: 10000, failOnHttpError: true }
             : type === 'feishu' ? { credentialId: credentials.find(v => v.kind === 'feishu')?.id || '', messageType: 'text', title: '工作流通知', text: '工作流通知：{{ input.items[0].json.name }}', timeoutMs: 10000 }
             : type === 'email' ? { credentialId: credentials.find(v => v.kind === 'smtp')?.id || '', to: '', cc: '', bcc: '', subject: '工作流通知', body: '你好，{{ input.items[0].json.name }}', format: 'text', timeoutMs: 10000 }
-            : type === 'github-trending' ? { sourceUrl: 'https://github.com/trending', maxProjects: 25, timeoutMs: 180000 }
+            : type === 'tech-weekly' ? { timeoutMs: 180000 }
+            : type === 'github-trending' ? { sourceUrl: trendingSources[0][0], maxProjects: 25, timeoutMs: 180000 }
             : { left: '{{ input.items[0].json.amount }}', operator: 'gte', right: 100 };
         const node = { id, type, name: kind === 'groovy' ? 'Groovy 脚本' : kind === 'javascript' ? 'JavaScript 脚本' : labels[type], config,
             position: position || { x: Math.min(MAX_POSITION - 300, (parent?.position?.x || 60) + 280), y: parent?.position?.y || 140 } };
@@ -628,12 +639,12 @@ export function mount(pane, workspace) {
         'use-trending-feishu': () => {
             commitInspector(); const node = graph.nodes.find(n => n.id === selected); if (node?.type !== 'feishu') return;
             Object.assign(node.config, {messageType:'card', title:'{{ input.items[0].json.title }}', text:'{{ input.items[0].json.feishuMarkdown }}'});
-            markDirty(); inspector(); notice('已设置 Trending Markdown 卡片，包含加粗标题、彩色榜单标签和项目链接；请连接到分析节点之后。');
+            markDirty(); inspector(); notice('已设置分析结果的 Markdown 卡片；请连接到分析节点之后。');
         },
         'use-trending-email': () => {
             commitInspector(); const node = graph.nodes.find(n => n.id === selected); if (node?.type !== 'email') return;
             Object.assign(node.config, {subject:'{{ input.items[0].json.emailSubject }}', body:'{{ input.items[0].json.emailBody }}', format:'text'});
-            markDirty(); inspector(); notice('已填入 Trending 邮件主题和正文引用，请填写收件人并连接分析节点。');
+            markDirty(); inspector(); notice('已填入分析结果的邮件主题和正文引用，请填写收件人并连接分析节点。');
         },
         'apply-edge': () => connect($('[data-edge-field="source"]').value, $('[data-edge-field="target"]').value, $('[data-edge-field="branch"]').value, selectedEdge),
         'delete-edge': () => deleteEdge(),
@@ -665,7 +676,7 @@ export function mount(pane, workspace) {
                 commitInspector();
                 if (node.type === 'github-trending') notice('正在抓取 GitHub Trending，并由 DeepSeek 分析项目，请稍候…');
                 const result = await send('/test-node', { node, input: runInput() });
-                const report = node.type === 'github-trending' ? result.output?.items?.[0]?.json : null;
+                const report = ['github-trending','tech-weekly'].includes(node.type) ? result.output?.items?.[0]?.json : null;
                 const preview = report ? `<h3>飞书消息预览</h3><pre>${esc(report.feishuMarkdown || report.feishuText)}</pre><h3>邮件主题</h3><p>${esc(report.emailSubject)}</p><h3>邮件正文预览</h3><pre>${esc(report.emailBody)}</pre>` : '';
                 const content = heading + `<p>${result.durationMs} ms</p>${result.branch ? `<p>分支 ${esc(result.branch)}</p>` : ''}${preview}<h3>输出</h3><pre>${esc(pretty(result.output))}</pre><h3>日志</h3><pre>${esc(result.logs || '无日志')}</pre>`;
                 $('[data-run-detail]').innerHTML = content;

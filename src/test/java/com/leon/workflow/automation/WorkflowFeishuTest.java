@@ -89,7 +89,7 @@ class WorkflowFeishuTest {
         assertEquals("blue", object(card.get("header")).get("template"));
         var markdown = object(((List<?>)object(card.get("body")).get("elements")).getFirst());
         assertTrue(text(markdown.get("content")).contains("**用途：** 提升开发效率"));
-        assertTrue(text(markdown.get("content")).contains("<text_tag color='blue'>日榜</text_tag>"));
+        assertTrue(text(markdown.get("content")).contains("<text_tag color='blue'>周榜</text_tag>"));
         assertFalse(text(payload.get("sign")).isBlank());
     }
     @Test void cardMessagesUseSigningAndResolveTemplatesOnlyOnce() throws Exception {

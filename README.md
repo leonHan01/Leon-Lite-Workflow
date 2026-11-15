@@ -231,9 +231,9 @@ HTTPS 代理通过内部 `/auth/check` 校验管理页面和静态资源的会�
 
 填写收件人、可选抄送 / 密送、主题及纯文本或 HTML 正文；多个邮箱用逗号分隔，每封邮件最多 100 个收件人。上述内容支持 `{{ input.items[0].json.name }}` 等上游引用，只解析一次；主题和邮箱不允许换行，正文最多 1 MB。每次节点执行提交一封邮件，SMTP 接收后继续传递原输入，密送地址不写入邮件头。「发送测试邮件」也会实际发送。连接、读写和整体提交有超时限制，失败不自动重试；SMTP 接收不等于最终投递成功，失败、取消或超时后可能已有部分收件人收到，确认后再手动重跑。服务端回复可能包含认证数据，因此错误按认证、DNS、连接、超时、TLS 与邮件拒收分类，仅提取 SMTP 数字响应码，不保存原始 SMTP 回复。
 
-**GitHub Trending 分析。** 节点库中的「GitHub Trending」支持日榜 `https://github.com/trending`、周榜 `https://github.com/trending?since=weekly` 和月榜 `https://github.com/trending?since=monthly`；在节点配置中选择榜单周期，服务器通过 HTTPS 抓取对应地址，用 Jsoup 解析 `article.Box-row` 中的仓库名称、链接、描述、语言及 Star 信息，然后将这些结构化数据交给 DeepSeek 逐个分析项目用途和适用场景。无需 DeepSeek 联网，页面脚本不执行；网页文字作为资料处理，不作为指令。复用高级设置中的 `DEEPSEEK_API_KEY`，节点及运行输出不保存密钥。当前使用 `deepseek-flash` 和 JSON 输出模式。默认最多 25 个项目，可设置 1–25 个；不足上限时分析全部项目。默认总超时 180 秒，可设置 1–240 秒，抓取阶段最多 30 秒，沿用工作流 HTTP 的地址校验、1 MB 响应限制和不自动重试策略。榜单不可访问、解析为空或异常、分析项目遗漏 / 重复 / 顺序不符、JSON 无效或结果截断都会明确失败。
+**GitHub Trending 分析。** 节点库中的「GitHub Trending」支持周榜 `https://github.com/trending?since=weekly` 和月榜 `https://github.com/trending?since=monthly`；在节点配置中选择榜单周期，服务器通过 HTTPS 抓取对应地址，用 Jsoup 解析 `article.Box-row` 中的仓库名称、链接、描述、语言及 Star 信息，然后将这些结构化数据交给 DeepSeek 逐个分析项目用途和适用场景。无需 DeepSeek 联网，页面脚本不执行；网页文字作为资料处理，不作为指令。复用高级设置中的 `DEEPSEEK_API_KEY`，节点及运行输出不保存密钥。当前使用 `deepseek-flash` 和 JSON 输出模式。默认最多 25 个项目，可设置 1–25 个；不足上限时分析全部项目。默认总超时 180 秒，可设置 1–240 秒，抓取阶段最多 30 秒，沿用工作流 HTTP 的地址校验、1 MB 响应限制和不自动重试策略。榜单不可访问、解析为空或异常、分析项目遗漏 / 重复 / 顺序不符、JSON 无效或结果截断都会明确失败。
 
-输出为一个 `items[0].json`，包含 `sourceUrl`、`period`（daily / weekly / monthly）、`periodLabel` 和 `projects`（仓库资料、`purpose`、`useCases`）、`summary`、`count`、`totalProjects`、`generatedAt`，以及准备好的 `feishuText`（纯文本）、`feishuMarkdown`（带样式的 Markdown 卡片正文）、`emailSubject`、`emailBody`、`emailHtml`。飞书与邮件标题、正文均标注对应榜单周期和来源 URL；旧节点未选择周期时继续使用日榜。节点库、画布与拖动预览使用统一的 GitHub 图标。飞书摘要按消息字节预算收短每项说明并保留所有项目及链接，邮件保留完整说明；HTML 正文统一转义。分析根据榜单描述，资料不足会明确说明，不声称已读取源码。调试时可在弹窗预览飞书正文和邮件正文，此节点只生成内容，不发送消息。
+输出为一个 `items[0].json`，包含 `sourceUrl`、`period`（weekly / monthly）、`periodLabel` 和 `projects`（仓库资料、`purpose`、`useCases`）、`summary`、`count`、`totalProjects`、`generatedAt`，以及准备好的 `feishuText`（纯文本）、`feishuMarkdown`（带样式的 Markdown 卡片正文）、`emailSubject`、`emailBody`、`emailHtml`。飞书与邮件标题、正文均标注对应榜单周期和来源 URL；旧节点未选择周期或配置为日榜时使用周榜。节点库、画布与拖动预览使用统一的 GitHub 图标。飞书摘要按消息字节预算收短每项说明并保留所有项目及链接，邮件保留完整说明；HTML 正文统一转义。分析根据榜单描述，资料不足会明确说明，不声称已读取源码。调试时可在弹窗预览飞书正文和邮件正文，此节点只生成内容，不发送消息。
 
 将分析节点连接到飞书、邮件节点（可以从同一出口分支到两者），在后续节点点击「使用 Trending 分析结果」即可填入正文引用：飞书自动选择 Markdown 卡片，标题使用 `{{ input.items[0].json.title }}`、正文使用 `{{ input.items[0].json.feishuMarkdown }}`，展示蓝色标题、彩色榜单/项目数量标签、加粗项目名与用途/场景标签、可点击的仓库链接；原有纯文本节点仍可使用 `{{ input.items[0].json.feishuText }}`，需要样式时重新点击此按钮后保存并发布。格式由后端统一生成并转义模型中的 Markdown 和提及语法，签名卡片按完整请求体字节预算收短说明，保留所有项目链接；邮件主题和正文分别使用 `{{ input.items[0].json.emailSubject }}`、`{{ input.items[0].json.emailBody }}`。如需 HTML 邮件，将格式改为 HTML，正文改用 `{{ input.items[0].json.emailHtml }}`。后续仍需配置飞书机器人、SMTP 邮箱和收件人，再发布运行或启用定时。
 
@@ -284,3 +284,7 @@ mvn package
 ```
 
 浏览器回归检查位于 `src/test/browser/workspace-navigation.cjs`。它使用模拟数据验证页签状态、快捷项 CRUD、JSON 详情和历史导航。运行前设置 `PLAYWRIGHT_MODULE_PATH` 和 `CHROME_PATH`。
+
+科技爱好者周刊分析节点每次通过 GitHub 官方 API 读取 `ruanyf/weekly` 的仓库索引，选择最高期数并读取对应 `docs/issue-N.md`，使用高级设置中的 DeepSeek API Key 分析正文。节点提供 `title`、`sourceUrl`、`issue`、`summary`、`highlights`、`feishuMarkdown`、`feishuText`、`emailSubject`、`emailBody` 和 `emailHtml`。连接飞书和邮件节点后，点击「使用周刊分析结果」填入相应引用；该节点本身不发送消息。GitHub API 可能限制匿名请求频率，失败时会显示原因。
+
+GitHub Trending 页面无法抓取时，节点会尝试使用 GitStock 的公开榜单快照（支持周、月榜）。快照超过 48 小时或周期、项目、采集时间无效时会报错，不会继续分析；使用快照时，日志和飞书、邮件正文会标注来源及采集时间。GitStock 是第三方服务，快照可能与实时榜单不同。

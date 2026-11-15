@@ -143,6 +143,8 @@ body.wf-node-dialog-open { overflow:hidden!important; }
 .wf-page [data-node-debug] { min-width:0; }
 .wf-page [data-node-debug] > pre { white-space:pre-wrap; overflow-wrap:anywhere; max-height:260px; overflow:auto; font:11px/1.8 ui-monospace,monospace; }
 .wf-github-trending { color:#374151; background:#eef0f6; }
+.wf-tech-weekly { color:#374151; background:#eef0f6; }
+.wf-tech-weekly img { width:28px; height:28px; object-fit:contain; }
 .wf-github-trending img { width:28px; height:28px; object-fit:contain; }
 .wf-script img,.wf-groovy img,.wf-email img,.wf-http img { width:30px; height:30px; object-fit:contain; }
 .wf-library .wf-script img,.wf-library .wf-groovy img,.wf-library .wf-email img,.wf-library .wf-http img { width:34px; height:34px; }

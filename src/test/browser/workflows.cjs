@@ -49,7 +49,7 @@ const server = http.createServer(async (req, res) => {
         }
         if (route === '/test-node') { lastTest = data; if (testFailure) return reply(testFailure,400);
             if (data.node.type==='github-trending') {
-                const sourceUrl=data.node.config.sourceUrl||'https://github.com/trending';
+                const sourceUrl=data.node.config.sourceUrl||'https://github.com/trending?since=weekly';
                 const period=sourceUrl.includes('weekly')?'weekly':sourceUrl.includes('monthly')?'monthly':'daily';
                 const periodLabel={daily:'日榜',weekly:'周榜',monthly:'月榜'}[period];
                 return reply({output:{items:[{json:{count:2,sourceUrl,period,periodLabel,title:'GitHub Trending '+periodLabel+'项目解读',feishuText:periodLabel+' sample/one：开发工具。\nsample/two：资料不足。',emailSubject:'GitHub Trending '+periodLabel+'项目解读',emailBody:'项目用途：sample/one 提供开发工具。\nsample/two 资料不足。',emailHtml:'<p>项目用途：开发工具</p>'}}]},logs:'已抓取 GitHub Trending 并生成消息正文',durationMs:22,branch:''});
@@ -206,10 +206,18 @@ const server = http.createServer(async (req, res) => {
             assert.equal(await page.locator('.wf-library-preview').count(),0);
             assert.equal(await page.locator('.is-library-drop-target').count(),0);
         }
-        assert.equal(await page.locator('.wf-library-count').textContent(),'7');
+        assert.equal(await page.locator('.wf-library-count').textContent(),'8');
+        await page.locator('[data-node="start"]').click();
+        await page.locator('[data-add="tech-weekly"]').click();
+        assert.equal(await page.getByRole('textbox',{name:'飞书卡片正文引用',exact:true}).inputValue(),'{{ input.items[0].json.feishuMarkdown }}');
+        assert.equal(await page.getByRole('textbox',{name:'邮件正文引用',exact:true}).inputValue(),'{{ input.items[0].json.emailBody }}');
+        await savePaletteGraph();
+        assert.deepEqual(workflow.definition.nodes.find(n=>n.type==='tech-weekly').config,{timeoutMs:180000});
+        await page.getByRole('button',{name:'删除节点',exact:true}).click();
         await page.locator('[data-node="start"]').click();
         await page.locator('[data-add="github-trending"]').click();
-        assert.equal(await page.getByRole('textbox',{name:'Trending 榜单地址',exact:true}).inputValue(),'https://github.com/trending');
+        assert.deepEqual(await page.getByRole('combobox',{name:'榜单周期',exact:true}).locator('option').allTextContents(),['周榜','月榜']);
+        assert.equal(await page.getByRole('textbox',{name:'Trending 榜单地址',exact:true}).inputValue(),'https://github.com/trending?since=weekly');
         const paletteIcon=page.locator('[data-add="github-trending"] .wf-github-trending img');
         await paletteIcon.evaluate(img=>img.decode());
         assert.equal(await paletteIcon.evaluate(img=>img.naturalWidth),200);

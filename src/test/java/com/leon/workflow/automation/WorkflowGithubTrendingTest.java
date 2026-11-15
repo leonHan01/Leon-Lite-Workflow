@@ -34,6 +34,32 @@ class WorkflowGithubTrendingTest {
             Map.of("repo", "sample/one", "purpose", "为开发者提供工具和辅助功能", "useCases", "开发工作流"),
             Map.of("repo", "sample/two", "purpose", "资料不足，无法确认具体用途", "useCases", "需查看项目说明后确认"))); }
     Map<String, Object> completion(Object content, String finish) { return response(Map.of("choices", List.of(Map.of("finish_reason", finish, "message", Map.of("content", content))))); }
+    @Test void timeoutFallsBackToRecentTrendingSnapshotAndLabelsItsSource() throws Exception {
+        long captured = java.time.Instant.now().getEpochSecond();
+        var snapshot = Map.of("period", "weekly", "date", "2026-11-15", "items", List.of(
+                Map.of("rank", 1, "owner", "sample", "repo", "one", "description", "工具", "language", "Java", "stars", 12, "stars_gained", 3, "captured_at", captured),
+                Map.of("rank", 2, "owner", "sample", "repo", "two", "description", "", "language", "", "stars", 3, "stars_gained", 1, "captured_at", captured)));
+        when(http.executeResolved(anyMap(), any())).thenThrow(new IllegalArgumentException("HTTP 请求未完成：连接或响应超时" )).thenReturn(response(snapshot));
+        when(http.executeResolved(anyMap(), any(), eq(240000))).thenReturn(completion(write(analysis()), "stop"));
+        var logs = new ArrayList<String>();
+        var result = trending.execute(Map.of(), new WorkflowPrivacy(), logs::add);
+        var output = object(object(((List<?>)result.get("items")).getFirst()).get("json"));
+        assertEquals("GitStock 快照", output.get("dataSource"));
+        assertTrue(text(output.get("feishuText")).contains("GitStock"));
+        assertTrue(text(output.get("feishuMarkdown")).contains("GitStock"));
+        assertTrue(text(output.get("emailBody")).contains("GitStock"));
+        assertTrue(String.join("\n", logs).contains("GitStock"));
+    }
+    @Test void fallbackRejectsOldOrWrongPeriodSnapshotsBeforeCallingDeepseek() throws Exception {
+        long old = java.time.Instant.now().minusSeconds(172801).getEpochSecond();
+        var item = Map.of("owner", "sample", "repo", "one", "captured_at", old);
+        for (var snapshot : List.of(Map.of("period", "weekly", "items", List.of(item)), Map.of("period", "monthly", "items", List.of(item)))) {
+            reset(http);
+            when(http.executeResolved(anyMap(), any())).thenThrow(new IllegalArgumentException("连接超时")).thenReturn(response(snapshot));
+            assertThrows(IllegalArgumentException.class, () -> trending.execute(Map.of(), new WorkflowPrivacy()));
+            verify(http, never()).executeResolved(anyMap(), any(), anyInt());
+        }
+    }
     @Test void fetchesThePageAndSendsOnlyExtractedProjectsToDeepseek() throws Exception {
         when(http.executeResolved(anyMap(), any())).thenReturn(response(HTML));
         when(http.executeResolved(anyMap(), any(), eq(240000))).thenReturn(completion(write(analysis()), "stop"));
@@ -41,13 +67,13 @@ class WorkflowGithubTrendingTest {
         var result = trending.execute(Map.of(), privacy);
         var output = object(object(((List<?>)result.get("items")).getFirst()).get("json"));
         assertEquals(2, output.get("count")); assertEquals(2, output.get("totalProjects"));
-        assertEquals("daily", output.get("period")); assertEquals("日榜", output.get("periodLabel"));
+        assertEquals("weekly", output.get("period")); assertEquals("周榜", output.get("periodLabel"));
         assertTrue(text(output.get("feishuText")).contains("sample/one"));
         assertTrue(text(output.get("emailBody")).contains("为开发者提供工具"));
         assertTrue(text(output.get("emailHtml")).contains("https://github.com/sample/two"));
         var fetch = org.mockito.ArgumentCaptor.forClass(Map.class);
         verify(http).executeResolved(fetch.capture(), same(privacy));
-        assertEquals("https://github.com/trending", fetch.getValue().get("url"));
+        assertEquals("https://github.com/trending?since=weekly", fetch.getValue().get("url"));
         assertFalse(object(fetch.getValue().get("headers")).containsKey("Authorization"));
         var post = org.mockito.ArgumentCaptor.forClass(Map.class);
         verify(http).executeResolved(post.capture(), same(privacy), eq(240000));
@@ -79,6 +105,13 @@ class WorkflowGithubTrendingTest {
             assertTrue(messages.contains(source)); assertTrue(messages.contains(label));
             assertTrue(String.join("\n", logs).contains("周期=" + label));
         }
+    }
+    @Test void legacyDailyAndMissingPeriodUseWeeklyWithoutChangingMonthly() {
+        String weekly = "https://github.com/trending?since=weekly";
+        assertEquals(weekly, WorkflowGithubTrending.sourceUrl(Map.of()));
+        assertEquals(weekly, WorkflowGithubTrending.sourceUrl(Map.of("sourceUrl", "https://github.com/trending")));
+        assertEquals(weekly, WorkflowGithubTrending.sourceUrl(Map.of("sourceUrl", "https://github.com/trending?since=daily")));
+        assertEquals("https://github.com/trending?since=monthly", WorkflowGithubTrending.sourceUrl(Map.of("sourceUrl", "https://github.com/trending?since=monthly")));
     }
     @Test void parsesGithubMarkupAndKeepsTheRealTotalWhenLimitingAnalysis() {
         var page = WorkflowGithubTrending.parsePage(HTML, 1);
@@ -135,7 +168,7 @@ class WorkflowGithubTrendingTest {
         analysis.put("summary", "概览 **伪造** [外链](https://example.invalid) <at id=all></at>");
         var output = object(object(((List<?>)WorkflowGithubTrending.report(analysis, WorkflowGithubTrending.parsePage(HTML, 2)).get("items")).getFirst()).get("json"));
         String markdown = text(output.get("feishuMarkdown"));
-        assertTrue(markdown.contains("<text_tag color='blue'>日榜</text_tag>"));
+        assertTrue(markdown.contains("<text_tag color='blue'>周榜</text_tag>"));
         assertTrue(markdown.contains("<text_tag color='green'>分析 2 / 2 个项目</text_tag>"));
         assertTrue(markdown.contains("**榜单概览**"));
         assertTrue(markdown.contains("**1. [sample/one](https://github.com/sample/one)**"));
@@ -145,6 +178,32 @@ class WorkflowGithubTrendingTest {
         assertFalse(markdown.contains("[外链](https://example.invalid)"));
         assertFalse(markdown.contains("<at"));
         assertFalse(text(output.get("feishuText")).contains("<text_tag"), "原有纯文本输出应保持兼容");
+    }
+    @Test void weeklyFindsLatestIssueAndPreparesBothMessages() throws Exception {
+        String index = "[第 420 期](docs/issue-420.md) [第 419 期](docs/issue-419.md)";
+        String issue = "# 第 420 期\n这是最新周刊正文";
+        var indexBody = Map.of("encoding", "base64", "content", Base64.getEncoder().encodeToString(index.getBytes(StandardCharsets.UTF_8)));
+        var issueBody = Map.of("encoding", "base64", "content", Base64.getEncoder().encodeToString(issue.getBytes(StandardCharsets.UTF_8)));
+        when(http.executeResolved(anyMap(), any())).thenReturn(response(indexBody), response(issueBody));
+        when(http.executeResolved(anyMap(), any(), eq(240000))).thenReturn(completion(write(Map.of("summary", "本期概述", "highlights", List.of("工具介绍", "科技新闻"))), "stop"));
+        var result = trending.executeWeekly(Map.of(), new WorkflowPrivacy(), m -> {});
+        var output = object(object(((List<?>)result.get("items")).getFirst()).get("json"));
+        assertEquals(420, output.get("issue"));
+        assertEquals("https://github.com/ruanyf/weekly/blob/master/docs/issue-420.md", output.get("sourceUrl"));
+        assertTrue(text(output.get("feishuMarkdown")).contains("**重点内容**"));
+        assertTrue(text(output.get("emailBody")).contains("科技新闻"));
+        var fetch = org.mockito.ArgumentCaptor.forClass(Map.class); verify(http, times(2)).executeResolved(fetch.capture(), any());
+        assertEquals("https://api.github.com/repos/ruanyf/weekly/contents/docs/issue-420.md", fetch.getAllValues().get(1).get("url"));
+        var post = org.mockito.ArgumentCaptor.forClass(Map.class); verify(http).executeResolved(post.capture(), any(), eq(240000));
+        assertTrue(write(post.getValue().get("body")).contains("这是最新周刊正文"));
+        assertDoesNotThrow(() -> WorkflowGraph.validateNode(new WorkflowGraph.Node("weekly", "tech-weekly", "周刊", Map.of(), Map.of())));
+        assertThrows(IllegalArgumentException.class, () -> WorkflowGithubTrending.validateWeeklyConfig(Map.of("sourceUrl", "http://127.0.0.1")));
+    }
+    @Test void weeklyRejectsMissingIndexAndIncompleteModelOutput() throws Exception {
+        var empty = Map.of("encoding", "base64", "content", Base64.getEncoder().encodeToString("没有周刊".getBytes(StandardCharsets.UTF_8)));
+        when(http.executeResolved(anyMap(), any())).thenReturn(response(empty));
+        assertThrows(IllegalArgumentException.class, () -> trending.executeWeekly(Map.of(), new WorkflowPrivacy(), m -> {}));
+        verify(http, never()).executeResolved(anyMap(), any(), anyInt());
     }
     @Test void configValidationKeepsSecretsAndArbitraryUrlsOutOfNodes() {
         for (var config : List.<Map<String, Object>>of(Map.of("sourceUrl", "http://127.0.0.1"), Map.of("sourceUrl", "https://github.com/trending?since=yearly"), Map.of("sourceUrl", "https://github.com/trending?since=weekly&redirect=http://127.0.0.1"), Map.of("apiKey", "inline"), Map.of("maxProjects", 0), Map.of("maxProjects", 26), Map.of("timeoutMs", 240001)))

@@ -125,6 +125,7 @@ public class WorkflowEngine {
             case "feishu" -> new NodeResult(feishu.execute(config, input, ctx, privacy), "飞书消息已发送", "");
             case "email" -> new NodeResult(email.execute(config, input, ctx, privacy), "邮件已提交至 SMTP 服务器", "");
             case "github-trending" -> new NodeResult(trending.execute(config, privacy, trace), "已抓取 GitHub Trending 并由 DeepSeek 生成项目解读、飞书消息和邮件正文", "");
+            case "tech-weekly" -> new NodeResult(trending.executeWeekly(config, privacy, trace), "已分析最新科技爱好者周刊", "");
             case "if" -> new NodeResult(input, "", String.valueOf(WorkflowExpressions.condition(config, input, ctx)));
             default -> throw new IllegalArgumentException("不支持的节点类型");
         };
@@ -139,7 +140,7 @@ public class WorkflowEngine {
         try { task = workers.submit(() -> execute(node, input, "preview-" + UUID.randomUUID(), privacy, trace)); }
         catch (RejectedExecutionException e) { throw busy(); }
         try {
-            long timeout = "github-trending".equals(node.type()) ? integer(node.settings().get("timeoutMs"), WorkflowGithubTrending.DEFAULT_TIMEOUT, 1000, WorkflowGithubTrending.MAX_TIMEOUT) + 2000L : 32_000L;
+            long timeout = Set.of("github-trending", "tech-weekly").contains(node.type()) ? integer(node.settings().get("timeoutMs"), WorkflowGithubTrending.DEFAULT_TIMEOUT, 1000, WorkflowGithubTrending.MAX_TIMEOUT) + 2000L : 32_000L;
             NodeResult result = task.get(timeout, TimeUnit.MILLISECONDS); privacy.collect(result.output());
             trace.accept("调试完成；输出 " + WorkflowDiagnostics.summary(result.output()) + "；" + WorkflowDiagnostics.lengths(result.output()));
             return Map.of("output", privacy.mask(result.output()), "logs", privacy.message(WorkflowDiagnostics.combine(debug.toString(), result.logs())), "branch", result.branch(), "durationMs", System.currentTimeMillis() - started);
