@@ -266,7 +266,7 @@ class WorkflowGithubTrendingTest {
             Map<String, Object> config = call.getArgument(0), input = call.getArgument(1), ctx = call.getArgument(2);
             emailBody.set(text(WorkflowExpressions.resolve(config.get("body"), input, ctx))); return input;
         });
-        var engine = new WorkflowEngine(store, mock(ScriptProcessRunner.class), http, feishu, email, trending, mock(WorkflowRss.class), mock(WorkflowAiSummary.class));
+        var engine = new WorkflowEngine(store, mock(ScriptProcessRunner.class), http, feishu, email, trending, mock(WorkflowRss.class), mock(WorkflowAiSummary.class), mock(WorkflowQq.class));
         try {
             var graph = new WorkflowGraph(List.of(
                     new WorkflowGraph.Node("start", "start", "开始", Map.of(), Map.of()),

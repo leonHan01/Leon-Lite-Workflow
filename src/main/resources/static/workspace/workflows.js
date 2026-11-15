@@ -3,7 +3,8 @@ const templates = {
     javascript: `function main(input, ctx) {\n  return {\n    items: input.items.map(item => ({\n      json: { ...item.json, name: String(item.json.name ?? '').toUpperCase() }\n    }))\n  };\n}`,
     groovy: `def main(Map input, Map ctx) {\n    return [items: input.items.collect { item ->\n        [json: item.json + [name: (item.json.name ?: '').toUpperCase()]]\n    }]\n}`,
 };
-const labels = { start: '开始', end: '结束', http: 'HTTP 请求', script: '脚本', if: '条件判断', feishu: '飞书消息', email: '发送邮件', 'github-trending': 'GitHub Trending 分析', 'tech-weekly': '科技爱好者周刊分析', rss: 'RSS 订阅', 'ai-summary': 'AI 总结' };
+const labels = { start: '开始', end: '结束', http: 'HTTP 请求', script: '脚本', if: '条件判断', feishu: '飞书消息', qq: 'QQ 消息', email: '发送邮件', 'github-trending': 'GitHub Trending 分析', 'tech-weekly': '科技爱好者周刊分析', rss: 'RSS 订阅', 'ai-summary': 'AI 总结' };
+const qqIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M5 4h14v12h-6l-5 4v-4H5z"/><circle cx="9" cy="10" r=".6"/><circle cx="15" cy="10" r=".6"/></svg>';
 const feishuIcon = '<img src="/workspace/icons/feishu.png" alt="" aria-hidden="true">';
 const githubIcon = '<img src="/workspace/icons/github.png" alt="" aria-hidden="true">';
 const javascriptIcon = '<img src="/workspace/icons/javascript.png" alt="" aria-hidden="true">';
@@ -184,6 +185,9 @@ export function mount(pane, workspace) {
         } else if (node.type === 'feishu') {
             node.config.credentialId = get('credentialId'); node.config.messageType = get('messageType');
             node.config.title = get('title') ?? node.config.title; node.config.text = get('text'); node.config.timeoutMs = Number(get('timeoutMs'));
+        } else if (node.type === 'qq') {
+            for (const key of ['credentialId', 'targetType', 'targetId', 'messageType', 'text']) node.config[key] = get(key);
+            node.config.timeoutMs = Number(get('timeoutMs'));
         } else if (node.type === 'email') {
             for (const key of ['credentialId', 'to', 'cc', 'bcc', 'subject', 'body', 'format']) node.config[key] = get(key);
             node.config.timeoutMs = Number(get('timeoutMs'));
@@ -251,8 +255,8 @@ export function mount(pane, workspace) {
     }
     function nodeStyle(node) {
         const requested = node.type === 'script' ? (node.config?.language === 'groovy' ? 'groovy' : 'script') : node.type;
-        const kind = ['start', 'end', 'http', 'script', 'groovy', 'if', 'feishu', 'email', 'github-trending', 'tech-weekly', 'rss', 'ai-summary'].includes(requested) ? requested : 'script';
-        return { kind, icon: ({ start: '▶', end: '■', http: httpIcon, script: javascriptIcon, groovy: groovyIcon, if: '⑂', feishu: feishuIcon, email: emailIcon, 'github-trending': githubIcon, 'tech-weekly': githubIcon, rss: rssIcon, 'ai-summary': aiIcon })[kind], label: node.type === 'script' ? (node.config.language === 'groovy' ? 'Groovy' : 'JavaScript') : labels[node.type] };
+        const kind = ['start', 'end', 'http', 'script', 'groovy', 'if', 'feishu', 'qq', 'email', 'github-trending', 'tech-weekly', 'rss', 'ai-summary'].includes(requested) ? requested : 'script';
+        return { kind, icon: ({ start: '▶', end: '■', http: httpIcon, script: javascriptIcon, groovy: groovyIcon, if: '⑂', feishu: feishuIcon, qq: qqIcon, email: emailIcon, 'github-trending': githubIcon, 'tech-weekly': githubIcon, rss: rssIcon, 'ai-summary': aiIcon })[kind], label: node.type === 'script' ? (node.config.language === 'groovy' ? 'Groovy' : 'JavaScript') : labels[node.type] };
     }
     function renderCanvas() {
         if (!graph) return;
@@ -450,6 +454,19 @@ export function mount(pane, workspace) {
             content += field('消息内容', `<textarea aria-label="飞书消息内容" data-field="text" rows="5" maxlength="20480" spellcheck="false">${esc(c.text)}</textarea>`);
             content += '<p class="wf-help">可引用 {{ input.items[0].json.name }} 等上游字段。每次执行发送一条消息，成功后继续传递原输入。调试和运行会真实发送消息。</p>';
         }
+        if (node.type === 'qq') {
+            content += field('QQ 机器人', select('credentialId', c.credentialId || '', [['', '请选择机器人凭据'], ...credentials.filter(v => v.kind === 'qq').map(v => [v.id, v.name])]));
+            content += '<button type="button" data-action="qq-credentials">添加 QQ 机器人</button>';
+            content += `<button type="button" data-action="edit-node-credential" ${c.credentialId ? '' : 'disabled'}>编辑所选凭据</button>`;
+            content += field('发送到', select('targetType', c.targetType || 'user', [['user', 'QQ 单聊'], ['group', 'QQ 群聊']]));
+            content += field('接收目标 OpenID', inputField('targetId', c.targetId, 'maxlength="1000" placeholder="填写此机器人收到的用户或群 OpenID，支持字段引用"'));
+            content += '<p class="wf-help">不能填写 QQ 号或群号。单聊填写该机器人的 user_openid，群聊填写 group_openid；可以粘贴 QQ 官方消息事件提取目标。</p>';
+            content += '<details><summary>从 QQ 消息事件提取接收目标</summary><label>QQ 消息事件 JSON<textarea data-qq-event rows="4" spellcheck="false" placeholder="粘贴 C2C_MESSAGE_CREATE 或 GROUP_AT_MESSAGE_CREATE 事件"></textarea></label><button type="button" data-action="qq-event-target">提取 OpenID</button><p class="wf-help">只在本页解析，原始事件不会保存。尚无事件时，按 README 中的脚本说明获取接收目标。</p></details>';
+            content += field('消息类型', select('messageType', c.messageType || 'text', [['text', '文本'], ['markdown', 'Markdown']]));
+            content += field('消息内容', `<textarea aria-label="QQ 消息内容" data-field="text" rows="6" maxlength="65536" spellcheck="false">${esc(c.text)}</textarea>`);
+            content += '<button type="button" data-action="use-summary-qq">使用上游摘要</button>';
+            content += '<p class="wf-help">可引用 {{ input.items[0].json.summary }} 等上游字段。正文限 2000 UTF-8 字节，超长明确报错，不拆分或截断。请开启机器人主动消息权限及 QQ 接收设置；Markdown 还需相应权限。每次发送一条，成功后传递原输入，无新增 items 时跳过；测试也会真实发送，失败不自动重发。</p>';
+        }
         if (node.type === 'email') {
             content += '<button type="button" data-action="use-trending-email">使用 AI 总结结果</button>';
             content += '<button type="button" data-action="use-trending-email">使用 Trending 分析结果</button>';
@@ -464,9 +481,9 @@ export function mount(pane, workspace) {
             content += field('邮件正文', `<textarea aria-label="邮件正文" data-field="body" rows="7" spellcheck="false">${esc(c.body)}</textarea>`);
             content += '<p class="wf-help">收件人、主题和正文可引用 {{ input.items[0].json.name }} 等上游字段。每次执行提交一封邮件，成功后传递原输入。调试会真实发送；失败不会自动重试。</p>';
         }
-        if (['http', 'script', 'feishu', 'email'].includes(node.type)) content += field('超时（毫秒，100–30000）', inputField('timeoutMs', c.timeoutMs || 10000, 'type="number" min="100" max="30000" step="100"'));
+        if (['http', 'script', 'feishu', 'qq', 'email'].includes(node.type)) content += field('超时（毫秒，100–30000）', inputField('timeoutMs', c.timeoutMs || 10000, 'type="number" min="100" max="30000" step="100"'));
         if (node.type !== 'end') content += `<h3 class="wf-section-label">连接出口</h3>${connectionFields(node)}`;
-        content += `<div class="wf-node-actions"><button type="button" data-action="test">${node.type === 'feishu' ? '发送测试消息' : node.type === 'email' ? '发送测试邮件' : node.type === 'rss' ? '预览订阅文章' : node.type === 'ai-summary' ? '测试 AI 总结' : node.type === 'tech-weekly' ? '生成周刊分析' : node.type === 'github-trending' ? '生成 Trending 分析' : '调试此节点'}</button>${!['start', 'end'].includes(node.type) ? '<button type="button" class="wf-danger" data-action="delete-node">删除节点</button>' : ''}</div>`;
+        content += `<div class="wf-node-actions"><button type="button" data-action="test">${['feishu', 'qq'].includes(node.type) ? '发送测试消息' : node.type === 'email' ? '发送测试邮件' : node.type === 'rss' ? '预览订阅文章' : node.type === 'ai-summary' ? '测试 AI 总结' : node.type === 'tech-weekly' ? '生成周刊分析' : node.type === 'github-trending' ? '生成 Trending 分析' : '调试此节点'}</button>${!['start', 'end'].includes(node.type) ? '<button type="button" class="wf-danger" data-action="delete-node">删除节点</button>' : ''}</div>`;
         $('[data-inspector]').innerHTML = `<h2>${esc(style.label)}</h2><div data-node-error></div>${content}<div data-node-debug></div>`;
         nodeError(); highlight(); controls();
     }
@@ -549,6 +566,7 @@ export function mount(pane, workspace) {
         const config = type === 'script' ? { language: kind, source: templates[kind], sources: { [kind]: templates[kind] }, params: {}, timeoutMs: 10000 }
             : type === 'http' ? { method: 'GET', url: '', headers: {}, body: null, timeoutMs: 10000, failOnHttpError: true }
             : type === 'feishu' ? { credentialId: credentials.find(v => v.kind === 'feishu')?.id || '', messageType: 'text', title: '工作流通知', text: '工作流通知：{{ input.items[0].json.name }}', timeoutMs: 10000 }
+            : type === 'qq' ? { credentialId: credentials.find(v => v.kind === 'qq')?.id || '', targetType: 'user', targetId: '', messageType: 'text', text: '工作流通知：{{ input.items[0].json.name }}', timeoutMs: 10000 }
             : type === 'email' ? { credentialId: credentials.find(v => v.kind === 'smtp')?.id || '', to: '', cc: '', bcc: '', subject: '工作流通知', body: '你好，{{ input.items[0].json.name }}', format: 'text', timeoutMs: 10000 }
             : type === 'rss' ? { sources: structuredClone(rssSources), maxItems: 35, perSource: 5, lookbackHours: 168, onlyNew: true, timeoutMs: 60000 }
             : type === 'ai-summary' ? { title: 'RSS 科技资讯汇总', prompt: summaryPrompt, model: 'deepseek-flash', maxItems: 50, maxInputChars: 60000, timeoutMs: 180000 }
@@ -607,9 +625,9 @@ export function mount(pane, workspace) {
         }
     }
     function credentialList() {
-        $('[data-credential-list]').innerHTML = credentials.length ? credentials.map(c => `<div class="wf-credential-row"><span>${esc(c.name)} <small class="wf-muted">${esc(c.kind === 'feishu' ? '飞书机器人' : c.kind === 'smtp' ? 'SMTP 邮箱' : c.kind)}</small></span><div class="wf-actions"><button type="button" data-edit-credential="${esc(c.id)}">编辑</button><button type="button" data-delete-credential="${esc(c.id)}">删除</button></div></div>`).join('') : '<p class="wf-muted">尚未保存凭据</p>';
+        $('[data-credential-list]').innerHTML = credentials.length ? credentials.map(c => `<div class="wf-credential-row"><span>${esc(c.name)} <small class="wf-muted">${esc(c.kind === 'feishu' ? '飞书机器人' : c.kind === 'qq' ? 'QQ 机器人' : c.kind === 'smtp' ? 'SMTP 邮箱' : c.kind)}</small></span><div class="wf-actions"><button type="button" data-edit-credential="${esc(c.id)}">编辑</button><button type="button" data-delete-credential="${esc(c.id)}">删除</button></div></div>`).join('') : '<p class="wf-muted">尚未保存凭据</p>';
         $('[data-credential-form] button[type="submit"]').disabled = !capabilities.credentialsEnabled;
-        $('[data-credential-hint]').textContent = !capabilities.credentialsEnabled ? '凭据存储尚未启用，请联系管理员配置后使用。' : editingCredential ? '密码、令牌、Webhook 和签名密钥不回显，留空保留原值。修改将用于所有引用此凭据的节点。' : 'HTTP / 飞书使用 HTTPS；SMTP 邮箱使用 SSL/TLS 或 STARTTLS。';
+        $('[data-credential-hint]').textContent = !capabilities.credentialsEnabled ? '凭据存储尚未启用，请联系管理员配置后使用。' : editingCredential ? '密码、令牌、Webhook 和签名密钥不回显，留空保留原值。修改将用于所有引用此凭据的节点。' : 'HTTP / 飞书 / QQ 使用 HTTPS；SMTP 邮箱使用 SSL/TLS 或 STARTTLS。';
         credentialFields();
     }
     function resetCredentialForm(kind = 'bearer') {
@@ -619,7 +637,7 @@ export function mount(pane, workspace) {
         $('[data-credential-title]').textContent = '新增凭据';
         form.querySelector('button[type="submit"]').textContent = '保存凭据';
         $('[data-action="new-credential"]').hidden = true;
-        for (const name of ['secret', 'webhookUrl', 'feishuSecret', 'smtpPassword']) form.elements[name].placeholder = '';
+        for (const name of ['secret', 'webhookUrl', 'feishuSecret', 'smtpPassword', 'qqAppSecret']) form.elements[name].placeholder = '';
         credentialFields();
     }
     async function editCredential(id) {
@@ -630,8 +648,9 @@ export function mount(pane, workspace) {
         form.elements.name.value = credential.name; form.elements.kind.disabled = true;
         if (credential.kind === 'smtp') {
             for (const [field, key] of Object.entries({smtpHost:'host', smtpPort:'port', smtpSecurity:'security', smtpUsername:'username', smtpFrom:'from'})) form.elements[field].value = value[key] ?? '';
-        } else if (['basic', 'header'].includes(credential.kind)) form.elements.username.value = value[credential.kind === 'basic' ? 'username' : 'header'] || '';
-        for (const name of ['secret', 'webhookUrl', 'feishuSecret', 'smtpPassword']) form.elements[name].placeholder = '留空保留原值';
+        } else if (credential.kind === 'qq') form.elements.qqAppId.value = value.appId || '';
+        else if (['basic', 'header'].includes(credential.kind)) form.elements.username.value = value[credential.kind === 'basic' ? 'username' : 'header'] || '';
+        for (const name of ['secret', 'webhookUrl', 'feishuSecret', 'smtpPassword', 'qqAppSecret']) form.elements[name].placeholder = '留空保留原值';
         $('[data-credential-title]').textContent = '编辑凭据';
         form.querySelector('button[type="submit"]').textContent = '保存修改';
         $('[data-action="new-credential"]').hidden = false;
@@ -645,13 +664,15 @@ export function mount(pane, workspace) {
         $('[data-credential-form]').elements.name.focus();
     }
     function credentialFields() {
-        const form = $('[data-credential-form]'), kind = form.elements.kind.value, isFeishu = kind === 'feishu', isSmtp = kind === 'smtp';
+        const form = $('[data-credential-form]'), kind = form.elements.kind.value, isFeishu = kind === 'feishu', isSmtp = kind === 'smtp', isQq = kind === 'qq';
         $('[data-credential-user]').hidden = !['basic', 'header'].includes(kind);
-        $('[data-credential-secret]').hidden = isFeishu || isSmtp;
+        $('[data-credential-secret]').hidden = isFeishu || isSmtp || isQq;
         $('[data-credential-feishu]').hidden = !isFeishu;
         $('[data-credential-smtp]').hidden = !isSmtp;
         $('[data-credential-smtp]').disabled = !isSmtp;
-        form.elements.secret.disabled = isFeishu || isSmtp; form.elements.secret.required = !editingCredential && !isFeishu && !isSmtp;
+        $('[data-credential-qq]').hidden = !isQq; $('[data-credential-qq]').disabled = !isQq;
+        form.elements.qqAppSecret.required = !editingCredential && isQq;
+        form.elements.secret.disabled = isFeishu || isSmtp || isQq; form.elements.secret.required = !editingCredential && !isFeishu && !isSmtp && !isQq;
         form.elements.webhookUrl.disabled = !isFeishu; form.elements.webhookUrl.required = !editingCredential && isFeishu;
         form.elements.feishuSecret.disabled = !isFeishu;
         form.elements.smtpPassword.required = !editingCredential && isSmtp;
@@ -747,6 +768,23 @@ export function mount(pane, workspace) {
         example,
         credentials: () => openCredentials(),
         'feishu-credentials': () => openCredentials('feishu'),
+        'qq-credentials': () => openCredentials('qq'),
+        'use-summary-qq': () => {
+            commitInspector(); const node = graph.nodes.find(n => n.id === selected); if (node?.type !== 'qq') return;
+            node.config.text = '{{ input.items[0].json.summary }}'; markDirty(); inspector();
+        },
+        'qq-event-target': () => {
+            let event;
+            try { event = JSON.parse($('[data-qq-event]').value); } catch { throw new Error('请粘贴有效的 QQ 消息事件 JSON'); }
+            const data = event?.d || event;
+            const type = event?.t;
+            const group = ['GROUP_AT_MESSAGE_CREATE', 'GROUP_MESSAGE_CREATE'].includes(type);
+            if (!group && type !== 'C2C_MESSAGE_CREATE') throw new Error('请选择 QQ 单聊或群聊消息事件，不能使用频道事件');
+            const id = group ? data.group_openid : data.author?.user_openid;
+            if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{16,128}$/.test(id) || /^\d+$/.test(id)) throw new Error('事件中没有有效的接收目标 OpenID');
+            commitInspector(); const node = graph.nodes.find(n => n.id === selected); if (node?.type !== 'qq') return;
+            Object.assign(node.config, { targetType: group ? 'group' : 'user', targetId: id }); markDirty(); inspector(); notice('已提取接收目标，请确认事件属于当前选中的 QQ 机器人。');
+        },
         'smtp-credentials': () => openCredentials('smtp'),
         'edit-node-credential': () => { const id = $('[data-field="credentialId"]')?.value; if (id) return openCredentials('bearer', id); },
         'new-credential': () => { resetCredentialForm($('[data-credential-form]').elements.kind.value); credentialList(); },
@@ -1010,11 +1048,12 @@ export function mount(pane, workspace) {
     $('[data-credential-form]').addEventListener('submit', event => {
         event.preventDefault(); const form = event.currentTarget, data = new FormData(form), kind = form.elements.kind.value, secret = data.get('secret'), editingId = editingCredential?.id;
         perform(async () => {
-            const value = kind === 'feishu' ? { webhookUrl: data.get('webhookUrl'), secret: data.get('feishuSecret') || '' }
+            const value = kind === 'qq' ? { appId: data.get('qqAppId'), appSecret: data.get('qqAppSecret') || '' }
+                : kind === 'feishu' ? { webhookUrl: data.get('webhookUrl'), secret: data.get('feishuSecret') || '' }
                 : kind === 'smtp' ? { host: data.get('smtpHost'), port: Number(data.get('smtpPort')), security: data.get('smtpSecurity'), username: data.get('smtpUsername'), password: data.get('smtpPassword'), from: data.get('smtpFrom') }
                 : kind === 'bearer' ? { token: secret } : kind === 'basic' ? { username: data.get('username'), password: secret } : { header: data.get('username'), secret };
             const created = await send('/credentials' + (editingId ? '/' + encodeURIComponent(editingId) : ''), { name: data.get('name'), kind, value, clearSecret: data.get('clearSecret') === 'on' }, editingId ? 'PUT' : 'POST');
-            if (!editingId && ((kind === 'feishu' && graph?.nodes.find(n => n.id === selected)?.type === 'feishu') || (kind === 'smtp' && graph?.nodes.find(n => n.id === selected)?.type === 'email'))) {
+            if (!editingId && ((kind === 'qq' && graph?.nodes.find(n => n.id === selected)?.type === 'qq') || (kind === 'feishu' && graph?.nodes.find(n => n.id === selected)?.type === 'feishu') || (kind === 'smtp' && graph?.nodes.find(n => n.id === selected)?.type === 'email'))) {
                 commitInspector(); graph.nodes.find(n => n.id === selected).config.credentialId = created.id; markDirty();
             }
             resetCredentialForm(); credentials = await api('/credentials'); credentialList(); inspector(); notice(editingId ? '凭据已更新，已有节点继续使用此凭据。' : '凭据已保存。');

@@ -189,3 +189,5 @@ body.wf-node-dialog-open { overflow:hidden!important; }
 @media(max-width:650px) { .wf-list-heading { flex-wrap:wrap; gap:10px; }.wf-list-heading input[type=search] { order:3; width:100%; margin:0; }.wf-list-table th:nth-child(2),.wf-list-table td:nth-child(2) { display:none; }.wf-list-table th:nth-child(3),.wf-list-table td:nth-child(3) { display:table-cell; }.wf-list-table th:last-child { width:145px; }.wf-list-table th:first-child { width:auto; }.wf-list-actions { flex-wrap:wrap; } }
 
 .wf-rss { color:#d28a42; background:#fff3e5; }.wf-ai-summary { color:#7761be; background:#f1edff; }.wf-icon.wf-rss svg,.wf-icon.wf-ai-summary svg { width:23px; height:23px; }.wf-rss-source { border:1px solid #e8ece5; border-radius:10px; padding:12px; margin:14px 0; min-width:0; }.wf-rss-source legend { color:#889881; font-size:12px; padding:0 5px; }
+
+.wf-qq { color:#5286bf; background:#edf5ff; }.wf-icon.wf-qq svg { width:24px; height:24px; }

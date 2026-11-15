@@ -24,7 +24,7 @@ class WorkflowDiagnosticsTest {
             if (!release.await(5, TimeUnit.SECONDS)) throw new IllegalArgumentException("测试超时");
             return Map.of("items", List.of(Map.of("json", Map.of("feishuText", "BUSINESS_CONTENT", "emailBody", "MAIL_CONTENT"))));
         });
-        var engine = new WorkflowEngine(store, mock(ScriptProcessRunner.class), mock(WorkflowHttp.class), mock(WorkflowFeishu.class), mock(WorkflowEmail.class), trending, mock(WorkflowRss.class), mock(WorkflowAiSummary.class));
+        var engine = new WorkflowEngine(store, mock(ScriptProcessRunner.class), mock(WorkflowHttp.class), mock(WorkflowFeishu.class), mock(WorkflowEmail.class), trending, mock(WorkflowRss.class), mock(WorkflowAiSummary.class), mock(WorkflowQq.class));
         try {
             var graph = new WorkflowGraph(List.of(new WorkflowGraph.Node("start", "start", "开始", Map.of(), Map.of()), new WorkflowGraph.Node("analysis", "github-trending", "分析", Map.of(), Map.of()), new WorkflowGraph.Node("end", "end", "结束", Map.of(), Map.of())),
                     List.of(new WorkflowGraph.Edge("a", "start", "analysis", ""), new WorkflowGraph.Edge("b", "analysis", "end", "")));

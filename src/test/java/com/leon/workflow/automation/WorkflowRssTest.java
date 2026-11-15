@@ -36,7 +36,7 @@ class WorkflowRssTest {
         ai = new WorkflowAiSummary(http, settings);
         when(http.executeResolved(anyMap(), any(), eq(240000))).thenReturn(response(Map.of("choices", List.of(Map.of("finish_reason", "stop", "message", Map.of("content", write(Map.of("summary", "本次摘要", "entries", List.of(Map.of("index", 1, "summary", "新文章解读"))))))))));
         feishu = mock(WorkflowFeishu.class); when(feishu.execute(anyMap(), anyMap(), anyMap(), any())).thenAnswer(call -> call.getArgument(1));
-        engine = new WorkflowEngine(store, mock(ScriptProcessRunner.class), http, feishu, mock(WorkflowEmail.class), mock(WorkflowGithubTrending.class), rss, ai);
+        engine = new WorkflowEngine(store, mock(ScriptProcessRunner.class), http, feishu, mock(WorkflowEmail.class), mock(WorkflowGithubTrending.class), rss, ai, mock(WorkflowQq.class));
     }
     @AfterEach void close() { engine.close(); jdbc.execute("SHUTDOWN"); }
     WorkflowGraph graph(Map<String, Object> config) {

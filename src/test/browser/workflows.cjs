@@ -40,11 +40,11 @@ const server = http.createServer(async (req, res) => {
             if (req.method === 'PUT') {
                 lastCredential = data; credential.name = data.name;
                 const value = credentialValues.get(id);
-                for (const [key, change] of Object.entries(data.value)) if (!['token','password','secret','webhookUrl'].includes(key) || change) value[key] = change;
+                for (const [key, change] of Object.entries(data.value)) if (!['token','password','secret','webhookUrl','appSecret'].includes(key) || change) value[key] = change;
                 if (data.clearSecret) value.secret = '';
                 return reply(credential);
             }
-            const value = Object.fromEntries(Object.entries(credentialValues.get(id)).filter(([key]) => !['token','password','secret','webhookUrl'].includes(key)));
+            const value = Object.fromEntries(Object.entries(credentialValues.get(id)).filter(([key]) => !['token','password','secret','webhookUrl','appSecret'].includes(key)));
             return reply({...credential,value});
         }
         if (route === '/test-node') { lastTest = data; if (testFailure) return reply(testFailure,400);
@@ -53,7 +53,7 @@ const server = http.createServer(async (req, res) => {
                 const period=sourceUrl.includes('weekly')?'weekly':sourceUrl.includes('monthly')?'monthly':'daily';
                 const periodLabel={daily:'日榜',weekly:'周榜',monthly:'月榜'}[period];
                 return reply({output:{items:[{json:{count:2,sourceUrl,period,periodLabel,title:'GitHub Trending '+periodLabel+'项目解读',feishuText:periodLabel+' sample/one：开发工具。\nsample/two：资料不足。',emailSubject:'GitHub Trending '+periodLabel+'项目解读',emailBody:'项目用途：sample/one 提供开发工具。\nsample/two 资料不足。',emailHtml:'<p>项目用途：开发工具</p>'}}]},logs:'已抓取 GitHub Trending 并生成消息正文',durationMs:22,branch:''});
-            } return reply({ output: ['feishu', 'email'].includes(data.node.type) ? data.input : { items: [{ json: { name: 'LEON' } }] }, logs: data.node.type === 'feishu' ? '飞书消息已发送' : data.node.type === 'email' ? '邮件已提交至 SMTP 服务器' : '调试完成', durationMs: 22, branch: '' }); }
+            } return reply({ output: ['feishu', 'qq', 'email'].includes(data.node.type) ? data.input : { items: [{ json: { name: 'LEON' } }] }, logs: data.node.type === 'qq' ? 'QQ 平台已接受消息' : data.node.type === 'feishu' ? '飞书消息已发送' : data.node.type === 'email' ? '邮件已提交至 SMTP 服务器' : '调试完成', durationMs: 22, branch: '' }); }
         if (!route) {
             if (req.method === 'POST') workflow = { id: 'workflow-1', name: data.name, definition: initial(), revision: 1, publishedVersion: 0 };
             return reply(req.method === 'POST' ? workflow : [...(workflow ? [workflow] : []), ...extraWorkflows]);
@@ -154,11 +154,12 @@ const server = http.createServer(async (req, res) => {
             await page.getByRole('button', {name:'保存草稿',exact:true}).click();
             await page.waitForFunction(() => document.querySelector('[data-version]').textContent.includes('草稿已保存'));
         };
-        for (const [kind, scale] of [['http',1],['javascript',.5],['groovy',2],['github-trending',1],['feishu',1],['email',1],['rss',1],['ai-summary',1],['if',1]]) {
+        for (const [kind, scale] of [['http',1],['javascript',.5],['groovy',2],['github-trending',1],['feishu',1],['qq',1],['email',1],['rss',1],['ai-summary',1],['if',1]]) {
             await page.locator('[data-node="end"]').click();
             await page.getByRole('button',{name:'重置画布缩放',exact:true}).click();
             for (let i=0; i<(scale===.5?5:scale===2?10:0); i++) await page.getByRole('button',{name:scale===.5?'缩小画布':'放大画布',exact:true}).click();
             await page.evaluate(() => { window.scrollTo(0,0); const board=document.querySelector('.wf-canvas-scroll'); board.scrollLeft=350; board.scrollTop=220; });
+            await page.locator(`[data-add="${kind}"]`).scrollIntoViewIfNeeded();
             const board = await page.locator('.wf-canvas-scroll').boundingBox();
             const source = await page.locator(`[data-add="${kind}"]`).boundingBox();
             const drop = {x:board.x+320,y:board.y+310};
@@ -206,7 +207,7 @@ const server = http.createServer(async (req, res) => {
             assert.equal(await page.locator('.wf-library-preview').count(),0);
             assert.equal(await page.locator('.is-library-drop-target').count(),0);
         }
-        assert.equal(await page.locator('.wf-library-count').textContent(),'10');
+        assert.equal(await page.locator('.wf-library-count').textContent(),'11');
         await page.locator('[data-node="start"]').click();
         await page.locator('[data-add="rss"]').click();
         assert.equal(await page.locator('[data-rss-row]').count(),7);
@@ -753,6 +754,52 @@ const server = http.createServer(async (req, res) => {
         await page.locator('[data-close="credentials"]').click();
         await page.waitForFunction(()=>document.querySelector('[name="smtpPassword"]').value==='');
         assert.equal(credentialValues.get('credential-2').password,'browser-mail-authorization','关闭凭据编辑不应保存密码输入');
+        await page.setViewportSize({ width: 1600, height: 1100 });
+        await page.locator('[data-node="start"]').click();
+        const qqCard = page.locator('[data-add="qq"]');
+        if (!await qqCard.isVisible()) await page.getByRole('button', {name:'展开节点库', exact:true}).click();
+        await qqCard.click();
+        await page.locator('[data-action="qq-credentials"]').click();
+        await page.waitForSelector('[data-credentials-dialog][open]');
+        assert.equal(await credentialForm.locator('[name="kind"]').inputValue(), 'qq');
+        assert.equal(await credentialForm.locator('[name="secret"]').isDisabled(), true);
+        assert.equal(await credentialForm.locator('[name="qqAppId"]').isVisible(), true);
+        assert.equal(await credentialForm.locator('[name="smtpHost"]').isDisabled(), true);
+        await credentialForm.locator('[name="name"]').fill('QQ 通知机器人');
+        await credentialForm.locator('[name="qqAppId"]').fill('12345678');
+        await credentialForm.locator('[name="qqAppSecret"]').fill('browser-qq-secret');
+        await credentialForm.locator('[type="submit"]').click();
+        await page.waitForFunction(()=>document.querySelector('[name="qqAppSecret"]').value==='');
+        assert.deepEqual(lastCredential.value,{appId:'12345678',appSecret:'browser-qq-secret'});
+        await page.locator('[data-close="credentials"]').click();
+        assert.equal(await page.locator('[data-field="credentialId"]').inputValue(),'credential-4');
+        const qqId = 'QQ_USER_OPENID_BROWSER_1234567890';
+        await page.getByText('从 QQ 消息事件提取接收目标',{exact:true}).click();
+        await page.locator('[data-qq-event]').fill(JSON.stringify({op:0,t:'C2C_MESSAGE_CREATE',d:{author:{user_openid:qqId},content:'private event body'}}));
+        await page.locator('[data-action="qq-event-target"]').click();
+        assert.equal(await page.locator('[data-field="targetId"]').inputValue(),qqId);
+        assert.equal(await page.locator('[data-qq-event]').inputValue(),'');
+        await page.locator('[data-action="use-summary-qq"]').click();
+        assert.equal(await page.locator('[data-field="text"]').inputValue(),'{{ input.items[0].json.summary }}');
+        await page.locator('[data-field="messageType"]').selectOption('markdown');
+        await page.locator('[data-action="test"]').click();
+        await page.waitForFunction(()=>document.querySelector('[data-node-debug]')?.textContent.includes('QQ 平台已接受消息'));
+        assert.equal(lastTest.node.type,'qq'); assert.equal(lastTest.node.config.messageType,'markdown');
+        assert.equal(lastTest.node.config.targetId,qqId);
+        await page.locator('[data-action="edit-node-credential"]').click();
+        await page.waitForSelector('[data-credentials-dialog][open]');
+        await page.getByRole('button',{name:'保存修改',exact:true}).waitFor();
+        assert.equal(await credentialForm.locator('[name="qqAppId"]').inputValue(),'12345678');
+        assert.equal(await credentialForm.locator('[name="qqAppSecret"]').inputValue(),'');
+        assert.equal(await credentialForm.locator('[name="qqAppSecret"]').getAttribute('required'),null);
+        await page.getByRole('button',{name:'保存修改',exact:true}).click();
+        await page.waitForFunction(()=>document.querySelector('[data-credential-title]').textContent==='新增凭据');
+        assert.equal(credentialValues.get('credential-4').appSecret,'browser-qq-secret');
+        await page.locator('[data-close="credentials"]').click();
+        await page.getByRole('button',{name:'保存草稿',exact:true}).click();
+        assert.ok(!JSON.stringify(workflow.definition).includes('private event body'));
+        assert.ok(!JSON.stringify(workflow.definition).includes('browser-qq-secret'));
+        await page.screenshot({path:'/private/tmp/leon-workflow-qq-node.png',fullPage:false});
         await page.getByRole('button',{name:'← 返回列表',exact:true}).click();
         await page.locator('[data-workflow-row="workflow-1"]').waitFor();
         await page.getByRole('button',{name:'删除 未保存草稿',exact:true}).click();
@@ -760,7 +807,7 @@ const server = http.createServer(async (req, res) => {
         assert.equal(workflow,null,'删除最后一个工作流应回到空列表');
         assert.equal(await page.locator('[data-editor]').isVisible(),false);
         assert.equal(await page.getByRole('button',{name:'＋ 新建工作流',exact:true}).isEnabled(),true);
-        assert.equal(credentials.length,3,'删除工作流不应删除已有凭据');
+        assert.equal(credentials.length,4,'删除工作流不应删除已有凭据');
         assert.deepEqual(errors, []);
         console.log('Workflow browser checks passed: workflow list/editor routing, creation/deletion, history and draft retention, library drag/drop, credential editing and secret retention, Feishu/email configuration, RSS/AI settings and node dialogs, canvas, scheduling, instances, navigation and mobile.');
     } finally { await browser.close(); server.close(); }
