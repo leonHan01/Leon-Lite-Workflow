@@ -178,4 +178,33 @@ class WorkflowQqBindingsTest {
         socket.onBinary(ws, java.nio.ByteBuffer.wrap(new byte[]{1}), true);
         assertThrows(IOException.class, () -> socket.receive(10)); verify(ws).abort();
     }
+    @Test void authenticationAndGatewayDiscoveryFailuresIdentifyTheStageWithoutEchoingSecrets() throws Exception {
+        doThrow(new IOException(SECRET + TOKEN)).when(qq).bindingAccessToken(credentialId);
+        String first = text(start("user").get("id"));
+        for (int i = 0; i < 600 && !"FAILED".equals(bindings.get(first).get("status")); i++) Thread.sleep(5);
+        var auth = bindings.get(first);
+        assertEquals("FAILED", auth.get("status"));
+        assertTrue(text(auth.get("error")).contains("获取访问令牌"), text(auth.get("error")));
+        assertFalse(write(auth).contains(SECRET)); assertFalse(write(auth).contains(TOKEN));
+        doReturn(TOKEN).when(qq).bindingAccessToken(credentialId);
+        doThrow(new IOException(SECRET + TOKEN)).when(qq).bindingGateway(TOKEN);
+        String second = text(start("user").get("id"));
+        for (int i = 0; i < 600 && !"FAILED".equals(bindings.get(second).get("status")); i++) Thread.sleep(5);
+        var discovery = bindings.get(second);
+        assertEquals("FAILED", discovery.get("status"));
+        assertTrue(text(discovery.get("error")).contains("获取绑定网关"), text(discovery.get("error")));
+        assertFalse(write(discovery).contains(SECRET)); assertFalse(write(discovery).contains(TOKEN));
+    }
+    @Test void realQqApiErrorsKeepTheirNumericCodeInBindingStatusButDiscardProviderText() throws Exception {
+        bindings.close();
+        var http = mock(WorkflowHttp.class);
+        when(http.executeResolved(anyMap(), any())).thenReturn(Map.of("items", List.of(Map.of("json", Map.of("status", 200,
+                "body", Map.of("code", 100016, "message", "private-provider-reply " + SECRET + TOKEN))))));
+        bindings = new WorkflowQqBindings(credentials, new WorkflowQq(credentials, http), gateway, clock::get);
+        String id = text(start("user").get("id"));
+        for (int i = 0; i < 600 && !"FAILED".equals(bindings.get(id).get("status")); i++) Thread.sleep(5);
+        String error = text(bindings.get(id).get("error"));
+        assertTrue(error.contains("获取访问令牌"), error); assertTrue(error.contains("100016"), error);
+        assertFalse(error.contains(SECRET)); assertFalse(error.contains(TOKEN)); assertFalse(error.contains("private-provider-reply"));
+    }
 }

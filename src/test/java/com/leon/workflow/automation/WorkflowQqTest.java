@@ -86,6 +86,17 @@ class WorkflowQqTest {
             assertFalse(error.getMessage().contains(url));
         }
     }
+    @Test void bindingAcceptsTheActualLegacyGatewayWithoutATrailingSlash() throws Exception {
+        for (String url : List.of("wss://api.sgroup.qq.com/websocket", "wss://api.sgroup.qq.com/websocket/", "wss://api.bot.qq.com/websocket")) {
+            sendBody = Map.of("url", url);
+            assertEquals(url, qq.bindingGateway(TOKEN).toString());
+        }
+        for (String url : List.of("wss://api.sgroup.qq.com.evil.test/websocket", "wss://api.sgroup.qq.com@evil.test/websocket", "ws://api.sgroup.qq.com/websocket",
+                "wss://api.sgroup.qq.com:8443/websocket", "wss://api.sgroup.qq.com/websocket?token=private", "wss://api.sgroup.qq.com/websocket#fragment", "wss://api.sgroup.qq.com/other")) {
+            sendBody = Map.of("url", url);
+            assertThrows(IllegalArgumentException.class, () -> qq.bindingGateway(TOKEN));
+        }
+    }
     @Test void cacheReusesTokensButChangingCredentialSecretRefreshesBeforeNextSend() throws Exception {
         qq.execute(config(), input(), Map.of(), new WorkflowPrivacy());
         var privacy = new WorkflowPrivacy(); qq.execute(config(), input(), Map.of(), privacy);

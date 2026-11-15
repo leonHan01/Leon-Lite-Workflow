@@ -115,11 +115,16 @@ public class WorkflowQqBindings implements AutoCloseable {
         catch (RuntimeException error) { return false; }
     }
     private void listen(Binding b) {
+        String stage = "获取访问令牌";
         try {
             String token = qq.bindingAccessToken(b.credentialId);
             if (!b.active() || !current(b)) { b.finish("FAILED", "", "机器人凭据已修改或删除，请重新开始绑定", false); return; }
-            try (Connection connection = gateway.open(qq.bindingGateway(token))) {
+            stage = "获取绑定网关";
+            URI url = qq.bindingGateway(token);
+            stage = "建立 WebSocket 连接";
+            try (Connection connection = gateway.open(url)) {
                 if (!b.attach(connection)) return;
+                stage = "接收 QQ 网关事件";
                 Long sequence = null;
                 boolean identified = false, ready = false;
                 long interval = 0, nextBeat = Long.MAX_VALUE, hardDeadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(TTL);
@@ -158,8 +163,24 @@ public class WorkflowQqBindings implements AutoCloseable {
             }
         } catch (Exception error) {
             if (error instanceof InterruptedException) Thread.currentThread().interrupt();
-            b.finish("FAILED", "", "QQ 绑定连接未完成，请检查机器人 AppID、AppSecret、事件权限和服务器网络后重试", false);
+            b.finish("FAILED", "", "QQ 绑定失败 · " + stage + "：" + safeFailure(error), false);
         }
+    }
+    private static String safeFailure(Throwable error) {
+        Throwable cause = error;
+        for (int depth = 0; depth < 6 && cause.getCause() != null && cause.getCause() != cause; depth++) {
+            if (cause instanceof WorkflowQq.SafeFailure) break;
+            if (cause instanceof WebSocketHandshakeException handshake) return "握手被 QQ 拒绝（HTTP " + handshake.getResponse().statusCode() + "），请检查机器人事件权限和接入方式";
+            cause = cause.getCause();
+        }
+        if (cause instanceof WorkflowQq.SafeFailure) return cause.getMessage();
+        if (cause instanceof WebSocketHandshakeException handshake) return "握手被 QQ 拒绝（HTTP " + handshake.getResponse().statusCode() + "），请检查机器人事件权限和接入方式";
+        if (cause instanceof java.net.UnknownHostException) return "QQ 域名解析失败，请检查服务器 DNS";
+        if (cause instanceof javax.net.ssl.SSLException) return "QQ TLS 证书或握手校验失败，请检查服务器时间与证书信任";
+        if (cause instanceof java.net.http.HttpTimeoutException || cause instanceof java.net.SocketTimeoutException || cause instanceof TimeoutException)
+            return "连接超时，请稍后重试并检查服务器网络";
+        if (cause instanceof SecurityException) return "服务器运行权限限制了连接，请联系管理员检查服务配置";
+        return "连接未完成，请检查机器人配置、事件权限及服务器网络后重试";
     }
     static String target(Map<String, Object> event, String code, String type) {
         if (!Integer.valueOf(0).equals(event.get("op")) || !(event.get("d") instanceof Map<?, ?> data) || !(data.get("content") instanceof String content)) return null;
