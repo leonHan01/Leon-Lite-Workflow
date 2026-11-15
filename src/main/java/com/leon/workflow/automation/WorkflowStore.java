@@ -216,6 +216,9 @@ public class WorkflowStore {
         jdbc.update("UPDATE automation_node_run SET status=?,output_json=?,logs=?,error=?,finished_at=? WHERE run_id=? AND node_id=? AND status='RUNNING'",
                 status, output == null ? null : write(redact(output)), logs, error, System.currentTimeMillis(), run, node);
     }
+    public void updateNodeLogs(String run, String node, String logs) {
+        jdbc.update("UPDATE automation_node_run SET logs=? WHERE run_id=? AND node_id=? AND status='RUNNING'", logs, run, node);
+    }
     @Transactional public void finish(String id, String status, Object output, String error) {
         jdbc.update("UPDATE automation_run SET status=?,output_json=?,error=?,finished_at=? WHERE id=? AND status IN ('QUEUED','RUNNING')",
                 status, output == null ? null : write(redact(output)), error, System.currentTimeMillis(), id);

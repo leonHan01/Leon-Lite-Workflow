@@ -10,6 +10,20 @@ public final class WorkflowExpressions {
     private static final Pattern TEMPLATE = Pattern.compile("\\{\\{\\s*([^{}]+?)\\s*}}");
     private static final Pattern PATH = Pattern.compile("[A-Za-z_][A-Za-z0-9_]*(?:(?:\\.[A-Za-z_][A-Za-z0-9_]*)|(?:\\[\\d{1,6}]))*");
     private WorkflowExpressions() {}
+    public static List<String> references(Object value) {
+        if (!(value instanceof String s)) return List.of();
+        List<String> result = new ArrayList<>(); Matcher matcher = TEMPLATE.matcher(s);
+        while (matcher.find()) { String path = matcher.group(1).trim(); if (PATH.matcher(path).matches()) result.add(path); }
+        return result;
+    }
+    public static Object resolveRequired(Object value, Map<String, Object> input, Map<String, Object> ctx, String label) {
+        for (String path : references(value)) {
+            Object resolved = field(path, input, ctx);
+            if (resolved == null || resolved instanceof String s && s.isBlank())
+                throw new IllegalArgumentException(label + "引用的字段 " + path + " 不存在或为空，请检查上游节点输出");
+        }
+        return resolve(value, input, ctx);
+    }
     public static Object resolve(Object value, Map<String, Object> input, Map<String, Object> ctx) {
         if (value instanceof Map<?, ?> map) {
             Map<String, Object> result = new LinkedHashMap<>();

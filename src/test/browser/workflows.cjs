@@ -62,7 +62,7 @@ const server = http.createServer(async (req, res) => {
         if (route === '/workflow-1/runs') {
             if (req.method === 'POST') {
                 const run = { id: 'run-1', workflowId:workflow.id,workflowName:workflow.name,triggerType:'MANUAL',version: workflow.publishedVersion, status: 'RUNNING', createdAt: new Date().toISOString(), startedAt: new Date().toISOString(), definition: versions[0].definition,
-                    input: data.input, output: null, nodes: versions[0].definition.nodes.map(n => ({ nodeId: n.id, name: n.name, status: 'PENDING', input: data.input, output: null })) };
+                    input: data.input, output: null, nodes: versions[0].definition.nodes.map(n => ({ nodeId: n.id, name: n.name, status: n.type==='start'?'RUNNING':'PENDING', logs:n.type==='start'?'[+1 ms] 节点运行中；首项字段=[name, amount]':'', input: data.input, output: null })) };
                 runs.unshift(run);
                 setTimeout(() => { run.status = 'SUCCEEDED'; run.finishedAt = new Date().toISOString(); run.output = { items: [{ json: { name: 'leon', amount: 250 } }] }; run.nodes.forEach(n => { n.status = n.nodeId === 'rejected' ? 'SKIPPED' : 'SUCCEEDED'; n.output = run.output; n.logs = n.nodeId === 'calculate' ? 'Groovy：金额翻倍' : ''; }); }, 900);
                 return reply(run, 202);
@@ -508,6 +508,7 @@ const server = http.createServer(async (req, res) => {
         await page.waitForSelector('[data-schedule-summary][hidden]',{state:'attached'});
         assert.equal(schedule.enabled,false);
         await page.getByRole('button', { name: '▶ 运行 v1', exact: true }).click();
+        await page.locator('[data-step="start"][open] [data-debug-logs]').filter({hasText:'节点运行中'}).waitFor();
         await page.waitForFunction(() => document.querySelector('[data-run-detail] .wf-badge')?.textContent === '成功');
         assert.ok((await page.locator('[data-run-detail]').textContent()).includes('250'));
         assert.equal(await page.locator('[data-node="rejected"]').getAttribute('class').then(c => c.includes('status-SKIPPED')), true);

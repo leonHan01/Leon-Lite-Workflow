@@ -6,6 +6,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.function.Consumer;
 import static com.leon.workflow.automation.WorkflowJson.*;
 
 @Service
@@ -91,22 +92,29 @@ public class WorkflowEngine {
     }
     private NodeResult runNode(String id, WorkflowGraph.Node node, Map<String, Object> input, WorkflowPrivacy privacy) throws Exception {
         store.startNode(id, node, privacy.mask(input));
+        StringBuilder debug = new StringBuilder();
+        Consumer<String> trace = WorkflowDiagnostics.trace(debug, privacy, logs -> store.updateNodeLogs(id, node.id(), logs));
+        trace.accept("开始节点，类型=" + node.type() + "；输入 " + WorkflowDiagnostics.summary(input));
+        trace.accept(WorkflowDiagnostics.templates(node));
         try {
-            NodeResult result = execute(node, input, id, privacy);
+            NodeResult result = execute(node, input, id, privacy, trace);
             privacy.collect(result.output());
             if (Thread.currentThread().isInterrupted() || store.cancelled(id)) throw new InterruptedException();
-            store.finishNode(id, node.id(), "SUCCEEDED", privacy.mask(result.output()), privacy.message(result.logs()), null);
+            trace.accept("节点完成；输出 " + WorkflowDiagnostics.summary(result.output()) + "；" + WorkflowDiagnostics.lengths(result.output()));
+            store.finishNode(id, node.id(), "SUCCEEDED", privacy.mask(result.output()), privacy.message(WorkflowDiagnostics.combine(debug.toString(), result.logs())), null);
             return result;
         } catch (InterruptedException error) { throw error; }
         catch (Exception error) {
-            String logs = error instanceof ScriptProcessRunner.ScriptFailure failure ? privacy.message(failure.logs()) : null;
+            trace.accept("节点失败：" + error(error, privacy));
+            String logs = privacy.message(WorkflowDiagnostics.combine(debug.toString(), error instanceof ScriptProcessRunner.ScriptFailure failure ? failure.logs() : ""));
             store.finishNode(id, node.id(), "FAILED", null, logs, error(error, privacy)); throw error;
         }
     }
-    private NodeResult execute(WorkflowGraph.Node node, Map<String, Object> input, String runId, WorkflowPrivacy privacy) throws Exception {
+    private NodeResult execute(WorkflowGraph.Node node, Map<String, Object> input, String runId, WorkflowPrivacy privacy, Consumer<String> trace) throws Exception {
         Map<String, Object> config = node.settings();
         privacy.collect(config);
         Map<String, Object> ctx = Map.of("runId", runId, "nodeId", node.id(), "params", config.getOrDefault("params", Map.of()));
+        if (Set.of("feishu", "email").contains(node.type())) trace.accept("解析消息模板；" + WorkflowDiagnostics.resolvedLengths(node, input, ctx));
         return switch (node.type()) {
             case "start", "end" -> new NodeResult(input, "", "");
             case "script" -> {
@@ -116,7 +124,7 @@ public class WorkflowEngine {
             case "http" -> new NodeResult(envelope(http.execute(config, input, ctx, privacy)), "", "");
             case "feishu" -> new NodeResult(feishu.execute(config, input, ctx, privacy), "飞书消息已发送", "");
             case "email" -> new NodeResult(email.execute(config, input, ctx, privacy), "邮件已提交至 SMTP 服务器", "");
-            case "github-trending" -> new NodeResult(trending.execute(config, privacy), "已抓取 GitHub Trending 并由 DeepSeek 生成项目解读、飞书消息和邮件正文", "");
+            case "github-trending" -> new NodeResult(trending.execute(config, privacy, trace), "已抓取 GitHub Trending 并由 DeepSeek 生成项目解读、飞书消息和邮件正文", "");
             case "if" -> new NodeResult(input, "", String.valueOf(WorkflowExpressions.condition(config, input, ctx)));
             default -> throw new IllegalArgumentException("不支持的节点类型");
         };
@@ -125,16 +133,19 @@ public class WorkflowEngine {
         if (node == null || node.id() == null || !node.id().matches("[A-Za-z][A-Za-z0-9_-]{0,63}")) throw new IllegalArgumentException("请选择有效的调试节点");
         WorkflowGraph.validateNode(node); envelope(input);
         WorkflowPrivacy privacy = new WorkflowPrivacy(); privacy.collect(input); long started = System.currentTimeMillis();
+        StringBuilder debug = new StringBuilder(); Consumer<String> trace = WorkflowDiagnostics.trace(debug, privacy, logs -> {});
+        trace.accept("开始调试，类型=" + node.type() + "；输入 " + WorkflowDiagnostics.summary(input)); trace.accept(WorkflowDiagnostics.templates(node));
         Future<NodeResult> task;
-        try { task = workers.submit(() -> execute(node, input, "preview-" + UUID.randomUUID(), privacy)); }
+        try { task = workers.submit(() -> execute(node, input, "preview-" + UUID.randomUUID(), privacy, trace)); }
         catch (RejectedExecutionException e) { throw busy(); }
         try {
             long timeout = "github-trending".equals(node.type()) ? integer(node.settings().get("timeoutMs"), WorkflowGithubTrending.DEFAULT_TIMEOUT, 1000, WorkflowGithubTrending.MAX_TIMEOUT) + 2000L : 32_000L;
             NodeResult result = task.get(timeout, TimeUnit.MILLISECONDS); privacy.collect(result.output());
-            return Map.of("output", privacy.mask(result.output()), "logs", privacy.message(result.logs()), "branch", result.branch(), "durationMs", System.currentTimeMillis() - started);
+            trace.accept("调试完成；输出 " + WorkflowDiagnostics.summary(result.output()) + "；" + WorkflowDiagnostics.lengths(result.output()));
+            return Map.of("output", privacy.mask(result.output()), "logs", privacy.message(WorkflowDiagnostics.combine(debug.toString(), result.logs())), "branch", result.branch(), "durationMs", System.currentTimeMillis() - started);
         } catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new IllegalArgumentException("调试已取消"); }
         catch (TimeoutException e) { throw new IllegalArgumentException("调试等待超时，请稍后重试"); }
-        catch (ExecutionException e) { throw new DebugFailure(error(e.getCause(), privacy), e.getCause() instanceof ScriptProcessRunner.ScriptFailure failure ? privacy.message(failure.logs()) : ""); }
+        catch (ExecutionException e) { throw new DebugFailure(error(e.getCause(), privacy), privacy.message(WorkflowDiagnostics.combine(debug.toString(), e.getCause() instanceof ScriptProcessRunner.ScriptFailure failure ? failure.logs() : ""))); }
         finally { task.cancel(true); }
     }
     public Map<String, Object> cancel(String id) {

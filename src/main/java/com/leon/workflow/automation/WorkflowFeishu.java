@@ -45,10 +45,10 @@ public class WorkflowFeishu {
     public Map<String, Object> execute(Map<String, Object> config, Map<String, Object> input, Map<String, Object> ctx, WorkflowPrivacy privacy) throws Exception {
         validateConfig(config);
         var credential = credentials.feishu(text(config.get("credentialId")), privacy);
-        String content = required(WorkflowExpressions.resolve(config.get("text"), input, ctx), "飞书消息内容解析后不能为空", MAX_MESSAGE_BYTES);
+        String content = required(WorkflowExpressions.resolveRequired(config.get("text"), input, ctx, "飞书正文"), "飞书消息内容解析后不能为空", MAX_MESSAGE_BYTES);
         Map<String, Object> payload = new LinkedHashMap<>();
         if ("card".equals(config.get("messageType"))) {
-            String title = required(WorkflowExpressions.resolve(config.get("title"), input, ctx), "飞书卡片标题解析后不能为空", 200);
+            String title = required(WorkflowExpressions.resolveRequired(config.get("title"), input, ctx, "飞书标题"), "飞书卡片标题解析后不能为空", 200);
             payload.put("msg_type", "interactive");
             payload.put("card", Map.of("schema", "2.0", "config", Map.of("update_multi", true),
                     "header", Map.of("title", Map.of("tag", "plain_text", "content", title), "template", "blue"),

@@ -74,13 +74,13 @@ public class WorkflowEmail {
     public Map<String, Object> execute(Map<String, Object> config, Map<String, Object> input, Map<String, Object> ctx, WorkflowPrivacy privacy) throws Exception {
         validateConfig(config);
         var credential = credentials.smtp(text(config.get("credentialId")), privacy);
-        InternetAddress[] to = addresses(resolve(config.get("to"), input, ctx), "收件人", true);
+        InternetAddress[] to = addresses(text(WorkflowExpressions.resolveRequired(config.get("to"), input, ctx, "邮件收件人")), "收件人", true);
         InternetAddress[] cc = addresses(resolve(config.get("cc"), input, ctx), "抄送", false);
         InternetAddress[] bcc = addresses(resolve(config.get("bcc"), input, ctx), "密送", false);
         if (to.length + cc.length + bcc.length > 100) throw new IllegalArgumentException("一封邮件最多发送至 100 个邮箱");
-        String subject = required(resolve(config.get("subject"), input, ctx), "邮件主题解析后不能为空", 1000);
+        String subject = required(WorkflowExpressions.resolveRequired(config.get("subject"), input, ctx, "邮件主题"), "邮件主题解析后不能为空", 1000);
         header(subject, "邮件主题");
-        String body = required(resolve(config.get("body"), input, ctx), "邮件正文解析后不能为空", MAX_BYTES);
+        String body = required(WorkflowExpressions.resolveRequired(config.get("body"), input, ctx, "邮件正文"), "邮件正文解析后不能为空", MAX_BYTES);
         if (body.getBytes(StandardCharsets.UTF_8).length > MAX_BYTES) throw new IllegalArgumentException("邮件正文不能超过 1 MB");
         int timeout = integer(config.get("timeoutMs"), 10_000, 100, 30_000);
         SmtpSockets transport;

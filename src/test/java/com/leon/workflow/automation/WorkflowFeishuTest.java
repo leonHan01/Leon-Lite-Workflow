@@ -63,10 +63,19 @@ class WorkflowFeishuTest {
         assertEquals(Map.of("msg_type", "text", "content", Map.of("text", "你好，leon")), request.get("body"));
         @SuppressWarnings("unchecked") var nodes = (List<Map<String, Object>>)run.get("nodes");
         assertTrue(nodes.stream().allMatch(n -> "SUCCEEDED".equals(n.get("status"))));
-        assertEquals("飞书消息已发送", nodes.get(1).get("logs"));
+        assertTrue(text(nodes.get(1).get("logs")).contains("飞书消息已发送"));
+        assertTrue(text(nodes.get(1).get("logs")).contains("首项字段=[name]"));
         assertFalse(write(store.get(workflow)).contains("sample-webhook-id")); assertFalse(write(run).contains(URL));
         String encrypted = jdbc.queryForObject("SELECT encrypted FROM automation_credential WHERE id=?", String.class, credential);
         assertFalse(encrypted.contains(URL)); assertFalse(write(credentials.list()).contains("webhookUrl"));
+    }
+    @Test void missingTrendingFieldsMustNotSendOnlyTheNotificationPrefix() throws Exception {
+        when(http.executeResolved(anyMap(), any())).thenReturn(response(Map.of("code", 0)));
+        var config = config(credential("")); config.put("text", "工作流通知：{{ input.items[0].json.name }}");
+        var input = Map.<String, Object>of("items", List.of(Map.of("json", Map.of("feishuText", "项目分析正文", "emailBody", "邮件分析正文"))));
+        var error = assertThrows(IllegalArgumentException.class, () -> feishu.execute(config, input, Map.of(), new WorkflowPrivacy()));
+        assertTrue(error.getMessage().contains("input.items[0].json.name"));
+        verifyNoInteractions(http);
     }
     @Test void cardMessagesUseSigningAndResolveTemplatesOnlyOnce() throws Exception {
         String id = credential(SECRET); var config = config(id);

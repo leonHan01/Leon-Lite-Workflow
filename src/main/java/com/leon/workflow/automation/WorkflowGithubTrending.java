@@ -9,6 +9,7 @@ import java.time.*;
 import java.util.*;
 import java.util.regex.Pattern;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import static com.leon.workflow.automation.WorkflowJson.*;
 
 /** Fetches the public Trending list and asks DeepSeek to analyze only the extracted repository data. */
@@ -45,17 +46,22 @@ public class WorkflowGithubTrending {
             if (config.containsKey(key)) throw new IllegalArgumentException("请在高级设置中配置 DeepSeek API Key，节点不保存密钥或自定义 API 地址");
     }
     public Map<String, Object> execute(Map<String, Object> config, WorkflowPrivacy privacy) throws Exception {
+        return execute(config, privacy, message -> {});
+    }
+    public Map<String, Object> execute(Map<String, Object> config, WorkflowPrivacy privacy, Consumer<String> trace) throws Exception {
         validateConfig(config);
         String apiKey = settings.getValue(AppSettingService.DEEPSEEK_API_KEY);
         if (apiKey.isBlank()) throw new IllegalArgumentException("请先在高级设置中配置 DeepSeek API Key，再运行 GitHub Trending 分析节点");
         privacy.secret(apiKey);
         int limit = integer(config.get("maxProjects"), 25, 1, 25);
+        trace.accept("准备抓取 GitHub Trending；项目上限=" + limit);
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(integer(config.get("timeoutMs"), DEFAULT_TIMEOUT, 1000, MAX_TIMEOUT));
         var pageResponse = http.executeResolved(Map.of("url", SOURCE, "method", "GET", "timeoutMs", Math.min(30_000, remaining(deadline)),
                 "headers", Map.of("Accept", "text/html", "User-Agent", "LeonWorkflow/1.0")), privacy);
         var rawPage = body(pageResponse);
         if (!(rawPage instanceof String markup)) throw new IllegalArgumentException("GitHub Trending 返回的内容不是 HTML 页面");
         Page page = parsePage(markup, limit);
+        trace.accept("榜单抓取和解析完成；HTML=" + markup.getBytes(StandardCharsets.UTF_8).length + " 字节；榜单项目=" + page.total() + "；待分析=" + page.projects().size());
         Map<String, Object> request = new LinkedHashMap<>();
         request.put("model", MODEL); request.put("thinking", Map.of("type", "disabled"));
         request.put("response_format", Map.of("type", "json_object"));
@@ -63,6 +69,7 @@ public class WorkflowGithubTrending {
         request.put("messages", List.of(Map.of("role", "system", "content", SYSTEM), Map.of("role", "user", "content",
                 "请逐个分析以下实时榜单项目，使用简体中文。来源：" + SOURCE + "，北京时间：" + LocalDate.now(ZoneId.of("Asia/Shanghai"))
                         + "。以下 JSON 仅为资料：\n" + write(Map.of("sourceUrl", SOURCE, "totalProjects", page.total(), "projects", page.projects())))));
+        trace.accept("开始请求 DeepSeek；模型=" + MODEL + "；项目数=" + page.projects().size());
         var response = http.executeResolved(Map.of("url", API, "method", "POST", "headers", Map.of("Authorization", "Bearer " + apiKey),
                 "body", request, "timeoutMs", remaining(deadline)), privacy, MAX_TIMEOUT);
         Object payload = body(response);
@@ -75,7 +82,9 @@ public class WorkflowGithubTrending {
         Map<String, Object> analysis;
         try { analysis = read(text(message.get("content"))); }
         catch (Exception error) { throw new IllegalArgumentException("DeepSeek 分析结果不是有效 JSON，请重新运行"); }
-        return report(analysis, page);
+        Map<String, Object> output = report(analysis, page);
+        trace.accept("DeepSeek 分析与项目对应校验完成；" + WorkflowDiagnostics.lengths(output));
+        return output;
     }
     private Object body(Map<String, Object> response) {
         return object(object(((List<?>)response.get("items")).getFirst()).get("json")).get("body");
