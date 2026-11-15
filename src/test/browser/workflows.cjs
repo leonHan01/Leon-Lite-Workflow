@@ -47,7 +47,12 @@ const server = http.createServer(async (req, res) => {
             return reply({...credential,value});
         }
         if (route === '/test-node') { lastTest = data; if (testFailure) return reply(testFailure,400);
-            if (data.node.type==='github-trending') return reply({output:{items:[{json:{count:2,title:'GitHub Trending 项目解读',feishuText:'sample/one：开发工具。\nsample/two：资料不足。',emailSubject:'GitHub Trending 项目解读',emailBody:'项目用途：sample/one 提供开发工具。\nsample/two 资料不足。',emailHtml:'<p>项目用途：开发工具</p>'}}]},logs:'已抓取 GitHub Trending 并生成消息正文',durationMs:22,branch:''}); return reply({ output: ['feishu', 'email'].includes(data.node.type) ? data.input : { items: [{ json: { name: 'LEON' } }] }, logs: data.node.type === 'feishu' ? '飞书消息已发送' : data.node.type === 'email' ? '邮件已提交至 SMTP 服务器' : '调试完成', durationMs: 22, branch: '' }); }
+            if (data.node.type==='github-trending') {
+                const sourceUrl=data.node.config.sourceUrl||'https://github.com/trending';
+                const period=sourceUrl.includes('weekly')?'weekly':sourceUrl.includes('monthly')?'monthly':'daily';
+                const periodLabel={daily:'日榜',weekly:'周榜',monthly:'月榜'}[period];
+                return reply({output:{items:[{json:{count:2,sourceUrl,period,periodLabel,title:'GitHub Trending '+periodLabel+'项目解读',feishuText:periodLabel+' sample/one：开发工具。\nsample/two：资料不足。',emailSubject:'GitHub Trending '+periodLabel+'项目解读',emailBody:'项目用途：sample/one 提供开发工具。\nsample/two 资料不足。',emailHtml:'<p>项目用途：开发工具</p>'}}]},logs:'已抓取 GitHub Trending 并生成消息正文',durationMs:22,branch:''});
+            } return reply({ output: ['feishu', 'email'].includes(data.node.type) ? data.input : { items: [{ json: { name: 'LEON' } }] }, logs: data.node.type === 'feishu' ? '飞书消息已发送' : data.node.type === 'email' ? '邮件已提交至 SMTP 服务器' : '调试完成', durationMs: 22, branch: '' }); }
         if (!route) {
             if (req.method === 'POST') workflow = { id: 'workflow-1', name: data.name, definition: initial(), revision: 1, publishedVersion: 0 };
             return reply(req.method === 'POST' ? workflow : workflow ? [workflow] : []);
@@ -149,14 +154,25 @@ const server = http.createServer(async (req, res) => {
         await page.locator('[data-node="start"]').click();
         await page.locator('[data-add="github-trending"]').click();
         assert.equal(await page.getByRole('textbox',{name:'Trending 榜单地址',exact:true}).inputValue(),'https://github.com/trending');
+        const paletteIcon=page.locator('[data-add="github-trending"] .wf-github-trending img');
+        await paletteIcon.evaluate(img=>img.decode());
+        assert.equal(await paletteIcon.evaluate(img=>img.naturalWidth),200);
+        assert.equal(await page.locator('.wf-node.is-selected .wf-github-trending img').getAttribute('src'),'/workspace/icons/github.png');
+        await page.getByRole('combobox',{name:'榜单周期',exact:true}).selectOption('https://github.com/trending?since=weekly');
+        assert.equal(await page.getByRole('textbox',{name:'Trending 榜单地址',exact:true}).inputValue(),'https://github.com/trending?since=weekly');
         await page.locator('[data-field="maxProjects"]').fill('10');
         await page.locator('[data-field="timeoutMs"]').fill('120000');
         await savePaletteGraph();
         const trending = workflow.definition.nodes.find(n=>n.type==='github-trending');
-        assert.deepEqual(trending.config,{sourceUrl:'https://github.com/trending',maxProjects:10,timeoutMs:120000});
+        assert.deepEqual(trending.config,{sourceUrl:'https://github.com/trending?since=weekly',maxProjects:10,timeoutMs:120000});
         await page.locator(`[data-node="${trending.id}"] .wf-node-head`).dblclick();
+        assert.equal(await page.getByRole('combobox',{name:'榜单周期',exact:true}).inputValue(),'https://github.com/trending?since=weekly');
+        await page.getByRole('combobox',{name:'榜单周期',exact:true}).selectOption('https://github.com/trending?since=monthly');
+        assert.equal(await page.getByRole('textbox',{name:'Trending 榜单地址',exact:true}).inputValue(),'https://github.com/trending?since=monthly');
         await page.getByRole('button',{name:'生成 Trending 分析',exact:true}).click();
         await page.locator('[data-node-dialog] [data-node-debug]').getByRole('heading',{name:'飞书消息预览',exact:true}).waitFor();
+        assert.equal(lastTest.node.config.sourceUrl,'https://github.com/trending?since=monthly');
+        assert.ok((await page.locator('[data-node-dialog] [data-node-debug]').textContent()).includes('月榜'));
         await page.waitForFunction(()=>{
             const preview=document.querySelector('[data-node-dialog] [data-node-debug] h3')?.getBoundingClientRect();
             const header=document.querySelector('[data-node-dialog] > .wf-dialog-head').getBoundingClientRect();
@@ -166,7 +182,9 @@ const server = http.createServer(async (req, res) => {
         assert.ok((await page.locator('[data-node-dialog] [data-node-debug]').textContent()).includes('项目用途：sample/one 提供开发工具'));
         assert.equal(await page.getByRole('textbox',{name:'邮件正文（纯文本）引用',exact:true}).inputValue(),'{{ input.items[0].json.emailBody }}');
         await page.screenshot({path:'/private/tmp/leon-trending-analysis-node.png',fullPage:false});
-        await page.getByRole('button',{name:'返回画布',exact:true}).click();
+        await page.getByRole('button',{name:'保存设置',exact:true}).click();
+        await page.waitForSelector('[data-node-dialog][open]',{state:'hidden'});
+        assert.equal(workflow.definition.nodes.find(n=>n.id===trending.id).config.sourceUrl,'https://github.com/trending?since=monthly');
         await page.getByRole('button',{name:'删除节点',exact:true}).click();
         await page.locator('[data-add="feishu"]').click();
         await page.locator('[data-action="feishu-credentials"]').click();

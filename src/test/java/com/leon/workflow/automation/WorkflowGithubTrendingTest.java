@@ -41,6 +41,7 @@ class WorkflowGithubTrendingTest {
         var result = trending.execute(Map.of(), privacy);
         var output = object(object(((List<?>)result.get("items")).getFirst()).get("json"));
         assertEquals(2, output.get("count")); assertEquals(2, output.get("totalProjects"));
+        assertEquals("daily", output.get("period")); assertEquals("日榜", output.get("periodLabel"));
         assertTrue(text(output.get("feishuText")).contains("sample/one"));
         assertTrue(text(output.get("emailBody")).contains("为开发者提供工具"));
         assertTrue(text(output.get("emailHtml")).contains("https://github.com/sample/two"));
@@ -58,6 +59,26 @@ class WorkflowGithubTrendingTest {
         assertFalse(messages.contains("<article")); assertFalse(messages.contains("ignore-this-script"));
         assertFalse(messages.contains("test-private-trending-key")); assertFalse(write(result).contains("test-private-trending-key"));
         assertEquals("[已隐藏]", privacy.message("test-private-trending-key"));
+    }
+    @Test void weeklyAndMonthlyPeriodsReachTheFetcherModelAndEveryPreparedMessage() throws Exception {
+        when(http.executeResolved(anyMap(), any())).thenReturn(response(HTML));
+        when(http.executeResolved(anyMap(), any(), eq(240000))).thenReturn(completion(write(analysis()), "stop"));
+        for (String period : List.of("weekly", "monthly")) {
+            clearInvocations(http);
+            String source = "https://github.com/trending?since=" + period, label = "weekly".equals(period) ? "周榜" : "月榜";
+            List<String> logs = new ArrayList<>();
+            var result = trending.execute(Map.of("sourceUrl", source), new WorkflowPrivacy(), logs::add);
+            var output = object(object(((List<?>)result.get("items")).getFirst()).get("json"));
+            assertEquals(source, output.get("sourceUrl")); assertEquals(period, output.get("period")); assertEquals(label, output.get("periodLabel"));
+            for (String field : List.of("title", "feishuText", "emailSubject", "emailBody", "emailHtml")) assertTrue(text(output.get(field)).contains(label), field);
+            for (String field : List.of("feishuText", "emailBody", "emailHtml")) assertTrue(text(output.get(field)).contains(source), field);
+            var fetch = org.mockito.ArgumentCaptor.forClass(Map.class); verify(http).executeResolved(fetch.capture(), any());
+            assertEquals(source, fetch.getValue().get("url"));
+            var post = org.mockito.ArgumentCaptor.forClass(Map.class); verify(http).executeResolved(post.capture(), any(), eq(240000));
+            String messages = write(object(post.getValue().get("body")).get("messages"));
+            assertTrue(messages.contains(source)); assertTrue(messages.contains(label));
+            assertTrue(String.join("\n", logs).contains("周期=" + label));
+        }
     }
     @Test void parsesGithubMarkupAndKeepsTheRealTotalWhenLimitingAnalysis() {
         var page = WorkflowGithubTrending.parsePage(HTML, 1);
@@ -103,7 +124,7 @@ class WorkflowGithubTrendingTest {
         assertFalse(text(output.get("feishuText")).contains("<at"));
     }
     @Test void configValidationKeepsSecretsAndArbitraryUrlsOutOfNodes() {
-        for (var config : List.<Map<String, Object>>of(Map.of("sourceUrl", "http://127.0.0.1"), Map.of("apiKey", "inline"), Map.of("maxProjects", 0), Map.of("maxProjects", 26), Map.of("timeoutMs", 240001)))
+        for (var config : List.<Map<String, Object>>of(Map.of("sourceUrl", "http://127.0.0.1"), Map.of("sourceUrl", "https://github.com/trending?since=yearly"), Map.of("sourceUrl", "https://github.com/trending?since=weekly&redirect=http://127.0.0.1"), Map.of("apiKey", "inline"), Map.of("maxProjects", 0), Map.of("maxProjects", 26), Map.of("timeoutMs", 240001)))
             assertThrows(IllegalArgumentException.class, () -> WorkflowGraph.validateNode(new WorkflowGraph.Node("trending", "github-trending", "趋势分析", config, Map.of())));
         assertDoesNotThrow(() -> WorkflowGraph.validateNode(new WorkflowGraph.Node("trending", "github-trending", "趋势分析", Map.of(), Map.of())));
     }

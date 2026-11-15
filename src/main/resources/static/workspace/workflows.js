@@ -5,6 +5,8 @@ const templates = {
 };
 const labels = { start: '开始', end: '结束', http: 'HTTP 请求', script: '脚本', if: '条件判断', feishu: '飞书消息', email: '发送邮件', 'github-trending': 'GitHub Trending 分析' };
 const feishuIcon = '<img src="/workspace/icons/feishu.png" alt="" aria-hidden="true">';
+const githubIcon = '<img src="/workspace/icons/github.png" alt="" aria-hidden="true">';
+const trendingSources = [['https://github.com/trending', '日榜'], ['https://github.com/trending?since=weekly', '周榜'], ['https://github.com/trending?since=monthly', '月榜']];
 const statuses = { QUEUED: '排队中', PENDING: '等待', RUNNING: '运行中', SUCCEEDED: '成功', FAILED: '失败', CANCELLED: '已取消', SKIPPED: '已跳过' };
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const pretty = value => JSON.stringify(value, null, 2);
@@ -109,6 +111,7 @@ export function mount(pane, workspace) {
             for (const key of ['credentialId', 'to', 'cc', 'bcc', 'subject', 'body', 'format']) node.config[key] = get(key);
             node.config.timeoutMs = Number(get('timeoutMs'));
         } else if (node.type === 'github-trending') {
+            node.config.sourceUrl = get('sourceUrl');
             node.config.maxProjects = Number(get('maxProjects')); node.config.timeoutMs = Number(get('timeoutMs'));
         }
     }
@@ -163,7 +166,7 @@ export function mount(pane, workspace) {
     function nodeStyle(node) {
         const requested = node.type === 'script' ? (node.config?.language === 'groovy' ? 'groovy' : 'script') : node.type;
         const kind = ['start', 'end', 'http', 'script', 'groovy', 'if', 'feishu', 'email', 'github-trending'].includes(requested) ? requested : 'script';
-        return { kind, icon: ({ start: '▶', end: '■', http: '↗', script: 'JS', groovy: 'G', if: '⑂', feishu: feishuIcon, email: '✉', 'github-trending': 'GH' })[kind], label: node.type === 'script' ? (node.config.language === 'groovy' ? 'Groovy' : 'JavaScript') : labels[node.type] };
+        return { kind, icon: ({ start: '▶', end: '■', http: '↗', script: 'JS', groovy: 'G', if: '⑂', feishu: feishuIcon, email: '✉', 'github-trending': githubIcon })[kind], label: node.type === 'script' ? (node.config.language === 'groovy' ? 'Groovy' : 'JavaScript') : labels[node.type] };
     }
     function renderCanvas() {
         if (!graph) return;
@@ -310,7 +313,8 @@ export function mount(pane, workspace) {
             content += '<p class="wf-help">例如：左侧 {{ input.items[0].json.amount }}，条件“大于或等于”，右侧 100。</p>';
         }
         if (node.type === 'github-trending') {
-            content += field('榜单地址', '<input value="https://github.com/trending" readonly aria-label="Trending 榜单地址">');
+            content += field('榜单周期', select('sourceUrl', c.sourceUrl || trendingSources[0][0], trendingSources));
+            content += field('榜单地址', `<input value="${esc(c.sourceUrl || trendingSources[0][0])}" readonly data-trending-url aria-label="Trending 榜单地址">`);
             content += field('最多分析项目数（1–25）', inputField('maxProjects', c.maxProjects ?? 25, 'type="number" min="1" max="25" step="1"'));
             content += field('总超时（毫秒，1000–240000）', inputField('timeoutMs', c.timeoutMs || 180000, 'type="number" min="1000" max="240000" step="1000"'));
             content += '<p class="wf-help">服务器抓取榜单，再由 DeepSeek 逐个分析项目用途和使用场景。复用高级设置中的 DeepSeek API Key；此节点只生成内容。</p>';
@@ -685,6 +689,7 @@ export function mount(pane, workspace) {
         if (target.matches('[data-credential-form] [name="kind"]')) credentialFields();
         if (target.matches('[data-credential-form] [name="smtpSecurity"]')) $('[data-credential-form]').elements.smtpPort.value = target.value === 'ssl' ? '465' : '587';
         if (target.matches('[data-field="credentialId"]')) $('[data-action="edit-node-credential"]').disabled = !target.value;
+        if (target.matches('[data-field="sourceUrl"]')) $('[data-trending-url]').value = target.value;
         try {
             if (target.matches('[data-field="messageType"]')) { commitInspector(); $('[data-feishu-title]').hidden = target.value !== 'card'; }
             if (target.matches('[data-edge-field="source"]')) {
