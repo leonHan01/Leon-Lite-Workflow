@@ -70,8 +70,8 @@ class WorkflowGithubTrendingTest {
             var result = trending.execute(Map.of("sourceUrl", source), new WorkflowPrivacy(), logs::add);
             var output = object(object(((List<?>)result.get("items")).getFirst()).get("json"));
             assertEquals(source, output.get("sourceUrl")); assertEquals(period, output.get("period")); assertEquals(label, output.get("periodLabel"));
-            for (String field : List.of("title", "feishuText", "emailSubject", "emailBody", "emailHtml")) assertTrue(text(output.get(field)).contains(label), field);
-            for (String field : List.of("feishuText", "emailBody", "emailHtml")) assertTrue(text(output.get(field)).contains(source), field);
+            for (String field : List.of("title", "feishuText", "feishuMarkdown", "emailSubject", "emailBody", "emailHtml")) assertTrue(text(output.get(field)).contains(label), field);
+            for (String field : List.of("feishuText", "feishuMarkdown", "emailBody", "emailHtml")) assertTrue(text(output.get(field)).contains(source), field);
             var fetch = org.mockito.ArgumentCaptor.forClass(Map.class); verify(http).executeResolved(fetch.capture(), any());
             assertEquals(source, fetch.getValue().get("url"));
             var post = org.mockito.ArgumentCaptor.forClass(Map.class); verify(http).executeResolved(post.capture(), any(), eq(240000));
@@ -122,6 +122,29 @@ class WorkflowGithubTrendingTest {
         assertTrue(text(output.get("emailBody")).contains(purpose));
         assertFalse(text(output.get("emailHtml")).contains("<img")); assertTrue(text(output.get("emailHtml")).contains("&lt;img"));
         assertFalse(text(output.get("feishuText")).contains("<at"));
+        String markdown = text(output.get("feishuMarkdown"));
+        var card = Map.of("schema", "2.0", "header", Map.of("title", Map.of("tag", "plain_text", "content", output.get("title")), "template", "blue"),
+                "config", Map.of("update_multi", true), "body", Map.of("elements", List.of(Map.of("tag", "markdown", "content", markdown))));
+        int cardBytes = write(Map.of("msg_type", "interactive", "card", card, "timestamp", "1800000000", "sign", "s".repeat(44))).getBytes(StandardCharsets.UTF_8).length;
+        assertTrue(cardBytes < 20 * 1024, "带样式的签名卡片超过消息限制: " + cardBytes);
+        for (var project : source) assertTrue(markdown.contains(text(project.get("url"))), "卡片应保留全部项目链接");
+        assertFalse(markdown.contains("<at")); assertFalse(markdown.contains("<img"));
+    }
+    @Test void cardMarkdownStylesTrustedLabelsAndEscapesModelFormatting() {
+        var analysis = new LinkedHashMap<>(analysis());
+        analysis.put("summary", "概览 **伪造** [外链](https://example.invalid) <at id=all></at>");
+        var output = object(object(((List<?>)WorkflowGithubTrending.report(analysis, WorkflowGithubTrending.parsePage(HTML, 2)).get("items")).getFirst()).get("json"));
+        String markdown = text(output.get("feishuMarkdown"));
+        assertTrue(markdown.contains("<text_tag color='blue'>日榜</text_tag>"));
+        assertTrue(markdown.contains("<text_tag color='green'>分析 2 / 2 个项目</text_tag>"));
+        assertTrue(markdown.contains("**榜单概览**"));
+        assertTrue(markdown.contains("**1. [sample/one](https://github.com/sample/one)**"));
+        assertTrue(markdown.contains("**用途：** 为开发者提供工具和辅助功能"));
+        assertTrue(markdown.contains("**适用场景：** 开发工作流"));
+        assertTrue(markdown.contains("\\*\\*伪造\\*\\*"));
+        assertFalse(markdown.contains("[外链](https://example.invalid)"));
+        assertFalse(markdown.contains("<at"));
+        assertFalse(text(output.get("feishuText")).contains("<text_tag"), "原有纯文本输出应保持兼容");
     }
     @Test void configValidationKeepsSecretsAndArbitraryUrlsOutOfNodes() {
         for (var config : List.<Map<String, Object>>of(Map.of("sourceUrl", "http://127.0.0.1"), Map.of("sourceUrl", "https://github.com/trending?since=yearly"), Map.of("sourceUrl", "https://github.com/trending?since=weekly&redirect=http://127.0.0.1"), Map.of("apiKey", "inline"), Map.of("maxProjects", 0), Map.of("maxProjects", 26), Map.of("timeoutMs", 240001)))
@@ -148,7 +171,7 @@ class WorkflowGithubTrendingTest {
             var graph = new WorkflowGraph(List.of(
                     new WorkflowGraph.Node("start", "start", "开始", Map.of(), Map.of()),
                     new WorkflowGraph.Node("trending", "github-trending", "项目分析", Map.of(), Map.of()),
-                    new WorkflowGraph.Node("feishu", "feishu", "飞书", Map.of("credentialId", "test-bot", "text", "{{ input.items[0].json.feishuText }}"), Map.of()),
+                    new WorkflowGraph.Node("feishu", "feishu", "飞书", Map.of("credentialId", "test-bot", "messageType", "card", "title", "{{ input.items[0].json.title }}", "text", "{{ input.items[0].json.feishuMarkdown }}"), Map.of()),
                     new WorkflowGraph.Node("email", "email", "邮件", Map.of("credentialId", "test-mail", "to", "recipient@example.com", "subject", "{{ input.items[0].json.emailSubject }}", "body", "{{ input.items[0].json.emailBody }}"), Map.of()),
                     new WorkflowGraph.Node("end", "end", "结束", Map.of(), Map.of())),
                     List.of(new WorkflowGraph.Edge("a", "start", "trending", ""), new WorkflowGraph.Edge("b", "trending", "feishu", ""), new WorkflowGraph.Edge("c", "trending", "email", ""), new WorkflowGraph.Edge("d", "feishu", "end", ""), new WorkflowGraph.Edge("e", "email", "end", "")));
@@ -159,6 +182,7 @@ class WorkflowGithubTrendingTest {
             for (int i = 0; i < 100 && Set.of("QUEUED", "RUNNING").contains(text(run.get("status"))); i++) { Thread.sleep(20); run = store.run(runId); }
             assertEquals("SUCCEEDED", run.get("status"), text(run.get("error")));
             assertTrue(feishuText.get().contains("为开发者提供工具")); assertTrue(emailBody.get().contains("sample/two"));
+            assertTrue(feishuText.get().contains("**用途：**"));
             assertTrue(write(store.get(id)).contains("{{ input.items[0].json.emailBody }}"));
             assertFalse(write(run).contains("test-private-trending-key"));
             verify(feishu).execute(anyMap(), anyMap(), anyMap(), any()); verify(email).execute(anyMap(), anyMap(), anyMap(), any());

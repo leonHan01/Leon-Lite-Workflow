@@ -136,6 +136,20 @@ const server = http.createServer(async (req, res) => {
         assert.equal(await page.locator('[data-node="start"] .wf-port-in').count(), 0);
         assert.equal(await page.locator('[data-node="end"] .wf-port-out').count(), 0);
         assert.equal(await page.locator('[data-action="delete-node"]').count(), 0);
+        await page.locator('[data-node="start"]').click();
+        const initialWidth = await page.locator('[data-node="start"]').evaluate(e => e.offsetWidth);
+        const longName = '这是一个需要完整显示的很长的工作流节点名称';
+        await page.locator('[data-inspector] [data-field="name"]').fill(longName);
+        const sizing = await page.locator('[data-node="start"]').evaluate(node => {
+            const title = node.querySelector('.wf-node-name');
+            const edge = document.querySelector('[data-edge] .wf-edge').getAttribute('d');
+            return { width: node.offsetWidth, titleWidth: title.clientWidth, titleScrollWidth: title.scrollWidth, edgeStart: Number(edge.match(/^M([\d.]+)/)[1]), right: node.offsetLeft + node.offsetWidth };
+        });
+        assert.ok(sizing.width > initialWidth, '长名称应撑开节点');
+        assert.equal(sizing.titleWidth, sizing.titleScrollWidth, '节点名称应完整显示');
+        assert.equal(sizing.edgeStart, sizing.right, '调整名称后连线应紧贴节点出口');
+        await page.locator('[data-inspector] [data-field="name"]').fill('开始');
+        assert.equal(await page.locator('[data-node="start"]').evaluate(e => e.offsetWidth), initialWidth, '缩短名称后节点应收窄');
         const savePaletteGraph = async () => {
             await page.getByRole('button', {name:'保存草稿',exact:true}).click();
             await page.waitForFunction(() => document.querySelector('[data-version]').textContent.includes('草稿已保存'));
@@ -154,7 +168,7 @@ const server = http.createServer(async (req, res) => {
             assert.equal(await page.locator('[data-node]').count(),2,'松开前创建了节点');
             assert.equal(await page.locator('.wf-library-preview.is-valid').count(),1,'拖动节点没有有效落点预览');
             const expected = await page.locator('.wf-canvas-scroll').evaluate((e,{drop,scale}) => {
-                const r=e.getBoundingClientRect(); return {x:(drop.x-r.left+e.scrollLeft)/scale-104,y:(drop.y-r.top+e.scrollTop)/scale-50};
+                const r=e.getBoundingClientRect(); return {x:(drop.x-r.left+e.scrollLeft)/scale-document.querySelector('.wf-library-preview').offsetWidth/2,y:(drop.y-r.top+e.scrollTop)/scale-50};
             },{drop,scale});
             if (kind==='feishu') await page.screenshot({path:'/private/tmp/leon-workflow-library-drag.png',fullPage:false});
             await page.mouse.up(); await savePaletteGraph();
@@ -245,8 +259,10 @@ const server = http.createServer(async (req, res) => {
         await page.locator('[data-close="credentials"]').click();
         assert.equal(await page.locator('[data-field="credentialId"]').inputValue(), 'credential-1');
         await page.getByRole('button',{name:'使用 Trending 分析结果',exact:true}).click();
-        assert.equal(await page.locator('[data-field="text"]').inputValue(),'{{ input.items[0].json.feishuText }}');
-        assert.equal(await page.locator('[data-feishu-title]').isVisible(), false);
+        assert.equal(await page.locator('[data-field="text"]').inputValue(),'{{ input.items[0].json.feishuMarkdown }}');
+        assert.equal(await page.locator('[data-field="messageType"]').inputValue(),'card');
+        assert.equal(await page.locator('[data-field="title"]').inputValue(),'{{ input.items[0].json.title }}');
+        assert.equal(await page.locator('[data-feishu-title]').isVisible(), true);
         const message = '通知：{{ input.items[0].json.name }}';
         await page.getByRole('textbox', {name:'飞书消息内容',exact:true}).fill(message);
         await page.locator('[data-field="messageType"]').selectOption('card');
@@ -577,6 +593,23 @@ const server = http.createServer(async (req, res) => {
         assert.equal(await page.locator('[data-node="start"]').evaluate(node => getComputedStyle(node.querySelector('.wf-icon'),'::after').animationName),'none');
         assert.ok((await page.locator('[data-run-detail]').textContent()).includes('250'));
         assert.equal(await page.locator('[data-node="rejected"]').getAttribute('class').then(c => c.includes('status-SKIPPED')), true);
+        await page.getByRole('button',{name:'← 返回列表',exact:true}).click();
+        await page.locator('[data-workflow-row="workflow-1"]').waitFor();
+        await page.getByRole('searchbox',{name:'搜索工作流'}).fill('不存在');
+        assert.equal(await page.locator('[data-workflow-row]').count(),0);
+        await page.getByRole('searchbox',{name:'搜索工作流'}).fill('双语言');
+        assert.equal(await page.locator('[data-workflow-row]').count(),1);
+        await page.getByRole('button',{name:'运行 双语言演示 <安全>'}).click();
+        await page.getByRole('textbox',{name:'列表运行输入 JSON'}).fill('{"items":[{"json":{"name":"test"}}]}');
+        await page.getByRole('button',{name:'开始运行',exact:true}).click();
+        await page.locator('[data-workflow-row="workflow-1"] .wf-list-progress').filter({hasText:'运行中'}).waitFor();
+        assert.equal(await page.getByRole('button',{name:'运行 双语言演示 <安全>'}).isDisabled(),true);
+        await page.locator('[data-workflow-row="workflow-1"] .wf-list-progress').filter({hasText:'成功'}).waitFor();
+        assert.ok((await page.locator('[data-workflow-row="workflow-1"] .wf-list-progress').textContent()).includes('节点'));
+        runs.splice(1,1); // The mock reuses run-1; keep one record for subsequent checks.
+        await page.getByRole('searchbox',{name:'搜索工作流'}).fill('');
+        await page.getByRole('link',{name:'编辑 双语言演示 <安全>'}).click();
+        await page.locator('[data-editor]:not([hidden])').waitFor();
         await page.locator('[data-node="calculate"]').click();
         await page.locator('[data-node="calculate"] .wf-node-head').dblclick();
         await page.locator('[data-field="params"]').fill('{');

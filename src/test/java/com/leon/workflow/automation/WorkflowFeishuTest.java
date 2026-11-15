@@ -77,6 +77,21 @@ class WorkflowFeishuTest {
         assertTrue(error.getMessage().contains("input.items[0].json.name"));
         verifyNoInteractions(http);
     }
+    @Test void trendingMarkdownBecomesASignedStyledCard() throws Exception {
+        var config = config(credential(SECRET));
+        config.put("messageType", "card"); config.put("title", "{{ input.items[0].json.title }}"); config.put("text", "{{ input.items[0].json.feishuMarkdown }}");
+        var report = WorkflowGithubTrending.report(Map.of("summary", "开发工具概览", "projects", List.of(Map.of("repo", "sample/tool", "purpose", "提升开发效率", "useCases", "日常开发"))),
+                new WorkflowGithubTrending.Page(1, List.of(Map.of("repo", "sample/tool", "url", "https://github.com/sample/tool"))));
+        when(http.executeResolved(anyMap(), any())).thenReturn(response(Map.of("code", 0)));
+        assertEquals(report, feishu.execute(config, report, Map.of(), new WorkflowPrivacy()));
+        var payload = object(sent().get("body")); var card = object(payload.get("card"));
+        assertEquals("interactive", payload.get("msg_type"));
+        assertEquals("blue", object(card.get("header")).get("template"));
+        var markdown = object(((List<?>)object(card.get("body")).get("elements")).getFirst());
+        assertTrue(text(markdown.get("content")).contains("**用途：** 提升开发效率"));
+        assertTrue(text(markdown.get("content")).contains("<text_tag color='blue'>日榜</text_tag>"));
+        assertFalse(text(payload.get("sign")).isBlank());
+    }
     @Test void cardMessagesUseSigningAndResolveTemplatesOnlyOnce() throws Exception {
         String id = credential(SECRET); var config = config(id);
         config.put("messageType", "card"); config.put("title", "通知：{{ input.items[0].json.name }}"); config.put("text", "{{ input.items[0].json.literal }}");

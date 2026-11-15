@@ -168,7 +168,38 @@ public class WorkflowGithubTrending {
         output.put("sourceReadBy", "服务器抓取 + DeepSeek 分析"); output.put("generatedAt", Instant.now().toString());
         output.put("totalProjects", total); output.put("count", projects.size()); output.put("projects", projects); output.put("summary", summary); output.put("title", title);
         output.put("feishuText", feishu.toString()); output.put("emailSubject", title); output.put("emailBody", email.toString()); output.put("emailHtml", html.toString());
+        output.put("feishuMarkdown", feishuMarkdown(source, summary, projects, total));
         return envelope(Map.of("items", List.of(Map.of("json", output))));
+    }
+    private static String feishuMarkdown(String source, String summary, List<Map<String, Object>> projects, int total) {
+        StringBuilder card = new StringBuilder("<text_tag color='blue'>" + periodLabel(source) + "</text_tag>  <text_tag color='green'>分析 "
+                + projects.size() + " / " + total + " 个项目</text_tag>\n[查看 GitHub Trending 榜单](" + source + ")\n\n**榜单概览**\n" + markdown(summary, 900));
+        // Budget the JSON-encoded content, including formatting and links; leave room for the card envelope and signature.
+        int perProject = (18_000 - bytes(card.toString())) / projects.size();
+        for (int i = 0; i < projects.size(); i++) {
+            var project = projects.get(i);
+            String prefix = "\n\n---\n\n**" + (i + 1) + ". [" + markdown(text(project.get("repo")), 1000) + "](" + project.get("url") + ")**\n";
+            String purposeLabel = "**用途：** ", casesLabel = "\n**适用场景：** ";
+            int available = Math.max(0, perProject - bytes(prefix + purposeLabel + casesLabel));
+            int purposeBudget = available * 2 / 3;
+            card.append(prefix).append(purposeLabel).append(markdown(text(project.get("purpose")), purposeBudget))
+                    .append(casesLabel).append(markdown(text(project.get("useCases")), available - purposeBudget));
+        }
+        return card.toString();
+    }
+    private static String markdown(String value, int maxBytes) {
+        if (maxBytes < 3) return "";
+        StringBuilder safe = new StringBuilder(); int used = 0;
+        String plain = feishuSafe(value);
+        for (int offset = 0; offset < plain.length();) {
+            int cp = plain.codePointAt(offset);
+            String unit = new String(Character.toChars(cp));
+            if ("\\`*_{}[]()#+-.!|~".contains(unit)) unit = "\\" + unit;
+            int size = bytes(unit);
+            if (used + size > maxBytes - 3) { safe.append("…"); break; }
+            safe.append(unit); used += size; offset += Character.charCount(cp);
+        }
+        return safe.toString();
     }
     private static String html(String value) { return HtmlUtils.htmlEscape(value).replace("\n", "<br>"); }
     private static String feishuSafe(String value) { return value.replace("<", "＜").replace(">", "＞"); }

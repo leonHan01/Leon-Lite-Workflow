@@ -30,7 +30,8 @@ export function mount(pane, workspace) {
     const inspectorContent = $('[data-inspector]');
     const inspectorPanel = $('.wf-layout > .wf-inspector');
     let workflows = [], workflow = null, graph = null, selected = null, selectedEdge = null, connecting = null;
-    let editorVisible = false;
+    let editorVisible = false, listRunTimer = null, listRunTarget = null;
+    const listRuns = new Map();
     const MAX_POSITION = 50000;
     let zoom = 1, world = { width: 2400, height: 1600 }, focused = false, focusPanels = null;
     let dirty = false, busy = false, active = false, initialized = false, timer = null, currentRun = null, capabilities = {}, credentials = [], schedule = null;
@@ -69,6 +70,7 @@ export function mount(pane, workspace) {
     function controls() {
         pane.querySelectorAll('[data-action="save"],[data-action="save-node"],[data-action="publish"],[data-action="create"],[data-action="reload"],[data-action="delete-workflow"],[data-action="test"]').forEach(b => b.disabled = busy || (!workflow && !['create', 'reload'].includes(b.dataset.action)));
         pane.querySelectorAll('[data-delete-workflow]').forEach(b => b.disabled = busy);
+        pane.querySelectorAll('[data-list-run]').forEach(b => { const item = workflows.find(w => w.id === b.dataset.listRun), run = listRuns.get(b.dataset.listRun); b.disabled = busy || !item?.publishedVersion || ['QUEUED','RUNNING'].includes(run?.status); });
         const run = $('[data-action="run"]');
         run.disabled = busy || !workflow?.publishedVersion;
         run.textContent = workflow?.publishedVersion ? `▶ 运行 v${workflow.publishedVersion}` : '先发布后运行';
@@ -76,13 +78,19 @@ export function mount(pane, workspace) {
     }
     function markDirty() { dirty = true; controls(); }
     function renderWorkflowList() {
-        $('[data-workflow-count]').textContent = `共 ${workflows.length} 个`;
-        $('[data-workflow-rows]').innerHTML = workflows.length ? `<table class="wf-list-table"><thead><tr><th>工作流名称</th><th>发布状态</th><th>更新时间</th><th>操作</th></tr></thead><tbody>${workflows.map(w => {
+        const query = $('[data-workflow-search]').value.trim().toLocaleLowerCase();
+        const visible = workflows.filter(w => (w.id === workflow?.id && dirty ? $('[data-name]').value : w.name).toLocaleLowerCase().includes(query));
+        $('[data-workflow-count]').textContent = query ? `匹配 ${visible.length} / ${workflows.length} 个` : `共 ${workflows.length} 个`;
+        $('[data-workflow-rows]').innerHTML = workflows.length ? `<table class="wf-list-table"><thead><tr><th>工作流名称</th><th>发布状态</th><th>运行状态</th><th>操作</th></tr></thead><tbody>${visible.map(w => {
             const unsaved = w.id === workflow?.id && dirty;
             const name = unsaved ? $('[data-name]').value : w.name;
             const href = '/workflows.html?id=' + encodeURIComponent(w.id);
-            return `<tr data-workflow-row="${esc(w.id)}"><td><a class="wf-list-name" href="${esc(href)}">${esc(name)}</a>${unsaved ? '<small class="wf-list-unsaved">有未保存修改</small>' : ''}</td><td><span class="wf-list-state ${w.publishedVersion ? 'is-published' : ''}">${w.publishedVersion ? '已发布 v' + esc(w.publishedVersion) : '未发布'}</span></td><td class="wf-list-date">${esc(date(w.updatedAt))}</td><td><div class="wf-list-actions"><a href="${esc(href)}" aria-label="编辑 ${esc(name)}">编辑</a><button type="button" class="wf-danger" data-delete-workflow="${esc(w.id)}" ${busy ? 'disabled' : ''} aria-label="删除 ${esc(name)}">删除</button></div></td></tr>`;
-        }).join('')}</tbody></table>` : '<div class="wf-list-empty"><strong>还没有工作流</strong><p>点击上方“新建工作流”，开始编排你的第一个流程。</p></div>';
+            const run = listRuns.get(w.id), nodes = run?.nodes || [], completed = nodes.filter(n => ['SUCCEEDED','FAILED','SKIPPED','CANCELLED'].includes(n.status)).length;
+            const runningNames = nodes.filter(n => n.status === 'RUNNING').map(n => n.name).filter(Boolean).join('、');
+            const progress = run ? `${statuses[run.status] || run.status}${nodes.length ? ` · ${completed}/${nodes.length} 节点` : ''}${runningNames ? ` · 正在执行 ${runningNames}` : ''}` : '暂无运行记录';
+            const running = run && ['QUEUED','RUNNING'].includes(run.status);
+            return `<tr data-workflow-row="${esc(w.id)}"><td><a class="wf-list-name" href="${esc(href)}">${esc(name)}</a>${unsaved ? '<small class="wf-list-unsaved">有未保存修改</small>' : ''}</td><td><span class="wf-list-state ${w.publishedVersion ? 'is-published' : ''}">${w.publishedVersion ? '已发布 v' + esc(w.publishedVersion) : '未发布'}</span></td><td class="wf-list-progress" aria-live="polite">${esc(progress)}${run?.error ? `<small class="wf-list-error">${esc(run.error)}</small>` : ''}</td><td><div class="wf-list-actions"><button type="button" data-list-run="${esc(w.id)}" aria-label="运行 ${esc(name)}" ${!w.publishedVersion || running || busy ? 'disabled' : ''} title="${!w.publishedVersion ? '请先发布工作流' : running ? '工作流正在运行' : '运行已发布版本'}">▶ 运行</button><a href="${esc(href)}" aria-label="编辑 ${esc(name)}">编辑</a><button type="button" class="wf-danger" data-delete-workflow="${esc(w.id)}" ${busy ? 'disabled' : ''} aria-label="删除 ${esc(name)}">删除</button></div></td></tr>`;
+        }).join('')}</tbody></table>${visible.length ? '' : '<div class="wf-list-empty">没有找到匹配的工作流。</div>'}` : '<div class="wf-list-empty"><strong>还没有工作流</strong><p>点击上方“新建工作流”，开始编排你的第一个流程。</p></div>';
     }
     function setEditorVisible(visible) {
         editorVisible = visible;
@@ -91,6 +99,7 @@ export function mount(pane, workspace) {
         pane.querySelectorAll('[data-editor-only]').forEach(el => el.hidden = !visible);
         pane.querySelectorAll('[data-list-only]').forEach(el => el.hidden = visible);
         $('[data-page-title]').textContent = visible ? '工作流编排' : '工作流列表';
+        if (visible) clearTimeout(listRunTimer);
         if (!visible) { closeNodeDialog(false); cancelLibraryDrag?.(); clearTimeout(timer); focus(false); renderWorkflowList(); }
         else requestAnimationFrame(syncWorld);
     }
@@ -104,7 +113,29 @@ export function mount(pane, workspace) {
         await loadList(); setEditorVisible(false);
         workspace.navigate('/workflows.html'); notice('工作流已删除。');
     }
-    async function loadList() { workflows = await api(); renderWorkflowList(); }
+    async function loadList() {
+        workflows = await api(); renderWorkflowList();
+        await Promise.allSettled(workflows.map(async w => {
+            try {
+                const rows = await api('/' + encodeURIComponent(w.id) + '/runs');
+                if (rows.length) listRuns.set(w.id, await api('/runs/' + encodeURIComponent(rows[0].id)));
+                else listRuns.delete(w.id);
+            } catch { listRuns.set(w.id, {status:'状态获取失败'}); }
+        }));
+        renderWorkflowList(); scheduleListPoll();
+    }
+    function scheduleListPoll() {
+        clearTimeout(listRunTimer);
+        if (!active || editorVisible || ![...listRuns.values()].some(r => ['RUNNING','QUEUED'].includes(r.status))) return;
+        listRunTimer = setTimeout(async () => {
+            await Promise.allSettled([...listRuns.entries()].filter(([, r]) => ['RUNNING','QUEUED'].includes(r.status)).map(async ([id, run]) => {
+                try { listRuns.set(id, await api('/runs/' + encodeURIComponent(run.id))); }
+                catch (error) { notice('运行状态刷新失败：' + error.message, true); }
+            }));
+            if (active && !editorVisible) { renderWorkflowList(); scheduleListPoll(); }
+        }, 1200);
+    }
+
     async function load(id, push = false) {
         closeNodeDialog(false);
         clearTimeout(timer); currentRun = null; zoom = 1; world = { width: 2400, height: 1600 };
@@ -223,7 +254,8 @@ export function mount(pane, workspace) {
     function syncWorld() {
         const scroll = $('.wf-canvas-scroll'), canvas = $('.wf-canvas'), stage = $('.wf-canvas-stage');
         for (const node of graph?.nodes || []) {
-            world.width = Math.max(world.width, (Number(node.position?.x) || 60) + 700);
+            const element = pane.querySelector(`[data-node="${CSS.escape(node.id)}"]`);
+            world.width = Math.max(world.width, (Number(node.position?.x) || 60) + (element?.offsetWidth || 140) + 500);
             world.height = Math.max(world.height, (Number(node.position?.y) || 100) + 500);
         }
         const width = Math.max(world.width, scroll.clientWidth / zoom), height = Math.max(world.height, scroll.clientHeight / zoom);
@@ -241,10 +273,13 @@ export function mount(pane, workspace) {
     function fitView() {
         if (!graph?.nodes.length) return;
         const scroll = $('.wf-canvas-scroll');
-        const positions = graph.nodes.map(n => ({ x: Number(n.position?.x) || 60, y: Number(n.position?.y) || 100 }));
+        const positions = graph.nodes.map(n => {
+            const element = pane.querySelector(`[data-node="${CSS.escape(n.id)}"]`);
+            return { x: Number(n.position?.x) || 60, y: Number(n.position?.y) || 100, width: element?.offsetWidth || 140, height: element?.offsetHeight || 100 };
+        });
         const left = Math.min(...positions.map(p => p.x)), top = Math.min(...positions.map(p => p.y));
-        const width = Math.max(...positions.map(p => p.x + 208)) - left, height = Math.max(...positions.map(p => p.y + 130)) - top;
-        setZoom(Math.min((scroll.clientWidth - 80) / Math.max(width, 208), (scroll.clientHeight - 80) / Math.max(height, 130), 1.25));
+        const width = Math.max(...positions.map(p => p.x + p.width)) - left, height = Math.max(...positions.map(p => p.y + p.height)) - top;
+        setZoom(Math.min((scroll.clientWidth - 80) / Math.max(width, 140), (scroll.clientHeight - 80) / Math.max(height, 100), 1.25));
         scroll.scrollLeft = Math.max(0, (left + width / 2) * zoom - scroll.clientWidth / 2);
         scroll.scrollTop = Math.max(0, (top + height / 2) * zoom - scroll.clientHeight / 2);
     }
@@ -270,7 +305,7 @@ export function mount(pane, workspace) {
     function edgePoints(edge) {
         const source = pane.querySelector(`[data-node="${CSS.escape(edge.source)}"]`), target = pane.querySelector(`[data-node="${CSS.escape(edge.target)}"]`);
         if (!source || !target) return null;
-        return { x: source.offsetLeft + 208, y: source.offsetTop + (edge.branch === 'true' ? 64 : edge.branch === 'false' ? 94 : 50), tx: target.offsetLeft, ty: target.offsetTop + 50 };
+        return { x: source.offsetLeft + source.offsetWidth, y: source.offsetTop + (edge.branch === 'true' ? 64 : edge.branch === 'false' ? 94 : 50), tx: target.offsetLeft, ty: target.offsetTop + 50 };
     }
     function curve({ x, y, tx, ty }) {
         const bend = Math.max(60, Math.abs(tx - x) * .5);
@@ -353,7 +388,7 @@ export function mount(pane, workspace) {
             content += '<p class="wf-help">服务器抓取榜单，再由 DeepSeek 逐个分析项目用途和使用场景。复用高级设置中的 DeepSeek API Key；此节点只生成内容。</p>';
             if (capabilities.githubTrendingReady === false) content += '<p class="wf-run-error">请先到高级设置填写 DeepSeek API Key。</p>';
             content += '<div class="wf-trending-output"><h3>后续节点可引用</h3>' + [
-                ['飞书正文', 'feishuText'], ['邮件主题', 'emailSubject'], ['邮件正文（纯文本）', 'emailBody'], ['邮件正文（HTML）', 'emailHtml'],
+                ['飞书正文（Markdown 卡片）', 'feishuMarkdown'], ['飞书正文（纯文本）', 'feishuText'], ['邮件主题', 'emailSubject'], ['邮件正文（纯文本）', 'emailBody'], ['邮件正文（HTML）', 'emailHtml'],
             ].map(([title, key]) => field(title, `<input readonly value="{{ input.items[0].json.${key} }}" aria-label="${title}引用">`)).join('') + '<p class="wf-help">将出口连接到飞书或邮件节点，在后续节点点击“使用 Trending 分析结果”即可填入引用。</p></div>';
         }
         if (node.type === 'feishu') {
@@ -592,8 +627,8 @@ export function mount(pane, workspace) {
     const actions = {
         'use-trending-feishu': () => {
             commitInspector(); const node = graph.nodes.find(n => n.id === selected); if (node?.type !== 'feishu') return;
-            Object.assign(node.config, {messageType:'text', title:'{{ input.items[0].json.title }}', text:'{{ input.items[0].json.feishuText }}'});
-            markDirty(); inspector(); notice('已填入 Trending 飞书正文引用，请将该节点连接到分析节点之后。');
+            Object.assign(node.config, {messageType:'card', title:'{{ input.items[0].json.title }}', text:'{{ input.items[0].json.feishuMarkdown }}'});
+            markDirty(); inspector(); notice('已设置 Trending Markdown 卡片，包含加粗标题、彩色榜单标签和项目链接；请连接到分析节点之后。');
         },
         'use-trending-email': () => {
             commitInspector(); const node = graph.nodes.find(n => n.id === selected); if (node?.type !== 'email') return;
@@ -631,7 +666,7 @@ export function mount(pane, workspace) {
                 if (node.type === 'github-trending') notice('正在抓取 GitHub Trending，并由 DeepSeek 分析项目，请稍候…');
                 const result = await send('/test-node', { node, input: runInput() });
                 const report = node.type === 'github-trending' ? result.output?.items?.[0]?.json : null;
-                const preview = report ? `<h3>飞书消息预览</h3><pre>${esc(report.feishuText)}</pre><h3>邮件主题</h3><p>${esc(report.emailSubject)}</p><h3>邮件正文预览</h3><pre>${esc(report.emailBody)}</pre>` : '';
+                const preview = report ? `<h3>飞书消息预览</h3><pre>${esc(report.feishuMarkdown || report.feishuText)}</pre><h3>邮件主题</h3><p>${esc(report.emailSubject)}</p><h3>邮件正文预览</h3><pre>${esc(report.emailBody)}</pre>` : '';
                 const content = heading + `<p>${result.durationMs} ms</p>${result.branch ? `<p>分支 ${esc(result.branch)}</p>` : ''}${preview}<h3>输出</h3><pre>${esc(pretty(result.output))}</pre><h3>日志</h3><pre>${esc(result.logs || '无日志')}</pre>`;
                 $('[data-run-detail]').innerHTML = content;
                 if (node.id === selected && $('[data-node-debug]')) {
@@ -681,6 +716,7 @@ export function mount(pane, workspace) {
             } else pane.querySelector(`[data-${target.dataset.close}-dialog]`).close();
             return;
         }
+        if (target.dataset.listRun) { listRunTarget = target.dataset.listRun; const item = workflows.find(w => w.id === listRunTarget); if (!item?.publishedVersion) return; $('[data-list-run-name]').textContent = `${item.name} · 已发布 v${item.publishedVersion}`; $('[data-list-run-dialog]').showModal(); return; }
         if (target.dataset.deleteWorkflow) { perform(() => deleteWorkflow(target.dataset.deleteWorkflow)); return; }
         if (target.dataset.action) { perform(actions[target.dataset.action]); return; }
         try {
@@ -703,13 +739,14 @@ export function mount(pane, workspace) {
     });
     pane.addEventListener('input', event => {
         const target = event.target;
+        if (target.matches('[data-workflow-search]')) { renderWorkflowList(); return; }
         if (target.matches('[data-name]')) { markDirty(); return; }
         if (!target.matches('[data-inspector] input,[data-inspector] textarea,[data-inspector] select')) return;
         const node = graph?.nodes.find(n => n.id === selected); if (!node) return;
         if (target.dataset.field === 'source') {
             node.config.source = target.value; node.config.sources ||= {}; node.config.sources[node.config.language] = target.value; highlight();
         }
-        if (target.dataset.field === 'name') { node.name = target.value; const name = pane.querySelector(`[data-node="${CSS.escape(node.id)}"] .wf-node-name`); if (name) name.textContent = target.value; }
+        if (target.dataset.field === 'name') { node.name = target.value; const name = pane.querySelector(`[data-node="${CSS.escape(node.id)}"] .wf-node-name`); if (name) { name.textContent = target.value; syncWorld(); lines(); } }
         markDirty();
     });
     pane.addEventListener('scroll', event => { if (event.target.matches?.('[data-field="source"]')) highlight(); }, true);
@@ -760,7 +797,7 @@ export function mount(pane, workspace) {
             const rect = scroll.getBoundingClientRect();
             if (e.clientX < rect.left || e.clientX >= rect.left + scroll.clientWidth || e.clientY < rect.top || e.clientY >= rect.top + scroll.clientHeight
                     || !scroll.contains(document.elementFromPoint(e.clientX, e.clientY))) return null;
-            return { x: Math.max(15, Math.min(MAX_POSITION, (e.clientX - rect.left + scroll.scrollLeft) / zoom - 104)),
+            return { x: Math.max(15, Math.min(MAX_POSITION, (e.clientX - rect.left + scroll.scrollLeft) / zoom - (preview?.offsetWidth || 140) / 2)),
                 y: Math.max(20, Math.min(MAX_POSITION, (e.clientY - rect.top + scroll.scrollTop) / zoom - 50)) };
         };
         const move = e => {
@@ -770,8 +807,9 @@ export function mount(pane, workspace) {
             e.preventDefault();
             if (!preview) {
                 const kind = button.dataset.add, style = nodeStyle({ type: ['javascript', 'groovy'].includes(kind) ? 'script' : kind, config: { language: kind } });
-                preview = document.createElement('div'); preview.className = 'wf-library-preview'; preview.setAttribute('aria-hidden', 'true');
-                preview.innerHTML = `<b class="wf-icon wf-${style.kind}">${style.icon}</b><div><strong>${esc(style.label)}</strong><small>松开放置节点</small></div>`;
+                const name = kind === 'groovy' ? 'Groovy 脚本' : kind === 'javascript' ? 'JavaScript 脚本' : style.label;
+                preview = document.createElement('div'); preview.className = 'wf-library-preview' + (kind === 'if' ? ' is-if' : ''); preview.setAttribute('aria-hidden', 'true');
+                preview.innerHTML = `<b class="wf-icon wf-${style.kind}">${style.icon}</b><div><strong>${esc(name)}</strong><small>${esc(style.label)}</small></div>`;
                 pane.append(preview); button.classList.add('is-dragging');
             }
             let position = dropPosition(e);
@@ -782,7 +820,7 @@ export function mount(pane, workspace) {
                 position = dropPosition(e);
             }
             const rect = scroll.getBoundingClientRect();
-            preview.style.left = (position ? rect.left + position.x * zoom - scroll.scrollLeft : e.clientX - 104 * zoom) + 'px';
+            preview.style.left = (position ? rect.left + position.x * zoom - scroll.scrollLeft : e.clientX - preview.offsetWidth / 2 * zoom) + 'px';
             preview.style.top = (position ? rect.top + position.y * zoom - scroll.scrollTop : e.clientY - 50 * zoom) + 'px';
             preview.style.transform = `scale(${zoom})`;
             preview.classList.toggle('is-valid', !!position); scroll.classList.toggle('is-library-drop-target', !!position);
@@ -792,6 +830,7 @@ export function mount(pane, workspace) {
             button.removeEventListener('pointermove', move); button.removeEventListener('pointerup', end); button.removeEventListener('pointercancel', end); button.removeEventListener('lostpointercapture', end);
             window.removeEventListener('blur', end); cancelLibraryDrag = null;
             if (button.hasPointerCapture(event.pointerId)) button.releasePointerCapture(event.pointerId);
+            const position = e.type === 'pointerup' && moved && !cancelled ? dropPosition(e) : null;
             preview?.remove(); scroll.classList.remove('is-library-drop-target'); button.classList.remove('is-dragging');
             if (moved || cancelled) {
                 // Pointer capture sends the synthetic click back to the library button after a drop.
@@ -800,7 +839,6 @@ export function mount(pane, workspace) {
                 setTimeout(() => button.removeEventListener('click', ignoreClick, true), 0);
             }
             if (e.type !== 'pointerup' || !moved || cancelled) return;
-            const position = dropPosition(e);
             if (!position) return notice('拖拽已取消，请松开到画布内放置节点。');
             try { add(button.dataset.add, position); } catch (error) { notice(error.message, true); }
         };
@@ -899,6 +937,16 @@ export function mount(pane, workspace) {
             notice(schedule.enabled ? '定时执行已启用，将执行当前已发布版本。' : '定时执行已暂停，已有实例继续运行。');
         });
     });
+    $('[data-list-run-form]').addEventListener('submit', event => {
+        event.preventDefault();
+        perform(async () => {
+            let input; try { input = JSON.parse(event.currentTarget.elements.input.value); } catch { throw new Error('运行输入需要有效的 JSON'); }
+            if (!input || Array.isArray(input) || typeof input !== 'object') throw new Error('运行输入需要是 JSON 对象');
+            const id = listRunTarget, run = await send('/' + encodeURIComponent(id) + '/runs', {input});
+            listRuns.set(id, run); $('[data-list-run-dialog]').close(); renderWorkflowList(); scheduleListPoll();
+            notice('已开始运行发布版本，列表将自动更新进度。');
+        });
+    });
     $('[data-create-form]').addEventListener('submit', event => {
         event.preventDefault(); const form = event.currentTarget;
         perform(async () => { if (dirty && !confirm('新建将离开当前未保存的草稿，是否继续？')) return; const result = await send('', { name: form.elements.name.value }); $('[data-create-dialog]').close(); form.reset(); await loadList(); await load(result.id, true); });
@@ -943,6 +991,6 @@ export function mount(pane, workspace) {
                 if (!busy) refreshSchedule().catch(e => notice(e.message, true));
             }
         },
-        deactivate() { closeNodeDialog(false); cancelLibraryDrag?.(); active = false; clearTimeout(timer); focus(false); },
+        deactivate() { clearTimeout(listRunTimer); closeNodeDialog(false); cancelLibraryDrag?.(); active = false; clearTimeout(timer); focus(false); },
     };
 }
