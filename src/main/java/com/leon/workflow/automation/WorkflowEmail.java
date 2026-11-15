@@ -12,6 +12,7 @@ import java.net.*;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import static com.leon.workflow.automation.WorkflowJson.*;
 
 /** One TLS-protected SMTP submission per execution; no retry after an uncertain delivery. */
@@ -82,6 +83,7 @@ public class WorkflowEmail {
         String body = required(resolve(config.get("body"), input, ctx), "邮件正文解析后不能为空", MAX_BYTES);
         if (body.getBytes(StandardCharsets.UTF_8).length > MAX_BYTES) throw new IllegalArgumentException("邮件正文不能超过 1 MB");
         int timeout = integer(config.get("timeoutMs"), 10_000, 100, 30_000);
+        AtomicBoolean timedOut = new AtomicBoolean();
         try (var sockets = sockets(text(credential.get("host")))) {
             JavaMailSenderImpl sender = sender(credential, timeout, sockets);
             MimeMessage message = sender.createMimeMessage();
@@ -91,7 +93,7 @@ public class WorkflowEmail {
             message.setRecipients(Message.RecipientType.BCC, bcc);
             message.setSubject(subject, "UTF-8");
             message.setText(body, "UTF-8", "html".equals(config.get("format")) ? "html" : "plain");
-            var deadline = deadlines.schedule(sockets::close, timeout, TimeUnit.MILLISECONDS);
+            var deadline = deadlines.schedule(() -> { timedOut.set(true); sockets.close(); }, timeout, TimeUnit.MILLISECONDS);
             try {
                 if (Thread.currentThread().isInterrupted()) throw new InterruptedException();
                 sender.send(message);
@@ -99,8 +101,8 @@ public class WorkflowEmail {
         } catch (InterruptedException e) { throw e; }
         catch (Exception e) {
             if (Thread.currentThread().isInterrupted()) throw new InterruptedException();
-            // SMTP replies can echo AUTH data or message content; never persist the provider exception.
-            throw new IllegalArgumentException("邮件提交未完成：请检查 SMTP 地址、TLS、邮箱授权码及超时；部分收件人可能已收到，请确认后重试");
+            throw new IllegalArgumentException("邮件提交未完成：" + WorkflowNetworkErrors.describe(e, true, timedOut.get())
+                    + "\n部分收件人可能已收到，请确认后重试。");
         }
         return input;
     }

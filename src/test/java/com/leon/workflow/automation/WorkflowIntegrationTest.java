@@ -220,6 +220,12 @@ class WorkflowIntegrationTest {
         var run = await(text(engine.start(text(workflow.get("id")), input).get("id")));
         assertEquals("FAILED", run.get("status")); assertFalse(write(run).contains("example-private-token")); assertTrue(text(run.get("error")).contains("[已隐藏]"));
         assertTrue(write(run).contains("失败前日志"));
+        assertTrue(text(run.get("error")).contains("workflow.js:"), text(run.get("error")));
+        var failure = mvc.perform(post("/api/workflows/test-node").cookie(cookie).header("Origin", "https://example.test").header("X-Requested-With", "XMLHttpRequest")
+                .contentType(MediaType.APPLICATION_JSON).content(write(Map.of("node", graph.nodes().get(1), "input", input))))
+                .andExpect(status().isBadRequest()).andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(jsonPath("$.logs").exists()).andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        assertTrue(failure.contains("失败前日志")); assertTrue(failure.contains("[已隐藏]")); assertFalse(failure.contains("example-private-token"));
         var loop = new WorkflowGraph(List.of(node("start", "start", Map.of()), script("loop", "groovy", "def main(Map i,Map c){while(true){}}"), node("end", "end", Map.of())), List.of(edge("start", "loop", ""), edge("loop", "end", "")));
         var runningWorkflow = createPublished(loop);
         var running = engine.start(text(runningWorkflow.get("id")), empty());

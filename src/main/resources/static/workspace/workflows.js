@@ -1,4 +1,4 @@
-import { renderRunDetails } from './workflow-run-details.js';
+import { renderRunDetails, renderFailure } from './workflow-run-details.js';
 const templates = {
     javascript: `function main(input, ctx) {\n  return {\n    items: input.items.map(item => ({\n      json: { ...item.json, name: String(item.json.name ?? '').toUpperCase() }\n    }))\n  };\n}`,
     groovy: `def main(Map input, Map ctx) {\n    return [items: input.items.collect { item ->\n        [json: item.json + [name: (item.json.name ?: '').toUpperCase()]]\n    }]\n}`,
@@ -45,7 +45,11 @@ export function mount(pane, workspace) {
     async function api(path = '', options = {}) {
         const response = await fetch('/api/workflows' + path, { cache: 'no-store', ...options, headers: { 'Content-Type': 'application/json', ...options.headers } });
         const data = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(data.message || data.detail || `请求未完成（${response.status}）`);
+        if (!response.ok) {
+            const error = new Error(data.message || data.detail || `请求未完成（${response.status}）`);
+            error.logs = typeof data.logs === 'string' ? data.logs : '';
+            throw error;
+        }
         return data;
     }
     const send = (path, body, method = 'POST') => api(path, { method, body: JSON.stringify(body) });
@@ -327,8 +331,13 @@ export function mount(pane, workspace) {
         if (['http', 'script', 'feishu', 'email'].includes(node.type)) content += field('超时（毫秒，100–30000）', inputField('timeoutMs', c.timeoutMs || 10000, 'type="number" min="100" max="30000" step="100"'));
         if (node.type !== 'end') content += `<h3 class="wf-section-label">连接出口</h3>${connectionFields(node)}`;
         content += `<div class="wf-node-actions"><button type="button" data-action="test">${node.type === 'feishu' ? '发送测试消息' : node.type === 'email' ? '发送测试邮件' : '调试此节点'}</button>${!['start', 'end'].includes(node.type) ? '<button type="button" class="wf-danger" data-action="delete-node">删除节点</button>' : ''}</div>`;
-        $('[data-inspector]').innerHTML = `<h2>${esc(style.label)}</h2><div class="wf-node-id">${esc(node.id)}</div>${content}`;
-        highlight(); controls();
+        $('[data-inspector]').innerHTML = `<h2>${esc(style.label)}</h2><div class="wf-node-id">${esc(node.id)}</div><div data-node-error></div>${content}<div data-node-debug></div>`;
+        nodeError(); highlight(); controls();
+    }
+    function nodeError() {
+        const target = $('[data-node-error]'); if (!target) return;
+        const step = currentRun?.nodes?.find(n => n.nodeId === selected && n.status === 'FAILED');
+        target.innerHTML = step ? `<p class="wf-help">最近查看的运行 · 发布版本 v${esc(currentRun.version)}</p>${renderFailure(step.error, step.logs)}` : '';
     }
     function highlight() {
         const textarea = $('[data-field="source"]'), pre = $('[data-highlight]'); if (!textarea || !pre) return;
@@ -440,7 +449,7 @@ export function mount(pane, workspace) {
         $('[data-runs]').innerHTML = rows.length ? rows.map(row => `<button type="button" class="wf-run-row ${row.id === currentRun?.id ? 'is-active' : ''}" data-run="${esc(row.id)}"><span>v${row.version} · ${esc(date(row.createdAt))}</span>${badge(row.status)}</button>`).join('') : '<p class="wf-muted">还没有运行记录</p>';
     }
     function showRun(run) {
-        currentRun = run; renderCanvas();
+        currentRun = run; renderCanvas(); nodeError();
         const open = new Set([...pane.querySelectorAll('[data-step][open]')].map(d => d.dataset.step));
         $('[data-run-detail]').innerHTML = renderRunDetails(run, open, true);
     }
@@ -551,7 +560,26 @@ export function mount(pane, workspace) {
         'save-node': async () => { await save(); closeNodeDialog(); },
         publish: async () => { await save(); workflow = await send('/' + workflow.id + '/publish', { revision: workflow.revision }); controls(); notice(`版本 v${workflow.publishedVersion} 已发布。后续编辑不会影响该版本。`); },
         run: async () => { const run = await send('/' + workflow.id + '/runs', { input: runInput() }); showRun(run); await refreshRuns(); schedulePoll(); notice(`正在运行已发布版本 v${run.version}${dirty ? '；当前草稿修改不参与本次运行' : ''}。`); },
-        test: async () => { commitInspector(); const node = graph.nodes.find(n => n.id === selected); const result = await send('/test-node', { node, input: runInput() }); $('[data-run-detail]').innerHTML = `<div class="wf-run-summary"><span>草稿节点调试 · ${esc(node.name)}</span><span>${result.durationMs} ms</span>${result.branch ? `<span>分支 ${esc(result.branch)}</span>` : ''}</div><h3>输出</h3><pre>${esc(pretty(result.output))}</pre><h3>日志</h3><pre>${esc(result.logs || '无日志')}</pre>`; notice('节点调试成功。'); },
+        test: async () => {
+            const node = graph.nodes.find(n => n.id === selected);
+            const heading = `<div class="wf-run-summary"><span>草稿节点调试 · ${esc(node.name)}</span></div>`;
+            try {
+                commitInspector();
+                const result = await send('/test-node', { node, input: runInput() });
+                const content = heading + `<p>${result.durationMs} ms</p>${result.branch ? `<p>分支 ${esc(result.branch)}</p>` : ''}<h3>输出</h3><pre>${esc(pretty(result.output))}</pre><h3>日志</h3><pre>${esc(result.logs || '无日志')}</pre>`;
+                $('[data-run-detail]').innerHTML = content;
+                if (node.id === selected && $('[data-node-debug]')) $('[data-node-debug]').innerHTML = content;
+                notice('节点调试成功。');
+            } catch (error) {
+                const content = heading + renderFailure(error.message, error.logs);
+                $('[data-run-detail]').innerHTML = content;
+                if (node.id === selected && $('[data-node-debug]')) {
+                    const target = $('[data-node-debug]'); target.innerHTML = content;
+                    requestAnimationFrame(() => target.scrollIntoView({block:'center'}));
+                }
+                throw error;
+            }
+        },
         'delete-node': () => { const node = graph.nodes.find(n => n.id === selected); if (['start', 'end'].includes(node?.type)) return; closeNodeDialog(false); graph.nodes = graph.nodes.filter(n => n.id !== selected); graph.edges = graph.edges.filter(e => e.source !== selected && e.target !== selected); selected = graph.nodes[0]?.id; markDirty(); renderCanvas(); inspector(); },
         'delete-workflow': async () => { if (!workflow || !confirm(`删除“${workflow.name}”？历史运行记录会保留。`)) return; await api('/' + workflow.id, { method: 'DELETE' }); workflow = null; graph = null; dirty = false; currentRun = null; clearTimeout(timer); $('[data-editor]').hidden = true; workspace.replace('/workflows.html'); await loadList(); if (workflows.length) await load(workflows[0].id); else notice('工作流已删除。'); },
         'refresh-runs': refreshRuns,

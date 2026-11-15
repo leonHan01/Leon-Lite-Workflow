@@ -112,7 +112,21 @@ class WorkflowEmailTest {
             var node = new WorkflowGraph.Node("mail", "email", "发送邮件", config(id), Map.of());
             var error = assertThrows(IllegalArgumentException.class, () -> engine.test(node, input()));
             assertTrue(error.getMessage().contains("邮件提交未完成"));
+            assertTrue(error.getMessage().contains("TLS"));
             assertFalse(server.authenticated); assertEquals(0, server.submissions);
+        }
+    }
+    @Test void smtpAuthenticationFailurePersistsSpecificReasonsWithoutProviderRepliesOrSecrets() throws Exception {
+        allowLocalTestServer(true);
+        try (var server = new SmtpServer("ssl-auth-fail")) {
+            var run = await(text(engine.start(published(config(credential(server.port(), "ssl"))), input()).get("id")));
+            assertEquals("FAILED", run.get("status"));
+            assertTrue(text(run.get("error")).contains("SMTP 认证失败"));
+            assertTrue(text(run.get("error")).contains("535 5.7.8"));
+            var failed = ((List<?>)run.get("nodes")).stream().map(WorkflowJson::object).filter(n -> "FAILED".equals(n.get("status"))).findFirst().orElseThrow();
+            assertEquals(run.get("error"), failed.get("error"));
+            assertFalse(write(run).contains("provider-private-payload")); assertFalse(write(run).contains("test-mail-authorization"));
+            assertEquals(0, server.submissions);
         }
     }
     @Test void stalledSmtpTimesOutWithoutRetrying() throws Exception {
@@ -167,12 +181,12 @@ class WorkflowEmailTest {
         volatile int submissions;
         volatile Socket client;
         SmtpServer(String mode) throws IOException {
-            server = "ssl".equals(mode) ? tls.getServerSocketFactory().createServerSocket(0, 1, InetAddress.getLoopbackAddress()) : new ServerSocket(0, 1, InetAddress.getLoopbackAddress());
+            server = mode.startsWith("ssl") ? tls.getServerSocketFactory().createServerSocket(0, 1, InetAddress.getLoopbackAddress()) : new ServerSocket(0, 1, InetAddress.getLoopbackAddress());
             worker.submit(() -> {
                 try (Socket accepted = server.accept()) {
                     client = accepted; accepted.setSoTimeout(5000);
                     if ("stall".equals(mode)) { accepted.getInputStream().read(); return; }
-                    boolean encrypted = "ssl".equals(mode);
+                    boolean encrypted = mode.startsWith("ssl");
                     BufferedReader in = reader(client); BufferedWriter out = writer(client); reply(out, "220 localhost SMTP");
                     for (String line; (line = in.readLine()) != null;) {
                         if (line.startsWith("EHLO")) {
@@ -187,6 +201,7 @@ class WorkflowEmailTest {
                             if (!encrypted) throw new AssertionError("AUTH before TLS");
                             reply(out, "334 VXNlcm5hbWU6"); in.readLine(); reply(out, "334 UGFzc3dvcmQ6");
                             assertEquals("test-mail-authorization", new String(Base64.getDecoder().decode(in.readLine()), StandardCharsets.UTF_8));
+                            if ("ssl-auth-fail".equals(mode)) { reply(out, "535 5.7.8 provider-private-payload test-mail-authorization"); continue; }
                             authenticated = true; reply(out, "235 Authenticated");
                         } else if (line.startsWith("MAIL FROM:")) {
                             if (!authenticated) throw new AssertionError("MAIL before AUTH"); reply(out, "250 OK");

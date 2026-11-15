@@ -5,6 +5,7 @@ const path = require('node:path');
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE_PATH || 'playwright');
 const root = path.resolve(__dirname, '../../main/resources/static');
 let workflow = null, versions = [], runs = [], credentials = [], lastCredential = null, lastTest = null;
+let testFailure = null;
 const credentialValues = new Map();
 let schedule = { enabled: false, cron: '0 0 9 * * *', timeZone: 'Asia/Shanghai', input: { items: [{ json: {} }] }, revision: 0, nextRunAt: null };
 const initial = () => ({ nodes: [{ id: 'start', name: '开始', type: 'start', config: {}, position: { x: 80, y: 140 } }, { id: 'end', name: '结束', type: 'end', config: {}, position: { x: 420, y: 140 } }], edges: [{ id: 'start_end', source: 'start', target: 'end', branch: '' }] });
@@ -45,7 +46,7 @@ const server = http.createServer(async (req, res) => {
             const value = Object.fromEntries(Object.entries(credentialValues.get(id)).filter(([key]) => !['token','password','secret','webhookUrl'].includes(key)));
             return reply({...credential,value});
         }
-        if (route === '/test-node') { lastTest = data; return reply({ output: ['feishu', 'email'].includes(data.node.type) ? data.input : { items: [{ json: { name: 'LEON' } }] }, logs: data.node.type === 'feishu' ? '飞书消息已发送' : data.node.type === 'email' ? '邮件已提交至 SMTP 服务器' : '调试完成', durationMs: 22, branch: '' }); }
+        if (route === '/test-node') { lastTest = data; if (testFailure) return reply(testFailure,400); return reply({ output: ['feishu', 'email'].includes(data.node.type) ? data.input : { items: [{ json: { name: 'LEON' } }] }, logs: data.node.type === 'feishu' ? '飞书消息已发送' : data.node.type === 'email' ? '邮件已提交至 SMTP 服务器' : '调试完成', durationMs: 22, branch: '' }); }
         if (!route) {
             if (req.method === 'POST') workflow = { id: 'workflow-1', name: data.name, definition: initial(), revision: 1, publishedVersion: 0 };
             return reply(req.method === 'POST' ? workflow : workflow ? [workflow] : []);
@@ -257,6 +258,17 @@ const server = http.createServer(async (req, res) => {
         assert.equal(credentialValues.get('credential-1').secret,'');
         assert.equal(await page.locator('[data-field="credentialId"]').inputValue(),'credential-2','编辑其他凭据不能改变当前节点引用');
         await page.locator('[data-close="credentials"]').click();
+        testFailure = {message:'邮件提交未完成：SMTP 认证失败。请检查邮箱授权码。\nSMTP 响应码：535 5.7.8',logs:''};
+        await page.getByRole('button',{name:'发送测试邮件',exact:true}).click();
+        await page.locator('[data-node-dialog] .wf-failure-details').filter({hasText:'535 5.7.8'}).waitFor();
+        await page.waitForFunction(()=>{
+            const error=document.querySelector('[data-node-dialog] .wf-failure-details')?.getBoundingClientRect();
+            const footer=document.querySelector('.wf-node-dialog-footer').getBoundingClientRect();
+            return error && error.bottom<=footer.top && error.top>=0;
+        });
+        await page.screenshot({path:'/private/tmp/leon-node-mail-error.png',fullPage:false});
+        assert.equal(await page.locator('[data-node-dialog][open]').isVisible(),true,'调试失败后应在节点弹窗中显示原因');
+        testFailure = null;
         await page.getByRole('button', {name:'保存设置',exact:true}).click();
         await page.waitForSelector('[data-node-dialog][open]', {state:'hidden'});
         await page.waitForFunction(() => document.querySelector('[data-version]').textContent.includes('草稿已保存'));
@@ -479,8 +491,15 @@ const server = http.createServer(async (req, res) => {
         assert.equal(await page.locator('[data-field="params"]').inputValue(),'{');
         await page.locator('[data-field="params"]').fill('{}');
         await page.getByRole('button',{name:'返回画布',exact:true}).click();
+        testFailure = {message:'TypeError: missing value\n位置：workflow.js:3:12',logs:'失败前日志 [已隐藏]\n<img src=x onerror=alert(1)>'};
+        await page.getByRole('button',{name:'调试此节点',exact:true}).click();
+        await page.locator('[data-run-detail] .wf-failure-details').filter({hasText:'workflow.js:3:12'}).waitFor();
+        assert.ok((await page.locator('[data-run-detail]').textContent()).includes('失败前日志 [已隐藏]'));
+        assert.equal(await page.locator('[data-run-detail] img').count(),0,'错误日志应作为文本显示');
+        testFailure = null;
         await page.getByRole('button', { name: '调试此节点', exact: true }).click();
-        await page.waitForFunction(() => document.querySelector('[data-run-detail]').textContent.includes('草稿节点调试'));
+        await page.waitForFunction(() => document.querySelector('[data-run-detail]').textContent.includes('调试完成'));
+        assert.equal(await page.locator('[data-run-detail] .wf-failure-details').count(),0,'重试成功应替换之前的失败详情');
         await page.getByRole('button', { name: '管理凭据', exact: true }).click();
         await page.locator('[data-credential-form] [name="kind"]').selectOption('bearer');
         await page.locator('[data-credential-form] [name="name"]').fill('演示凭据');
@@ -496,7 +515,20 @@ const server = http.createServer(async (req, res) => {
         await page.waitForFunction(() => document.querySelector('[data-version]').textContent.includes('草稿已保存'));
         await page.screenshot({ path: process.env.WORKFLOW_SCREENSHOT || '/private/tmp/leon-workflows-desktop.png', fullPage: true });
         const originalRun = structuredClone(runs[0]);
+        const failureMessage = 'TypeError: missing value\n位置：workflow.js:3:12';
+        const failedNodes = originalRun.nodes.map(n=>({...n,status:n.nodeId==='calculate'?'FAILED':n.status,error:n.nodeId==='calculate'?failureMessage:null,logs:n.nodeId==='calculate'?'失败前日志 [已隐藏]':n.logs}));
+        runs[0] = {...originalRun,status:'FAILED',error:failureMessage,nodes:failedNodes};
+        await page.getByRole('button',{name:'刷新记录',exact:true}).click();
+        await page.locator('[data-run="run-1"]').click();
+        await page.locator('[data-step="calculate"] .wf-failure-details').waitFor();
+        assert.equal(await page.locator('[data-step="calculate"]').getAttribute('open'),'');
+        assert.ok((await page.locator('[data-node-error]').textContent()).includes('workflow.js:3:12'));
+        await page.locator('[data-node="calculate"] .wf-node-head').dblclick();
+        await page.locator('[data-node-dialog] [data-node-error] .wf-failure-details').waitFor();
+        await page.getByRole('button',{name:'关闭节点设置',exact:true}).click();
+        runs[0] = originalRun;
         runs.push(...Array.from({length:25},(_,i)=>({...originalRun,id:'history-'+i,status:i%2?'SUCCEEDED':'FAILED',triggerType:i%3?'MANUAL':'SCHEDULED'})));
+        Object.assign(runs.find(r=>r.id==='history-0'),{error:failureMessage,nodes:failedNodes});
         runs.unshift({...originalRun,id:'scheduled-running',status:'RUNNING',triggerType:'SCHEDULED',scheduledAt:new Date().toISOString()});
         await page.locator('[data-all-runs]').click();
         await page.waitForSelector('[data-rows] [data-open]');
@@ -517,8 +549,9 @@ const server = http.createServer(async (req, res) => {
         await page.waitForFunction(()=>document.querySelector('[data-count="total"]').textContent==='27');
         await page.locator('[data-page-size]').selectOption('50');
         await page.waitForFunction(()=>document.querySelectorAll('[data-rows] [data-open]').length===27);
-        await page.locator('[data-rows] [data-open]').first().click();
+        await page.locator('[data-open="history-0"]').click();
         await page.waitForSelector('.wr-detail-title');
+        await page.locator('[data-details] [data-step="calculate"] .wf-failure-details').filter({hasText:'workflow.js:3:12'}).waitFor();
         await page.screenshot({path:'/private/tmp/leon-workflow-runs-desktop.png',fullPage:true});
         await page.setViewportSize({ width: 390, height: 844 });
         await page.screenshot({ path: '/private/tmp/leon-workflow-runs-mobile.png', fullPage: true });

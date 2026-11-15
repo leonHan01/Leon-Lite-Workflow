@@ -16,6 +16,7 @@ import java.net.*;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import static com.leon.workflow.automation.WorkflowJson.*;
 
 @Component
@@ -52,7 +53,8 @@ public class WorkflowHttp {
             @Override public String resolveCanonicalHostname(String host) { return host; }
         };
         // Validate literal addresses too; an implementation may bypass the resolver for numeric hosts.
-        dns.resolve(uri.getHost());
+        try { dns.resolve(uri.getHost()); }
+        catch (UnknownHostException error) { throw new IllegalArgumentException("HTTP 请求未完成：" + WorkflowNetworkErrors.describe(error, false, false)); }
         int timeout = integer(config.get("timeoutMs"), 10_000, 100, 30_000);
         var manager = PoolingHttpClientConnectionManagerBuilder.create().setDnsResolver(dns)
                 .setDefaultConnectionConfig(ConnectionConfig.custom().setConnectTimeout(Timeout.ofMilliseconds(timeout)).setSocketTimeout(Timeout.ofMilliseconds(timeout)).build()).build();
@@ -69,13 +71,20 @@ public class WorkflowHttp {
             if (bytes.length > MAX_BYTES) throw new IllegalArgumentException("HTTP 请求体不能超过 1 MB");
             request.setEntity(new ByteArrayEntity(bytes, ContentType.APPLICATION_JSON));
         }
-        ScheduledFuture<?> deadline = deadlines.schedule(request::cancel, timeout, TimeUnit.MILLISECONDS);
+        AtomicBoolean timedOut = new AtomicBoolean();
+        ScheduledFuture<?> deadline = deadlines.schedule(() -> { timedOut.set(true); request.cancel(); }, timeout, TimeUnit.MILLISECONDS);
         try (var client = HttpClients.custom().setConnectionManager(manager).disableRedirectHandling().disableAutomaticRetries()
                 .disableCookieManagement().disableContentCompression().setDefaultRequestConfig(RequestConfig.custom().setResponseTimeout(Timeout.ofMilliseconds(timeout)).build()).build()) {
             return client.execute(request, response -> {
                 int status = response.getCode();
                 if (status >= 300 && status < 400) throw new IllegalArgumentException("HTTP 返回重定向；请直接填写最终地址");
-                if (status >= 400 && !Boolean.FALSE.equals(config.get("failOnHttpError"))) throw new IllegalArgumentException("HTTP 请求失败，状态码 " + status);
+                if (status >= 400 && !Boolean.FALSE.equals(config.get("failOnHttpError"))) throw new IllegalArgumentException("HTTP 请求失败，状态码 " + status + "。" + switch (status) {
+                    case 401 -> "目标服务要求认证，请检查请求凭据。";
+                    case 403 -> "目标服务拒绝访问，请检查访问权限或来源限制。";
+                    case 404 -> "目标接口不存在，请检查请求地址。";
+                    case 429 -> "目标服务限制请求频率，请稍后重试。";
+                    default -> status >= 500 ? "目标服务内部错误，请检查对端服务状态。" : "请检查请求方法、参数和目标接口要求。";
+                });
                 byte[] bytes;
                 if (response.getEntity() == null) bytes = new byte[0];
                 else try (var stream = response.getEntity().getContent()) { bytes = stream.readNBytes(MAX_BYTES + 1); }
@@ -90,7 +99,7 @@ public class WorkflowHttp {
             });
         } catch (java.io.IOException e) {
             if (Thread.currentThread().isInterrupted()) throw new InterruptedException();
-            throw new IllegalArgumentException("HTTP 请求未完成：目标受限、连接失败或超时；写操作请确认对端结果后重试");
+            throw new IllegalArgumentException("HTTP 请求未完成：" + WorkflowNetworkErrors.describe(e, false, timedOut.get()) + "\n写操作请确认对端结果后重试。");
         } finally { deadline.cancel(false); manager.close(); }
     }
     private void header(HttpUriRequestBase request, String name, String value) {

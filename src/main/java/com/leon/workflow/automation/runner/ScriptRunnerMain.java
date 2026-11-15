@@ -57,9 +57,20 @@ public final class ScriptRunnerMain {
             } else throw new IllegalArgumentException("不支持的脚本语言");
             response.put("output", output); response.put("success", true);
         } catch (Throwable error) {
+            for (int i = 0; i < 4 && error.getCause() != null && error.getCause() != error && !(error instanceof PolyglotException); i++) error = error.getCause();
             String message = error.getMessage();
+            if (message == null || message.isBlank()) message = error.getClass().getSimpleName();
+            if (error instanceof PolyglotException guest) {
+                var location = guest.getSourceLocation();
+                if (location == null) for (var frame : guest.getPolyglotStackTrace()) if (frame.isGuestFrame() && frame.getSourceLocation() != null) {
+                    location = frame.getSourceLocation(); break;
+                }
+                if (location != null) message += "\n位置：workflow.js:" + location.getStartLine() + ":" + location.getStartColumn();
+            } else for (var frame : error.getStackTrace()) if ("workflow.groovy".equals(frame.getFileName()) && frame.getLineNumber() > 0) {
+                message += "\n位置：workflow.groovy:" + frame.getLineNumber(); break;
+            }
             response.put("success", false);
-            response.put("error", message == null ? error.getClass().getSimpleName() : message.substring(0, Math.min(message.length(), 900)));
+            response.put("error", message.substring(0, Math.min(message.length(), 900)));
         }
         response.put("logs", logs.toString(StandardCharsets.UTF_8));
         protocol.print(JSON.writeValueAsString(response)); protocol.flush();

@@ -70,6 +70,9 @@ public class WorkflowController {
         catch (NumberFormatException e) { throw new IllegalArgumentException("缺少草稿版本，请刷新后重试"); }
     }
     private ResponseEntity<?> response(Object value) { return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(value); }
+    @ExceptionHandler(WorkflowEngine.DebugFailure.class) ResponseEntity<?> debugFailed(WorkflowEngine.DebugFailure error) {
+        return ResponseEntity.badRequest().cacheControl(CacheControl.noStore()).body(Map.of("message", text(error.getMessage()), "logs", text(error.logs())));
+    }
     @ExceptionHandler(IllegalArgumentException.class) ResponseEntity<?> invalid(IllegalArgumentException error) { return ResponseEntity.badRequest().body(Map.of("message", text(error.getMessage()))); }
     @ExceptionHandler(ResponseStatusException.class) ResponseEntity<?> rejected(ResponseStatusException error) { return ResponseEntity.status(error.getStatusCode()).body(Map.of("message", Objects.requireNonNullElse(error.getReason(), "请求未完成"))); }
 }

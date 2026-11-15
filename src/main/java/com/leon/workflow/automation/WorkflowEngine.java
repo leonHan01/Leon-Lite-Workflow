@@ -19,6 +19,11 @@ public class WorkflowEngine {
             Thread.ofPlatform().daemon().name("workflow-", 0).factory(), new ThreadPoolExecutor.AbortPolicy());
     private final Map<String, FutureTask<Void>> tasks = new ConcurrentHashMap<>();
     public record NodeResult(Map<String, Object> output, String logs, String branch) {}
+    public static final class DebugFailure extends IllegalArgumentException {
+        private final String logs;
+        public DebugFailure(String message, String logs) { super(message); this.logs = logs; }
+        public String logs() { return logs; }
+    }
     private record PendingNode(WorkflowGraph.Node node, Map<String, Object> input) {}
     public WorkflowEngine(WorkflowStore store, ScriptProcessRunner scripts, WorkflowHttp http, WorkflowFeishu feishu, WorkflowEmail email) { this.store = store; this.scripts = scripts; this.http = http; this.feishu = feishu; this.email = email; }
     public Map<String, String> runtimes() { return Map.of("javascript", "GraalJS 25.0.2", "groovy", "Groovy " + groovy.lang.GroovySystem.getVersion()); }
@@ -99,6 +104,7 @@ public class WorkflowEngine {
     }
     private NodeResult execute(WorkflowGraph.Node node, Map<String, Object> input, String runId, WorkflowPrivacy privacy) throws Exception {
         Map<String, Object> config = node.settings();
+        privacy.collect(config);
         Map<String, Object> ctx = Map.of("runId", runId, "nodeId", node.id(), "params", config.getOrDefault("params", Map.of()));
         return switch (node.type()) {
             case "start", "end" -> new NodeResult(input, "", "");
@@ -125,7 +131,7 @@ public class WorkflowEngine {
             return Map.of("output", privacy.mask(result.output()), "logs", privacy.message(result.logs()), "branch", result.branch(), "durationMs", System.currentTimeMillis() - started);
         } catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new IllegalArgumentException("调试已取消"); }
         catch (TimeoutException e) { throw new IllegalArgumentException("调试等待超时，请稍后重试"); }
-        catch (ExecutionException e) { throw new IllegalArgumentException(error(e.getCause(), privacy)); }
+        catch (ExecutionException e) { throw new DebugFailure(error(e.getCause(), privacy), e.getCause() instanceof ScriptProcessRunner.ScriptFailure failure ? privacy.message(failure.logs()) : ""); }
         finally { task.cancel(true); }
     }
     public Map<String, Object> cancel(String id) {
