@@ -65,6 +65,22 @@ class DeepseekChatServiceTest {
     }
 
     @Test
+    void workspaceChatKeepsConversationAndRejectsInvalidRoles() throws Exception {
+        when(appSettingService.getValue(AppSettingService.DEEPSEEK_API_KEY)).thenReturn("sk-test");
+        when(httpResponse.statusCode()).thenReturn(200);
+        when(httpResponse.body()).thenReturn("{\"choices\":[{\"message\":{\"content\":\"回答\"}}]}");
+        doReturn(httpResponse).when(httpClient).send(any(HttpRequest.class), any());
+        var messages = java.util.List.of(java.util.Map.of("role", "user", "content", "第一个问题"), java.util.Map.of("role", "assistant", "content", "第一个回答"), java.util.Map.of("role", "user", "content", "继续"));
+        assertEquals("回答", deepseekChatService.completeMessages(messages));
+        ArgumentCaptor<HttpRequest> captor = ArgumentCaptor.forClass(HttpRequest.class);
+        verify(httpClient).send(captor.capture(), any());
+        JsonNode body = objectMapper.readTree(read(captor.getValue()));
+        assertEquals(3, body.path("messages").size());
+        assertEquals("第一个回答", body.path("messages").path(1).path("content").asText());
+        assertThrows(IllegalArgumentException.class, () -> deepseekChatService.completeMessages(java.util.List.of(java.util.Map.of("role", "tool", "content", "x"))));
+    }
+
+    @Test
     void completeThrowsOnEmptyContent() throws Exception {
         when(appSettingService.getValue(AppSettingService.DEEPSEEK_API_KEY)).thenReturn("sk-test");
         when(httpResponse.statusCode()).thenReturn(200);

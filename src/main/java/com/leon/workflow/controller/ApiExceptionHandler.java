@@ -13,7 +13,7 @@ import java.util.Map;
         TodoItemController.class,
         ToolboxItemController.class,
         LlmMessageController.class,
-        AppSettingController.class
+        AppSettingController.class, WorkspaceChatController.class
 })
 public class ApiExceptionHandler {
     @ExceptionHandler(IllegalArgumentException.class)

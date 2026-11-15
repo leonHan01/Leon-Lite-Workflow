@@ -37,15 +37,16 @@ public class DeepseekChatService {
     }
 
     public String complete(String system, String user) {
+        return completeMessages(List.of(Map.of("role", "system", "content", system), Map.of("role", "user", "content", user)));
+    }
+
+    public String completeMessages(List<Map<String, String>> messages) {
+        if (messages == null || messages.isEmpty() || messages.size() > 100 || messages.stream().anyMatch(m -> m == null || m.get("role") == null || !List.of("system", "user", "assistant").contains(m.get("role")) || m.get("content") == null || m.get("content").length() > 50000) || messages.stream().mapToInt(m -> m.get("content").length()).sum() > 200000) throw new IllegalArgumentException("聊天内容无效或过长");
         String apiKey = appSettingService.getValue(AppSettingService.DEEPSEEK_API_KEY);
         if (apiKey.isBlank()) {
             throw new IllegalStateException("未配置 DeepSeek API Key");
         }
         try {
-            List<Map<String, String>> messages = new ArrayList<>();
-            messages.add(Map.of("role", "system", "content", system));
-            messages.add(Map.of("role", "user", "content", user));
-
             Map<String, Object> thinking = new LinkedHashMap<>();
             thinking.put("type", "disabled");
 

@@ -34,6 +34,47 @@ class WorkflowGithubTrendingTest {
             Map.of("repo", "sample/one", "purpose", "为开发者提供工具和辅助功能", "useCases", "开发工作流"),
             Map.of("repo", "sample/two", "purpose", "资料不足，无法确认具体用途", "useCases", "需查看项目说明后确认"))); }
     Map<String, Object> completion(Object content, String finish) { return response(Map.of("choices", List.of(Map.of("finish_reason", finish, "message", Map.of("content", content))))); }
+    @Test void retriesSnapshotReadAfterTransientConnectionClose() throws Exception {
+        long captured = java.time.Instant.now().getEpochSecond();
+        var snapshot = Map.of("period", "weekly", "items", List.of(
+                Map.of("owner", "sample", "repo", "one", "captured_at", captured),
+                Map.of("owner", "sample", "repo", "two", "captured_at", captured)));
+        when(http.executeResolved(anyMap(), any())).thenThrow(new IllegalArgumentException("HTTP 请求未完成：连接或响应超时"))
+                .thenThrow(new IllegalArgumentException("HTTP 请求未完成：HTTP 连接被关闭或响应读取失败"))
+                .thenReturn(response(snapshot));
+        when(http.executeResolved(anyMap(), any(), eq(240000))).thenReturn(completion(write(analysis()), "stop"));
+        var logs = new ArrayList<String>();
+        var result = trending.execute(Map.of(), new WorkflowPrivacy(), logs::add);
+        var output = object(object(((List<?>)result.get("items")).getFirst()).get("json"));
+        assertEquals("GitStock 快照", output.get("dataSource"));
+        assertTrue(String.join("\n", logs).contains("第 2 次"));
+        var requests = org.mockito.ArgumentCaptor.forClass(Map.class);
+        verify(http, times(3)).executeResolved(requests.capture(), any());
+        assertEquals("GET", requests.getAllValues().get(1).get("method"));
+        assertEquals("https://gitstock.org/api/v1/github/trending?period=weekly", requests.getAllValues().get(2).get("url"));
+        verify(http, times(1)).executeResolved(anyMap(), any(), eq(240000));
+    }
+    @Test void snapshotRetriesAreBoundedAndNeverRetryBlockedAddresses() throws Exception {
+        for (String failure : List.of("HTTP 请求未完成：HTTP 连接被关闭或响应读取失败", "HTTP 请求未完成：目标地址不允许访问")) {
+            reset(http);
+            when(http.executeResolved(anyMap(), any())).thenThrow(new IllegalArgumentException("原始榜单不可用")).thenThrow(new IllegalArgumentException(failure));
+            var error = assertThrows(IllegalArgumentException.class, () -> trending.execute(Map.of(), new WorkflowPrivacy()));
+            assertTrue(error.getMessage().contains("GitStock 榜单快照请求失败"));
+            verify(http, times(failure.contains("目标地址") ? 2 : 4)).executeResolved(anyMap(), any());
+            verify(http, never()).executeResolved(anyMap(), any(), anyInt());
+        }
+    }
+    @Test void cancellationInterruptsSnapshotRetry() throws Exception {
+        when(http.executeResolved(anyMap(), any())).thenThrow(new IllegalArgumentException("原始榜单不可用"))
+                .thenThrow(new IllegalArgumentException("HTTP 请求未完成：HTTP 连接被关闭或响应读取失败"));
+        try {
+            assertThrows(InterruptedException.class, () -> trending.execute(Map.of(), new WorkflowPrivacy(), message -> {
+                if (message.contains("GitStock 第 1 次请求失败")) Thread.currentThread().interrupt();
+            }));
+            verify(http, times(2)).executeResolved(anyMap(), any());
+            verify(http, never()).executeResolved(anyMap(), any(), anyInt());
+        } finally { Thread.interrupted(); }
+    }
     @Test void timeoutFallsBackToRecentTrendingSnapshotAndLabelsItsSource() throws Exception {
         long captured = java.time.Instant.now().getEpochSecond();
         var snapshot = Map.of("period", "weekly", "date", "2026-11-15", "items", List.of(

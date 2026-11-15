@@ -662,7 +662,7 @@ export function mount(pane, workspace) {
             $('[data-schedule-dialog]').showModal();
         },
         'schedule-preview': previewSchedule,
-        'back-to-list': async () => { setEditorVisible(false); await loadList(); workspace.navigate('/workflows.html'); notice('选择工作流进行编辑，或新建工作流。'); },
+        'back-to-list': async () => { setEditorVisible(false); await loadList(); workspace.navigate('/workflows.html'); notice(''); },
         create: () => { $('[data-create-dialog]').showModal(); $('[data-create-form] input').focus(); },
         reload: async () => { if (!editorVisible || !dirty || confirm('重新加载会丢弃未保存的草稿，是否继续？')) { await loadList(); if (editorVisible && workflow) await load(workflow.id); else notice('工作流列表已刷新。'); } },
         save,
@@ -986,12 +986,12 @@ export function mount(pane, workspace) {
                     [capabilities, credentials] = await Promise.all([api('/capabilities'), api('/credentials')]); await loadList();
                     initialized = true;
                     if (requested) await load(requested);
-                    else { setEditorVisible(false); notice('选择工作流进行编辑，或新建工作流。'); }
+                    else { setEditorVisible(false); notice(''); }
                     if (capabilities.sandbox === 'unavailable') notice('脚本运行环境尚未安装；HTTP 和条件节点可以正常使用。', true);
                 });
             } else if (!requested) {
                 setEditorVisible(false);
-                await perform(async () => { await loadList(); notice('选择工作流进行编辑，或新建工作流。'); });
+                await perform(async () => { await loadList(); notice(''); });
             } else if (requested !== workflow?.id) {
                 if (dirty && !confirm('打开其他工作流会丢弃当前未保存的草稿，是否继续？')) {
                     workspace.replace(editorVisible ? '/workflows.html?id=' + encodeURIComponent(workflow.id) : '/workflows.html'); return;

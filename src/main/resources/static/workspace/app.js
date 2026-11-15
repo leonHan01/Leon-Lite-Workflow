@@ -1,4 +1,5 @@
 const routes = {
+    '/workspace/tools-pro.html': ['tools-pro', 'Leon Tools Pro', 'workspace-tools-pro'],
     '/workflow-runs.html': ['workflow-runs', '运行实例', 'workspace-workflow-runs'],
     '/workflows.html': ['workflows', '工作流', 'workspace-workflows'],
     '/music-statistics.html': ['music-statistics', '歌曲统计', 'workspace-music'],

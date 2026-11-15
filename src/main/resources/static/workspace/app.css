@@ -339,3 +339,7 @@
 .music-stats-bar span { display: block; height: 100%; border-radius: inherit; background: #749c83; }
 .music-stats-list b { flex: none; color: #466956; font-size: 12px; }
 @media (max-width: 700px) { .music-stats-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } .music-stats-grid { grid-template-columns: 1fr; } }
+
+.workspace-tools-pro-frame { min-height:calc(100dvh - 76px); padding:20px 24px; }
+.workspace-tools-pro-frame iframe { display:block; width:min(100%, 640px); height:calc(100dvh - 116px); min-height:550px; border:1px solid #dfe7f3; border-radius:12px; background:#fff; }
+@media(max-width:700px) { .workspace-tools-pro-frame { padding:12px; }.workspace-tools-pro-frame iframe { min-height:500px; height:calc(100dvh - 125px); } }

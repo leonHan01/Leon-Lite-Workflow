@@ -31,6 +31,18 @@ class BrowserLoginIntegrationTest {
  }
  private Cookie cookie(String header) { return new Cookie(BrowserSessionService.COOKIE_NAME,header.split(";",2)[0].split("=",2)[1]); }
 
+ @Test void workspaceChatRequiresSessionAndTrustedWriteOrigin() throws Exception {
+  String body="{\"messages\":[]}";
+  mvc().perform(post("/api/workspace-chat").contentType("application/json").content(body)).andExpect(status().isUnauthorized());
+  mvc().perform(post("/api/workspace-chat").header("Authorization","Bearer integration-test-token").contentType("application/json").content(body)).andExpect(status().isForbidden());
+  Cookie session=cookie(login(false));
+  mvc().perform(post("/api/workspace-chat").cookie(session).header("Origin","https://evil.test").header("X-Requested-With","XMLHttpRequest").contentType("application/json").content(body)).andExpect(status().isForbidden());
+  mvc().perform(post("/api/workspace-chat").cookie(session).header("Origin","https://example.test").header("X-Requested-With","XMLHttpRequest").contentType("application/json").content(body)).andExpect(status().isBadRequest());
+  mvc().perform(post("/api/workspace-notification").header("Authorization","Bearer integration-test-token").contentType("application/json").content("{}")) .andExpect(status().isForbidden());
+  mvc().perform(post("/api/workspace-notification").cookie(session).header("Origin","https://evil.test").header("X-Requested-With","XMLHttpRequest").contentType("application/json").content("{}")) .andExpect(status().isForbidden());
+  mvc().perform(post("/api/workspace-notification").cookie(session).header("Origin","https://example.test").header("X-Requested-With","XMLHttpRequest").contentType("application/json").content("{}")) .andExpect(status().isBadRequest());
+ }
+
  @Test void rememberedCookieIsSecureAndRevocable() throws Exception {
   String header=login(true);Cookie cookie=cookie(header);
   assertTrue(header.contains("HttpOnly"));assertTrue(header.contains("Secure"));assertTrue(header.contains("SameSite=Lax"));

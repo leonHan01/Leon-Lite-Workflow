@@ -41,7 +41,10 @@ public class FeishuBotService {
     }
 
     public boolean sendCard(String title, String markdown, String template) {
-        String webhook = appSettingService.getValue(AppSettingService.FEISHU_WEBHOOK_URL);
+        return sendCardToWebhook(title, markdown, template, appSettingService.getValue(AppSettingService.FEISHU_WEBHOOK_URL));
+    }
+
+    public boolean sendCardToWebhook(String title, String markdown, String template, String webhook) {
         if (webhook.isBlank()) {
             log.info("飞书 Webhook 未配置，跳过通知：{}", title);
             return false;

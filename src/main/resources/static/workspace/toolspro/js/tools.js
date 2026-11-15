@@ -1,0 +1,459 @@
+import { el, icon, faviconImg } from "./dom.js";
+import { getApiBase, loadSyncMeta } from "./settings.js";
+import { exportJson, formatDateTime, hostnameOf, importJson } from "./storage.js";
+import { isBackendAvailable } from "./api.js";
+
+export const TOOLS = [
+  { id: "sync", name: "后端同步", desc: "查看连接状态并测试后端", icon: "cloud" },
+  { id: "page", name: "当前页面", desc: "需要 Chrome 扩展权限", icon: "globe" },
+  { id: "tabs", name: "标签页", desc: "需要 Chrome 扩展权限", icon: "tabs" },
+  { id: "json", name: "JSON 格式化", desc: "格式化、压缩、校验 JSON", icon: "json" },
+  { id: "url", name: "URL 工具", desc: "编解码和查询参数解析", icon: "link" },
+  { id: "time", name: "时间戳", desc: "Unix 时间与本地时间互转", icon: "clock" },
+  { id: "data", name: "导入导出", desc: "备份或恢复网页集合", icon: "download" },
+];
+
+export function renderToolsHome(onOpen) {
+  return el(
+    "div",
+    { class: "tools-grid" },
+    TOOLS.map((tool) =>
+      el(
+        "button",
+        { class: "tool-card", type: "button", title: tool.desc, onClick: () => onOpen(tool.id) },
+        el("span", {}, icon(tool.icon)),
+        el("strong", {}, tool.name)
+      )
+    )
+  );
+}
+
+export async function renderTool(toolId, { getActiveTab, toast, goHome, reload, confirmDelete, initialUrl }) {
+  const header = (title) =>
+    el(
+      "div",
+      { class: "detail-header" },
+      el("button", { class: "back-link", type: "button", onClick: goHome }, icon("chevronLeft"), "返回工具"),
+      el("h1", {}, title)
+    );
+
+  if (toolId === "sync") return renderSyncTool(header, toast, reload);
+  if (toolId === "page" || toolId === "tabs") return el("div", { class: "stack" }, header(toolId === "page" ? "当前页面" : "标签页"), el("div", { class: "empty" }, "此功能需要在 Leon Tools Pro Chrome 扩展中使用。"));
+  if (toolId === "json") return renderJsonTool(header, toast);
+  if (toolId === "url") return renderUrlTool(header, toast, initialUrl);
+  if (toolId === "time") return renderTimeTool(header, toast);
+  if (toolId === "data") return renderDataTool(header, toast, reload);
+  return el("div", { class: "empty" }, "未找到该工具");
+}
+
+async function renderPageTool(header, getActiveTab, toast, reload) {
+  const tab = await getActiveTab();
+  const box = el("div", { class: "stack" }, header("当前页面"));
+  if (!tab) {
+    box.append(el("div", { class: "empty" }, "没有可用的标签页"));
+    return box;
+  }
+
+  const copy = async (text, label) => {
+    await navigator.clipboard.writeText(text);
+    toast(`已复制${label}`);
+  };
+
+  box.append(
+    el(
+      "section",
+      { class: "panel", style: { padding: "12px" } },
+      el("div", { class: "page-preview", style: { margin: "0 0 10px" } }, faviconImg(tab.url, tab.favIconUrl, "favicon lg"), el("div", { class: "meta" }, el("strong", {}, tab.title || "无标题"), el("small", {}, tab.url || ""))),
+      el(
+        "dl",
+        { class: "kv" },
+        el("dt", {}, "窗口"),
+        el("dd", {}, String(tab.windowId)),
+        el("dt", {}, "固定"),
+        el("dd", {}, tab.pinned ? "是" : "否"),
+        el("dt", {}, "静音"),
+        el("dd", {}, tab.mutedInfo?.muted ? "是" : "否")
+      )
+    ),
+    el(
+      "div",
+      { class: "stack" },
+      el("button", { class: "btn block", type: "button", onClick: () => copy(tab.title || "", "标题") }, icon("copy"), "复制标题"),
+      el("button", { class: "btn block", type: "button", onClick: () => copy(tab.url || "", "链接") }, icon("copy"), "复制链接"),
+      el(
+        "button",
+        {
+          class: "btn block",
+          type: "button",
+          onClick: () => copy(`[${tab.title || hostnameOf(tab.url)}](${tab.url || ""})`, " Markdown 链接"),
+        },
+        icon("copy"),
+        "复制 Markdown"
+      ),
+      el(
+        "button",
+        {
+          class: "btn block",
+          type: "button",
+          onClick: async () => {
+            await chrome.tabs.duplicate(tab.id);
+            toast("已复制标签页");
+            if (reload) reload();
+          },
+        },
+        icon("duplicate"),
+        "复制标签页"
+      ),
+      el(
+        "button",
+        {
+          class: "btn block",
+          type: "button",
+          onClick: async () => {
+            await chrome.tabs.update(tab.id, { pinned: !tab.pinned });
+            toast(tab.pinned ? "已取消固定" : "已固定");
+            if (reload) reload();
+          },
+        },
+        icon("pin"),
+        tab.pinned ? "取消固定" : "固定标签页"
+      ),
+      el(
+        "button",
+        {
+          class: "btn block",
+          type: "button",
+          onClick: async () => {
+            await chrome.tabs.update(tab.id, { muted: !tab.mutedInfo?.muted });
+            toast(tab.mutedInfo?.muted ? "已取消静音" : "已静音");
+            if (reload) reload();
+          },
+        },
+        icon("volume"),
+        tab.mutedInfo?.muted ? "取消静音" : "静音标签页"
+      )
+    )
+  );
+  return box;
+}
+
+async function renderTabsTool(header, toast, reload, confirmDelete) {
+  const [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  const windowId = active?.windowId ?? (await chrome.windows.getCurrent()).id;
+  const tabs = await chrome.tabs.query({ windowId });
+  const byUrl = new Map();
+  for (const tab of tabs) {
+    const key = tab.url || `id:${tab.id}`;
+    if (!byUrl.has(key)) byUrl.set(key, []);
+    byUrl.get(key).push(tab);
+  }
+  const duplicateCount = [...byUrl.values()].reduce((sum, group) => sum + Math.max(0, group.length - 1), 0);
+
+  const box = el(
+    "div",
+    { class: "stack" },
+    header("标签页"),
+    el(
+      "div",
+      { class: "row spread" },
+      el("span", { class: "badge" }, `${tabs.length} 个标签`),
+      duplicateCount ? el("span", { class: "badge" }, `${duplicateCount} 个重复`) : el("span", { class: "badge ok" }, "无重复")
+    ),
+    el(
+      "button",
+      {
+        class: "btn danger block",
+        type: "button",
+        disabled: !duplicateCount,
+        onClick: async () => {
+          const ids = [];
+          for (const group of byUrl.values()) {
+            const sorted = [...group].sort((a, b) => Number(b.active) - Number(a.active) || b.id - a.id);
+            ids.push(...sorted.slice(1).map((item) => item.id));
+          }
+          if (!ids.length) return;
+          const ok = confirmDelete
+            ? await confirmDelete(`将关闭 ${ids.length} 个重复标签页，确定继续吗？`)
+            : window.confirm(`将关闭 ${ids.length} 个重复标签页，确定继续吗？`);
+          if (!ok) return;
+          await chrome.tabs.remove(ids);
+          toast(`已关闭 ${ids.length} 个重复标签`);
+          if (reload) reload();
+        },
+      },
+      icon("trash"),
+      "关闭重复标签页"
+    ),
+    el(
+      "div",
+      { class: "tab-list" },
+      tabs.map((tab) =>
+        el(
+          "button",
+          {
+            class: "item-row tab-item",
+            type: "button",
+            onClick: () => chrome.tabs.update(tab.id, { active: true }),
+          },
+          faviconImg(tab.url, tab.favIconUrl),
+          el("div", { class: "item-main" }, el("strong", {}, tab.title || "无标题"), el("small", {}, tab.url || ""))
+        )
+      )
+    )
+  );
+  return box;
+}
+
+function renderJsonTool(header, toast) {
+  const source = el("textarea", { class: "textarea tall", id: "json-source", placeholder: '{ "hello": "world" }' });
+  const result = el("pre", { class: "result", id: "json-result" });
+  const run = (pretty) => {
+    try {
+      const parsed = JSON.parse(source.value);
+      result.classList.remove("error");
+      result.textContent = pretty ? JSON.stringify(parsed, null, 2) : JSON.stringify(parsed);
+    } catch (error) {
+      result.classList.add("error");
+      result.textContent = error instanceof Error ? error.message : "JSON 解析失败";
+    }
+  };
+  source.value = '{\n  "hello": "world"\n}';
+  run(true);
+  return el(
+    "div",
+    { class: "stack" },
+    header("JSON 格式化"),
+    el("div", { class: "field" }, el("label", {}, "输入 JSON"), source),
+    el(
+      "div",
+      { class: "row" },
+      el("button", { class: "btn primary", type: "button", onClick: () => run(true) }, "格式化"),
+      el("button", { class: "btn", type: "button", onClick: () => run(false) }, "压缩"),
+      el(
+        "button",
+        {
+          class: "btn",
+          type: "button",
+          onClick: async () => {
+            await navigator.clipboard.writeText(result.textContent || source.value);
+            toast("已复制结果");
+          },
+        },
+        icon("copy"),
+        "复制"
+      )
+    ),
+    result
+  );
+}
+
+function renderUrlTool(header, toast, initialUrl) {
+  const source = el("textarea", { class: "textarea", id: "url-source", placeholder: "https://example.com/path?q=hello+world" });
+  if (initialUrl) source.value = initialUrl;
+  const result = el("pre", { class: "result", id: "url-result" });
+  const write = (text, isError = false) => {
+    result.classList.toggle("error", isError);
+    result.textContent = text;
+  };
+  const parse = () => {
+    try {
+      const url = new URL(source.value.trim());
+      const params = [...url.searchParams.entries()].map(([key, value]) => `${key} = ${value}`).join("\n") || "(无查询参数)";
+      write(`${url.href}\n\nhost: ${url.host}\npath: ${url.pathname}\n\n${params}`);
+    } catch (error) {
+      write(error instanceof Error ? error.message : "URL 无效", true);
+    }
+  };
+  return el(
+    "div",
+    { class: "stack" },
+    header("URL 工具"),
+    el("div", { class: "field" }, el("label", {}, "输入 URL"), source),
+    el(
+      "div",
+      { class: "row" },
+      el("button", { class: "btn primary", type: "button", onClick: parse }, "解析"),
+      el(
+        "button",
+        {
+          class: "btn",
+          type: "button",
+          onClick: () => write(decodeURIComponent(source.value.trim())),
+        },
+        "解码"
+      ),
+      el(
+        "button",
+        {
+          class: "btn",
+          type: "button",
+          onClick: () => write(encodeURIComponent(source.value.trim())),
+        },
+        "编码"
+      ),
+      el(
+        "button",
+        {
+          class: "btn",
+          type: "button",
+          onClick: async () => {
+            await navigator.clipboard.writeText(result.textContent);
+            toast("已复制结果");
+          },
+        },
+        icon("copy"),
+        "复制"
+      )
+    ),
+    result
+  );
+}
+
+function renderTimeTool(header, toast) {
+  const input = el("input", { class: "input", id: "time-input", placeholder: "1710000000 或 2026-03-09 12:00:00" });
+  const result = el("pre", { class: "result" });
+  const show = (date) => {
+    if (Number.isNaN(date.getTime())) {
+      result.classList.add("error");
+      result.textContent = "无法解析时间";
+      return;
+    }
+    result.classList.remove("error");
+    result.textContent = [
+      `本地: ${date.toLocaleString("zh-CN")}`,
+      `ISO: ${date.toISOString()}`,
+      `秒: ${Math.floor(date.getTime() / 1000)}`,
+      `毫秒: ${date.getTime()}`,
+    ].join("\n");
+  };
+  const convert = () => {
+    const text = input.value.trim();
+    if (!text) {
+      show(new Date());
+      return;
+    }
+    if (/^\d{10}$/.test(text)) show(new Date(Number(text) * 1000));
+    else if (/^\d{13}$/.test(text)) show(new Date(Number(text)));
+    else show(new Date(text));
+  };
+  show(new Date());
+  return el(
+    "div",
+    { class: "stack" },
+    header("时间戳"),
+    el("div", { class: "field" }, el("label", {}, "时间戳或日期"), input),
+    el(
+      "div",
+      { class: "row" },
+      el("button", { class: "btn primary", type: "button", onClick: convert }, "转换"),
+      el(
+        "button",
+        {
+          class: "btn",
+          type: "button",
+          onClick: () => {
+            input.value = String(Math.floor(Date.now() / 1000));
+            convert();
+          },
+        },
+        "现在"
+      ),
+      el(
+        "button",
+        {
+          class: "btn",
+          type: "button",
+          onClick: async () => {
+            await navigator.clipboard.writeText(result.textContent);
+            toast("已复制结果");
+          },
+        },
+        icon("copy"),
+        "复制"
+      )
+    ),
+    result
+  );
+}
+
+async function renderSyncTool(header, toast, reload) {
+  const meta = await loadSyncMeta();
+  const base = await getApiBase();
+  const status = meta.connected
+    ? `已连接 ${base}${meta.lastSyncAt ? ` · 上次同步 ${formatDateTime(meta.lastSyncAt)}` : ""}`
+    : meta.error || `未连接 ${base}`;
+  return el(
+    "div",
+    { class: "stack" },
+    header("后端同步"),
+    el("p", { class: "muted" }, "后端地址和访问令牌在底部设置里修改。"),
+    el("p", { class: "muted" }, status),
+    el(
+      "button",
+      {
+        class: "btn block",
+        type: "button",
+        onClick: async () => {
+          const ok = await isBackendAvailable(true);
+          toast(ok ? "后端可用" : "连不上后端，请确认 leon_workflow 已启动");
+          if (reload) reload();
+        },
+      },
+      "测试连接"
+    )
+  );
+}
+
+function renderDataTool(header, toast, reload) {
+  const file = el("input", { type: "file", accept: "application/json,.json", style: { display: "none" } });
+  file.addEventListener("change", async () => {
+    const picked = file.files?.[0];
+    if (!picked) return;
+    try {
+      const count = await importJson(await picked.text());
+      toast(`已导入 ${count} 个集合`);
+      if (reload) reload();
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "导入失败");
+    }
+    file.value = "";
+  });
+  return el(
+    "div",
+    { class: "stack" },
+    header("导入导出"),
+    el("p", { class: "muted" }, "导出当前集合缓存；导入需要连接 Leon Workflow 后端。"),
+    el(
+      "button",
+      {
+        class: "btn primary block",
+        type: "button",
+        onClick: async () => {
+          const text = await exportJson();
+          const blob = new Blob([text], { type: "application/json" });
+          const url = URL.createObjectURL(blob);
+          const stamp = new Date().toISOString().slice(0, 10);
+          const link = el("a", { href: url, download: `my-workflow-collections-${stamp}.json` });
+          document.body.append(link);
+          link.click();
+          link.remove();
+          URL.revokeObjectURL(url);
+          toast("已导出集合");
+        },
+      },
+      icon("download"),
+      "导出集合 JSON"
+    ),
+    el(
+      "button",
+      {
+        class: "btn block",
+        type: "button",
+        onClick: () => file.click(),
+      },
+      icon("upload"),
+      "导入集合 JSON"
+    ),
+    file
+  );
+}

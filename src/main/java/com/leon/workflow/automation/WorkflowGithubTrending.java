@@ -79,8 +79,7 @@ public class WorkflowGithubTrending {
         } catch (IllegalArgumentException error) {
             if (Thread.currentThread().isInterrupted()) throw new InterruptedException();
             trace.accept("GitHub Trending 抓取失败，尝试 GitStock 榜单快照。");
-            var snapshotResponse = http.executeResolved(Map.of("url", "https://gitstock.org/api/v1/github/trending?period=" + SOURCES.get(source), "method", "GET",
-                    "timeoutMs", Math.min(15_000, remaining(deadline)), "headers", Map.of("Accept", "application/json", "User-Agent", "LeonWorkflow/1.0")), privacy);
+            var snapshotResponse = fetchSnapshot(SOURCES.get(source), privacy, deadline, trace);
             var snapshot = parseSnapshot(object(body(snapshotResponse)), SOURCES.get(source), limit);
             page = snapshot.page(); snapshotTime = snapshot.capturedAt();
             trace.accept("使用 GitStock 榜单快照；采集时间=" + snapshotTime + "；榜单项目=" + page.total() + "；待分析=" + page.projects().size());
@@ -115,6 +114,25 @@ public class WorkflowGithubTrending {
         }
         trace.accept("DeepSeek 分析与项目对应校验完成；" + WorkflowDiagnostics.lengths(output));
         return output;
+    }
+    private Map<String, Object> fetchSnapshot(String period, WorkflowPrivacy privacy, long deadline, Consumer<String> trace) throws Exception {
+        for (int attempt = 1; attempt <= 3; attempt++) {
+            if (Thread.currentThread().isInterrupted()) throw new InterruptedException();
+            trace.accept("请求 GitStock 榜单快照；第 " + attempt + " 次，最多 3 次");
+            try {
+                return http.executeResolved(Map.of("url", "https://gitstock.org/api/v1/github/trending?period=" + period, "method", "GET",
+                        "timeoutMs", Math.min(15_000, remaining(deadline)), "headers", Map.of("Accept", "application/json", "User-Agent", "LeonWorkflow/1.0")), privacy);
+            } catch (IllegalArgumentException error) {
+                String message = Objects.requireNonNullElse(error.getMessage(), "请求失败");
+                boolean transientFailure = message.startsWith("HTTP 请求未完成：")
+                        && !message.contains("目标地址不允许访问") && !message.contains("TLS 证书校验失败");
+                trace.accept("GitStock 第 " + attempt + " 次请求失败：" + privacy.message(message.replace("\n写操作请确认对端结果后重试。", "")));
+                if (!transientFailure || attempt == 3) throw new IllegalArgumentException("GitStock 榜单快照请求失败：" + message.replace("\n写操作请确认对端结果后重试。", ""));
+                if (remaining(deadline) <= 500) throw new IllegalArgumentException("GitHub Trending 分析超时，备用快照尚未获取，请稍后重试");
+                Thread.sleep(400);
+            }
+        }
+        throw new IllegalStateException("无法获取榜单快照");
     }
     private record Snapshot(Page page, Instant capturedAt) {}
     private static Snapshot parseSnapshot(Map<String, Object> data, String period, int limit) {
