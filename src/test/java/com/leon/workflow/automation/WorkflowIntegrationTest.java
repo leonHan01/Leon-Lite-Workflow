@@ -40,6 +40,10 @@ class WorkflowIntegrationTest {
                 exchange.getResponseHeaders().add("Content-Type", "application/json"); exchange.sendResponseHeaders(200, body.length); exchange.getResponseBody().write(body); exchange.close();
             });
             server.createContext("/skipped", exchange -> { skippedRequests.incrementAndGet(); exchange.sendResponseHeaders(204, -1); exchange.close(); });
+            server.createContext("/echo", exchange -> {
+                byte[] body = exchange.getRequestBody().readAllBytes();
+                exchange.getResponseHeaders().add("Content-Type", "application/json"); exchange.sendResponseHeaders(200, body.length); exchange.getResponseBody().write(body); exchange.close();
+            });
             server.createContext("/redirect", exchange -> { exchange.getResponseHeaders().add("Location", "/skipped"); exchange.sendResponseHeaders(302, -1); exchange.close(); });
             server.createContext("/large", exchange -> { byte[] body = new byte[MAX_BYTES + 1]; Arrays.fill(body, (byte)'a'); exchange.sendResponseHeaders(200, body.length); try { exchange.getResponseBody().write(body); } catch (Exception ignored) {} exchange.close(); });
             server.start(); base = "http://127.0.0.1:" + server.getAddress().getPort();
@@ -50,6 +54,7 @@ class WorkflowIntegrationTest {
     @Autowired WebApplicationContext context;
     @Autowired WorkflowStore store;
     @Autowired WorkflowEngine engine;
+    @Autowired WorkflowHttp http;
     @Autowired WorkflowSchedules schedules;
     @Autowired WorkflowScheduler scheduler;
     @Autowired JdbcTemplate jdbc;
@@ -234,6 +239,22 @@ class WorkflowIntegrationTest {
         String encrypted = jdbc.queryForObject("SELECT encrypted FROM automation_credential WHERE id=?", String.class, created.get("id"));
         assertNotNull(encrypted); assertFalse(encrypted.contains("example-credential-value"));
         mvc.perform(get("/api/workflows/credentials").cookie(cookie)).andExpect(status().isOk()).andExpect(jsonPath("$[0].value").doesNotExist());
+    }
+    @Test void feishuCredentialsAreEncryptedAndOnlyMetadataIsReturnedByTheApi() throws Exception {
+        String url = "https://open.feishu.cn/open-apis/bot/v2/hook/integration-example", secret = "integration-feishu-secret";
+        var created = request(post("/api/workflows/credentials").content(write(Map.of("name", "飞书测试机器人", "kind", "feishu", "value", Map.of("webhookUrl", url, "secret", secret)))));
+        assertEquals(Set.of("id", "name", "kind"), created.keySet()); assertEquals("feishu", created.get("kind"));
+        String encrypted = jdbc.queryForObject("SELECT encrypted FROM automation_credential WHERE id=?", String.class, created.get("id"));
+        assertNotNull(encrypted); assertFalse(encrypted.contains(url)); assertFalse(encrypted.contains(secret));
+        String listed = mvc.perform(get("/api/workflows/credentials").cookie(cookie)).andExpect(status().isOk()).andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        assertFalse(listed.contains(url)); assertFalse(listed.contains(secret)); assertFalse(listed.contains("webhookUrl"));
+        mvc.perform(post("/api/workflows/credentials").cookie(cookie).header("Origin", "https://example.test").header("X-Requested-With", "XMLHttpRequest").contentType(MediaType.APPLICATION_JSON)
+                .content(write(Map.of("name", "无效地址", "kind", "feishu", "value", Map.of("webhookUrl", "http://127.0.0.1/hook"))))).andExpect(status().isBadRequest());
+    }
+    @Test void typedNodeTransportPreservesLiteralTemplateTextAfterResolution() throws Exception {
+        var body = Map.of("content", Map.of("text", "{{ input.items[0].json.literal }}"));
+        var response = http.executeResolved(Map.of("url", base + "/echo", "method", "POST", "body", body), new WorkflowPrivacy());
+        assertEquals(body, object(object(((List<?>)response.get("items")).getFirst()).get("json")).get("body"));
     }
     @Test void marksInterruptedRunsFailedWithoutReplayingThemOnRestart() {
         var graph = WorkflowGraph.initial(); var workflow = createPublished(graph);

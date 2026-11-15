@@ -29,8 +29,16 @@ public class WorkflowHttp {
         for (String origin : origins.split(",")) if (!origin.isBlank()) privateOrigins.add(origin(URI.create(origin.trim())));
     }
     public Map<String, Object> execute(Map<String, Object> config, Map<String, Object> input, Map<String, Object> ctx, WorkflowPrivacy privacy) throws Exception {
+        Map<String, Object> resolved = new LinkedHashMap<>(config);
+        resolved.put("url", WorkflowExpressions.resolve(config.get("url"), input, ctx));
+        resolved.put("headers", WorkflowExpressions.resolve(config.getOrDefault("headers", Map.of()), input, ctx));
+        resolved.put("body", WorkflowExpressions.resolve(config.get("body"), input, ctx));
+        return executeResolved(resolved, privacy);
+    }
+    /** Typed nodes resolve their message templates once, before handing off to this transport. */
+    Map<String, Object> executeResolved(Map<String, Object> config, WorkflowPrivacy privacy) throws Exception {
         URI uri;
-        try { uri = URI.create(text(WorkflowExpressions.resolve(config.get("url"), input, ctx))); }
+        try { uri = URI.create(text(config.get("url"))); }
         catch (IllegalArgumentException e) { throw new IllegalArgumentException("HTTP 地址格式无效"); }
         if (!Set.of("http", "https").contains(text(uri.getScheme())) || uri.getHost() == null || uri.getUserInfo() != null || uri.getFragment() != null)
             throw new IllegalArgumentException("仅支持不含用户名、密码及片段的 HTTP/HTTPS 地址");
@@ -49,13 +57,13 @@ public class WorkflowHttp {
         var manager = PoolingHttpClientConnectionManagerBuilder.create().setDnsResolver(dns)
                 .setDefaultConnectionConfig(ConnectionConfig.custom().setConnectTimeout(Timeout.ofMilliseconds(timeout)).setSocketTimeout(Timeout.ofMilliseconds(timeout)).build()).build();
         var request = new HttpUriRequestBase(text(config.getOrDefault("method", "GET")), uri);
-        Map<String, Object> headers = object(WorkflowExpressions.resolve(config.getOrDefault("headers", Map.of()), input, ctx));
+        Map<String, Object> headers = object(config.getOrDefault("headers", Map.of()));
         privacy.collect(headers);
         for (var h : headers.entrySet()) header(request, h.getKey(), text(h.getValue()));
         Map<String, String> secretHeaders = credentials.headers(text(config.get("credentialId")), privacy);
         for (var h : secretHeaders.entrySet()) header(request, h.getKey(), h.getValue());
         if (!secretHeaders.isEmpty() && !"https".equals(uri.getScheme())) throw new IllegalArgumentException("使用凭据的请求必须使用 HTTPS");
-        Object body = WorkflowExpressions.resolve(config.get("body"), input, ctx);
+        Object body = config.get("body");
         if (body != null && !Set.of("GET", "HEAD").contains(request.getMethod())) {
             byte[] bytes = (body instanceof String s ? s : write(body)).getBytes(StandardCharsets.UTF_8);
             if (bytes.length > MAX_BYTES) throw new IllegalArgumentException("HTTP 请求体不能超过 1 MB");

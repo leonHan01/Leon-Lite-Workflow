@@ -28,10 +28,10 @@ const server = http.createServer(async (req, res) => {
         }
         if (route === '/capabilities') return reply({ runtimes: { javascript: 'GraalJS', groovy: 'Groovy' }, sandbox: 'macOS Sandbox', credentialsEnabled: true });
         if (route === '/credentials') {
-            if (req.method === 'POST') { const value = { id: 'credential-1', name: data.name, kind: data.kind }; credentials.push(value); return reply(value); }
+            if (req.method === 'POST') { const value = { id: 'credential-' + (credentials.length + 1), name: data.name, kind: data.kind }; credentials.push(value); return reply(value); }
             return reply(credentials);
         }
-        if (route === '/test-node') return reply({ output: { items: [{ json: { name: 'LEON' } }] }, logs: '调试完成', durationMs: 22, branch: '' });
+        if (route === '/test-node') return reply({ output: data.node.type === 'feishu' ? data.input : { items: [{ json: { name: 'LEON' } }] }, logs: data.node.type === 'feishu' ? '飞书消息已发送' : '调试完成', durationMs: 22, branch: '' });
         if (!route) {
             if (req.method === 'POST') workflow = { id: 'workflow-1', name: data.name, definition: initial(), revision: 1, publishedVersion: 0 };
             return reply(req.method === 'POST' ? workflow : workflow ? [workflow] : []);
@@ -63,7 +63,7 @@ const server = http.createServer(async (req, res) => {
     }
     const file = path.resolve(root, '.' + decodeURIComponent(url.pathname === '/' ? '/index.html' : url.pathname));
     if (!file.startsWith(root + path.sep)) { res.writeHead(403); return res.end(); }
-    try { res.setHeader('Content-Type', file.endsWith('.css') ? 'text/css' : file.endsWith('.js') ? 'application/javascript' : 'text/html; charset=utf-8'); res.end(fs.readFileSync(file)); }
+    try { res.setHeader('Content-Type', file.endsWith('.png') ? 'image/png' : file.endsWith('.css') ? 'text/css' : file.endsWith('.js') ? 'application/javascript' : 'text/html; charset=utf-8'); res.end(fs.readFileSync(file)); }
     catch { res.writeHead(404); res.end(); }
 });
 (async () => {
@@ -82,6 +82,47 @@ const server = http.createServer(async (req, res) => {
         assert.equal(await page.locator('[data-node="start"] .wf-port-in').count(), 0);
         assert.equal(await page.locator('[data-node="end"] .wf-port-out').count(), 0);
         assert.equal(await page.locator('[data-action="delete-node"]').count(), 0);
+        await page.locator('[data-add="feishu"]').click();
+        await page.locator('[data-action="feishu-credentials"]').click();
+        await page.waitForSelector('[data-credentials-dialog][open]');
+        const credentialForm = page.locator('[data-credential-form]');
+        assert.equal(await credentialForm.locator('[name="kind"]').inputValue(), 'feishu');
+        assert.equal(await credentialForm.locator('[name="secret"]').isDisabled(), true);
+        assert.equal(await credentialForm.locator('[name="webhookUrl"]').isVisible(), true);
+        await credentialForm.locator('[name="name"]').fill('飞书测试机器人');
+        await credentialForm.locator('[name="webhookUrl"]').fill('https://open.feishu.cn/open-apis/bot/v2/hook/browser-example');
+        await credentialForm.locator('[name="feishuSecret"]').fill('browser-test-signing-secret');
+        await page.getByRole('button', {name:'保存凭据',exact:true}).click();
+        await page.waitForSelector('.wf-credential-row');
+        assert.equal(await credentialForm.locator('[name="webhookUrl"]').inputValue(), '');
+        assert.equal(await credentialForm.locator('[name="feishuSecret"]').inputValue(), '');
+        await page.locator('[data-close="credentials"]').click();
+        assert.equal(await page.locator('[data-field="credentialId"]').inputValue(), 'credential-1');
+        assert.equal(await page.locator('[data-feishu-title]').isVisible(), false);
+        const message = '通知：{{ input.items[0].json.name }}';
+        await page.getByRole('textbox', {name:'飞书消息内容',exact:true}).fill(message);
+        await page.locator('[data-field="messageType"]').selectOption('card');
+        assert.equal(await page.locator('[data-feishu-title]').isVisible(), true);
+        await page.locator('[data-field="title"]').fill('工作流测试通知');
+        await page.locator('[data-field="messageType"]').selectOption('text');
+        assert.equal(await page.getByRole('textbox', {name:'飞书消息内容',exact:true}).inputValue(), message);
+        await page.locator('[data-field="messageType"]').selectOption('card');
+        assert.equal(await page.locator('[data-field="title"]').inputValue(), '工作流测试通知');
+        await page.getByRole('button', {name:'保存草稿',exact:true}).click();
+        await page.waitForFunction(() => document.querySelector('[data-version]').textContent.includes('草稿已保存'));
+        const feishu = workflow.definition.nodes.find(n => n.type === 'feishu');
+        assert.deepEqual(feishu.config, {credentialId:'credential-1',messageType:'card',title:'工作流测试通知',text:message,timeoutMs:10000});
+        assert.ok(!JSON.stringify(workflow).includes('browser-example'));
+        assert.ok(!JSON.stringify(workflow).includes('browser-test-signing-secret'));
+        const feishuImage = page.locator(`[data-node="${feishu.id}"] .wf-feishu img`);
+        await feishuImage.evaluate(img => img.decode());
+        assert.equal(await feishuImage.evaluate(img => img.naturalWidth), 200);
+        await page.getByRole('button', {name:'发送测试消息',exact:true}).click();
+        await page.waitForFunction(() => document.querySelector('[data-run-detail]').textContent.includes('飞书消息已发送'));
+        await page.evaluate(() => { window.scrollTo(0,0); document.querySelector('.wf-inspector').scrollTop = 0; });
+        await page.screenshot({path:'/private/tmp/leon-workflow-feishu-node.png',fullPage:false});
+        await page.getByRole('button', {name:'删除节点',exact:true}).click();
+        assert.equal(await page.locator('[data-node]').count(), 2);
         await page.locator('[data-add="javascript"]').click();
         await page.locator('[data-add="if"]').click();
         await page.getByRole('button', { name: '保存草稿', exact: true }).click();
@@ -280,7 +321,7 @@ const server = http.createServer(async (req, res) => {
         await page.locator('[data-credential-form] [name="name"]').fill('演示凭据');
         await page.locator('[data-credential-form] [name="secret"]').fill('example-only');
         await page.getByRole('button', { name: '保存凭据', exact: true }).click();
-        await page.waitForSelector('.wf-credential-row');
+        await page.waitForFunction(() => document.querySelectorAll('.wf-credential-row').length === 2);
         await page.locator('[data-close="credentials"]').click();
         await page.getByRole('textbox', { name: '工作流名称', exact: true }).fill('未保存草稿');
         await page.locator('.lw-sidebar').getByRole('link', { name: '总览', exact: true }).click();
@@ -327,6 +368,6 @@ const server = http.createServer(async (req, res) => {
         assert.equal(await page.locator('body').evaluate(e=>e.classList.contains('wf-focus-open')),false);
         assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+2),false,'移动端编排界面横向溢出');
         assert.deepEqual(errors, []);
-        console.log('Workflow browser checks passed: canvas, languages, scheduling preview/save/pause, instances filtering/pagination/cancel, navigation and mobile.');
+        console.log('Workflow browser checks passed: Feishu icon/credentials/text/card configuration, canvas, languages, scheduling, instances, navigation and mobile.');
     } finally { await browser.close(); server.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; server.close(); });

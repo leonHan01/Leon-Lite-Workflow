@@ -3,7 +3,8 @@ const templates = {
     javascript: `function main(input, ctx) {\n  return {\n    items: input.items.map(item => ({\n      json: { ...item.json, name: String(item.json.name ?? '').toUpperCase() }\n    }))\n  };\n}`,
     groovy: `def main(Map input, Map ctx) {\n    return [items: input.items.collect { item ->\n        [json: item.json + [name: (item.json.name ?: '').toUpperCase()]]\n    }]\n}`,
 };
-const labels = { start: '开始', end: '结束', http: 'HTTP 请求', script: '脚本', if: '条件判断' };
+const labels = { start: '开始', end: '结束', http: 'HTTP 请求', script: '脚本', if: '条件判断', feishu: '飞书消息' };
+const feishuIcon = '<img src="/workspace/icons/feishu.png" alt="" aria-hidden="true">';
 const statuses = { QUEUED: '排队中', PENDING: '等待', RUNNING: '运行中', SUCCEEDED: '成功', FAILED: '失败', CANCELLED: '已取消', SKIPPED: '已跳过' };
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const pretty = value => JSON.stringify(value, null, 2);
@@ -87,6 +88,9 @@ export function mount(pane, workspace) {
             node.config.body = parseValue(get('body'));
         } else if (node.type === 'if') {
             node.config.left = parseValue(get('left')); node.config.right = parseValue(get('right')); node.config.operator = get('operator');
+        } else if (node.type === 'feishu') {
+            node.config.credentialId = get('credentialId'); node.config.messageType = get('messageType');
+            node.config.title = get('title') ?? node.config.title; node.config.text = get('text'); node.config.timeoutMs = Number(get('timeoutMs'));
         }
     }
     function parseValue(value) {
@@ -109,8 +113,8 @@ export function mount(pane, workspace) {
     }
     function nodeStyle(node) {
         const requested = node.type === 'script' ? (node.config?.language === 'groovy' ? 'groovy' : 'script') : node.type;
-        const kind = ['start', 'end', 'http', 'script', 'groovy', 'if'].includes(requested) ? requested : 'script';
-        return { kind, icon: ({ start: '▶', end: '■', http: '↗', script: 'JS', groovy: 'G', if: '⑂' })[kind], label: node.type === 'script' ? (node.config.language === 'groovy' ? 'Groovy' : 'JavaScript') : labels[node.type] };
+        const kind = ['start', 'end', 'http', 'script', 'groovy', 'if', 'feishu'].includes(requested) ? requested : 'script';
+        return { kind, icon: ({ start: '▶', end: '■', http: '↗', script: 'JS', groovy: 'G', if: '⑂', feishu: feishuIcon })[kind], label: node.type === 'script' ? (node.config.language === 'groovy' ? 'Groovy' : 'JavaScript') : labels[node.type] };
     }
     function renderCanvas() {
         if (!graph) return;
@@ -240,7 +244,7 @@ export function mount(pane, workspace) {
         if (node.type === 'http') {
             content += field('请求方法', select('method', c.method || 'GET', ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'].map(v => [v, v])));
             content += field('请求地址', inputField('url', c.url, 'placeholder="https://example.com/api"'));
-            content += field('凭据', select('credentialId', c.credentialId || '', [['', '不使用凭据'], ...credentials.map(v => [v.id, v.name])]));
+            content += field('凭据', select('credentialId', c.credentialId || '', [['', '不使用凭据'], ...credentials.filter(v => v.kind !== 'feishu').map(v => [v.id, v.name])]));
             content += field('Headers（JSON）', `<textarea data-field="headers" spellcheck="false">${esc(pretty(c.headers || {}))}</textarea>`);
             content += field('Body（JSON 或文本）', `<textarea data-field="body" spellcheck="false">${esc(displayValue(c.body))}</textarea>`);
             content += '<p class="wf-help">字段可引用 {{ input.items[0].json.name }}。凭据通过上方“管理凭据”保存。请求不会自动重试或跟随重定向。</p>';
@@ -252,9 +256,17 @@ export function mount(pane, workspace) {
             content += field('右侧值（支持 JSON）', inputField('right', displayValue(c.right)));
             content += '<p class="wf-help">例如：左侧 {{ input.items[0].json.amount }}，条件“大于或等于”，右侧 100。</p>';
         }
-        if (['http', 'script'].includes(node.type)) content += field('超时（毫秒，100–30000）', inputField('timeoutMs', c.timeoutMs || 10000, 'type="number" min="100" max="30000" step="100"'));
+        if (node.type === 'feishu') {
+            content += field('飞书机器人', select('credentialId', c.credentialId || '', [['', '请选择机器人凭据'], ...credentials.filter(v => v.kind === 'feishu').map(v => [v.id, v.name])]));
+            content += '<button type="button" data-action="feishu-credentials">添加飞书机器人</button>';
+            content += field('消息类型', select('messageType', c.messageType || 'text', [['text', '文本'], ['card', 'Markdown 卡片']]));
+            content += `<label data-feishu-title ${c.messageType === 'card' ? '' : 'hidden'}>卡片标题${inputField('title', c.title || '工作流通知', 'maxlength="200"')}</label>`;
+            content += field('消息内容', `<textarea aria-label="飞书消息内容" data-field="text" rows="5" maxlength="20480" spellcheck="false">${esc(c.text)}</textarea>`);
+            content += '<p class="wf-help">可引用 {{ input.items[0].json.name }} 等上游字段。每次执行发送一条消息，成功后继续传递原输入。调试和运行会真实发送消息。</p>';
+        }
+        if (['http', 'script', 'feishu'].includes(node.type)) content += field('超时（毫秒，100–30000）', inputField('timeoutMs', c.timeoutMs || 10000, 'type="number" min="100" max="30000" step="100"'));
         if (node.type !== 'end') content += `<h3 class="wf-section-label">连接出口</h3>${connectionFields(node)}`;
-        content += `<div class="wf-node-actions"><button type="button" data-action="test">调试此节点</button>${!['start', 'end'].includes(node.type) ? '<button type="button" class="wf-danger" data-action="delete-node">删除节点</button>' : ''}</div>`;
+        content += `<div class="wf-node-actions"><button type="button" data-action="test">${node.type === 'feishu' ? '发送测试消息' : '调试此节点'}</button>${!['start', 'end'].includes(node.type) ? '<button type="button" class="wf-danger" data-action="delete-node">删除节点</button>' : ''}</div>`;
         $('[data-inspector]').innerHTML = `<h2>${esc(style.label)}</h2><div class="wf-node-id">${esc(node.id)}</div>${content}`;
         highlight(); controls();
     }
@@ -330,6 +342,7 @@ export function mount(pane, workspace) {
         const type = ['javascript', 'groovy'].includes(kind) ? 'script' : kind;
         const config = type === 'script' ? { language: kind, source: templates[kind], sources: { [kind]: templates[kind] }, params: {}, timeoutMs: 10000 }
             : type === 'http' ? { method: 'GET', url: '', headers: {}, body: null, timeoutMs: 10000, failOnHttpError: true }
+            : type === 'feishu' ? { credentialId: credentials.find(v => v.kind === 'feishu')?.id || '', messageType: 'text', title: '工作流通知', text: '工作流通知：{{ input.items[0].json.name }}', timeoutMs: 10000 }
             : { left: '{{ input.items[0].json.amount }}', operator: 'gte', right: 100 };
         const node = { id, type, name: kind === 'groovy' ? 'Groovy 脚本' : kind === 'javascript' ? 'JavaScript 脚本' : labels[type], config,
             position: { x: Math.min(MAX_POSITION - 300, (parent?.position?.x || 60) + 280), y: parent?.position?.y || 140 } };
@@ -382,9 +395,19 @@ export function mount(pane, workspace) {
         }
     }
     function credentialList() {
-        $('[data-credential-list]').innerHTML = credentials.length ? credentials.map(c => `<div class="wf-credential-row"><span>${esc(c.name)} <small class="wf-muted">${esc(c.kind)}</small></span><button type="button" data-delete-credential="${esc(c.id)}">删除</button></div>`).join('') : '<p class="wf-muted">尚未保存凭据</p>';
+        $('[data-credential-list]').innerHTML = credentials.length ? credentials.map(c => `<div class="wf-credential-row"><span>${esc(c.name)} <small class="wf-muted">${esc(c.kind === 'feishu' ? '飞书机器人' : c.kind)}</small></span><button type="button" data-delete-credential="${esc(c.id)}">删除</button></div>`).join('') : '<p class="wf-muted">尚未保存凭据</p>';
         $('[data-credential-form] button[type="submit"]').disabled = !capabilities.credentialsEnabled;
         $('[data-credential-hint]').textContent = capabilities.credentialsEnabled ? '凭据仅用于 HTTPS 请求。' : '凭据存储尚未启用，请联系管理员配置后使用。';
+        credentialFields();
+    }
+    function credentialFields() {
+        const form = $('[data-credential-form]'), kind = form.elements.kind.value, isFeishu = kind === 'feishu';
+        $('[data-credential-user]').hidden = !['basic', 'header'].includes(kind);
+        $('[data-credential-secret]').hidden = isFeishu;
+        $('[data-credential-feishu]').hidden = !isFeishu;
+        form.elements.secret.disabled = isFeishu; form.elements.secret.required = !isFeishu;
+        form.elements.webhookUrl.disabled = !isFeishu; form.elements.webhookUrl.required = isFeishu;
+        form.elements.feishuSecret.disabled = !isFeishu;
     }
     async function refreshSchedule() {
         const id = workflow?.id; if (!id) return;
@@ -435,6 +458,7 @@ export function mount(pane, workspace) {
         versions: async () => { const versions = await api('/' + workflow.id + '/versions'); $('[data-run-detail]').innerHTML = '<h3>发布版本记录</h3>' + versions.map(v => `<details><summary>v${v.version}<small>${esc(date(v.createdAt))}</small></summary><pre>${esc(pretty(v.runtimes))}</pre></details>`).join(''); },
         example,
         credentials: async () => { credentials = await api('/credentials'); credentialList(); $('[data-credentials-dialog]').showModal(); },
+        'feishu-credentials': async () => { credentials = await api('/credentials'); $('[data-credential-form]').elements.kind.value = 'feishu'; credentialList(); $('[data-credentials-dialog]').showModal(); $('[data-credential-form]').elements.name.focus(); },
     };
     pane.addEventListener('click', event => {
         const target = event.target.closest('button,[data-node],[data-edge],[data-reconnect]'); if (!target) return;
@@ -483,8 +507,9 @@ export function mount(pane, workspace) {
             $('[data-schedule-preview]').textContent = '';
         }
         if (target.matches('[data-workflows]')) { const id = target.value; if (dirty && !confirm('切换将丢弃未保存的草稿，是否继续？')) { picker(); return; } perform(() => load(id)); }
-        if (target.matches('[data-credential-form] [name="kind"]')) $('[data-credential-user]').hidden = target.value === 'bearer';
+        if (target.matches('[data-credential-form] [name="kind"]')) credentialFields();
         try {
+            if (target.matches('[data-field="messageType"]')) { commitInspector(); $('[data-feishu-title]').hidden = target.value !== 'card'; }
             if (target.matches('[data-edge-field="source"]')) {
                 const isIf = graph.nodes.find(n => n.id === target.value)?.type === 'if';
                 $('[data-edge-branch]').hidden = !isIf;
@@ -603,7 +628,15 @@ export function mount(pane, workspace) {
     });
     $('[data-credential-form]').addEventListener('submit', event => {
         event.preventDefault(); const form = event.currentTarget, data = new FormData(form), kind = data.get('kind'), secret = data.get('secret');
-        perform(async () => { const value = kind === 'bearer' ? { token: secret } : kind === 'basic' ? { username: data.get('username'), password: secret } : { header: data.get('username'), secret }; await send('/credentials', { name: data.get('name'), kind, value }); form.reset(); $('[data-credential-user]').hidden = true; credentials = await api('/credentials'); credentialList(); inspector(); notice('凭据已保存。'); });
+        perform(async () => {
+            const value = kind === 'feishu' ? { webhookUrl: data.get('webhookUrl'), secret: data.get('feishuSecret') || '' }
+                : kind === 'bearer' ? { token: secret } : kind === 'basic' ? { username: data.get('username'), password: secret } : { header: data.get('username'), secret };
+            const created = await send('/credentials', { name: data.get('name'), kind, value });
+            if (kind === 'feishu' && graph?.nodes.find(n => n.id === selected)?.type === 'feishu') {
+                commitInspector(); graph.nodes.find(n => n.id === selected).config.credentialId = created.id; markDirty();
+            }
+            form.reset(); credentials = await api('/credentials'); credentialList(); inspector(); notice('凭据已保存。');
+        });
     });
     window.addEventListener('beforeunload', event => { if (dirty) { event.preventDefault(); event.returnValue = ''; } });
     return {

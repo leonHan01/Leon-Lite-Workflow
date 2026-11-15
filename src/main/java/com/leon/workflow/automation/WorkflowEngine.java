@@ -13,12 +13,13 @@ public class WorkflowEngine {
     private final WorkflowStore store;
     private final ScriptProcessRunner scripts;
     private final WorkflowHttp http;
+    private final WorkflowFeishu feishu;
     private final ThreadPoolExecutor workers = new ThreadPoolExecutor(2, 2, 0, TimeUnit.SECONDS, new ArrayBlockingQueue<>(8),
             Thread.ofPlatform().daemon().name("workflow-", 0).factory(), new ThreadPoolExecutor.AbortPolicy());
     private final Map<String, FutureTask<Void>> tasks = new ConcurrentHashMap<>();
     public record NodeResult(Map<String, Object> output, String logs, String branch) {}
     private record PendingNode(WorkflowGraph.Node node, Map<String, Object> input) {}
-    public WorkflowEngine(WorkflowStore store, ScriptProcessRunner scripts, WorkflowHttp http) { this.store = store; this.scripts = scripts; this.http = http; }
+    public WorkflowEngine(WorkflowStore store, ScriptProcessRunner scripts, WorkflowHttp http, WorkflowFeishu feishu) { this.store = store; this.scripts = scripts; this.http = http; this.feishu = feishu; }
     public Map<String, String> runtimes() { return Map.of("javascript", "GraalJS 25.0.2", "groovy", "Groovy " + groovy.lang.GroovySystem.getVersion()); }
     public Map<String, Object> capabilities() { return Map.of("runtimes", runtimes(), "sandbox", scripts.sandbox(), "maxNodes", WorkflowGraph.MAX_NODES, "maxConcurrentRuns", 2, "scheduledExecution", true); }
     public Map<String, Object> start(String workflowId, Map<String, Object> input) {
@@ -105,6 +106,7 @@ public class WorkflowEngine {
                 yield new NodeResult(result.output(), result.logs(), "");
             }
             case "http" -> new NodeResult(envelope(http.execute(config, input, ctx, privacy)), "", "");
+            case "feishu" -> new NodeResult(feishu.execute(config, input, ctx, privacy), "飞书消息已发送", "");
             case "if" -> new NodeResult(input, "", String.valueOf(WorkflowExpressions.condition(config, input, ctx)));
             default -> throw new IllegalArgumentException("不支持的节点类型");
         };

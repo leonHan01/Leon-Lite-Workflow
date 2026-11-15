@@ -31,6 +31,12 @@ public class WorkflowCredentials {
             case "bearer" -> required(value.get("token"), "请填写访问令牌", 8192);
             case "basic" -> { required(value.get("username"), "请填写用户名", 1000); required(value.get("password"), "请填写密码", 8192); }
             case "header" -> { required(value.get("header"), "请填写 Header 名称", 100); required(value.get("secret"), "请填写 Header 值", 8192); }
+            case "feishu" -> {
+                String url = WorkflowFeishu.webhookUrl(value.get("webhookUrl"));
+                String secret = text(value.get("secret")).trim();
+                if (secret.length() > 8192) throw new IllegalArgumentException("飞书签名密钥不能超过 8192 个字符");
+                value = Map.of("webhookUrl", url, "secret", secret);
+            }
             default -> throw new IllegalArgumentException("不支持的凭据类型");
         }
         String id = UUID.randomUUID().toString();
@@ -52,9 +58,22 @@ public class WorkflowCredentials {
                 privacy.secret(text(value.get("password")));
                 header = "Basic " + Base64.getEncoder().encodeToString((text(value.get("username")) + ":" + text(value.get("password"))).getBytes(StandardCharsets.UTF_8));
             }
-            default -> { name = text(value.get("header")); header = text(value.get("secret")); }
+            case "header" -> { name = text(value.get("header")); header = text(value.get("secret")); }
+            default -> throw new IllegalArgumentException("请选择 HTTP 认证凭据；飞书机器人凭据仅用于飞书消息节点");
         }
         privacy.secret(header); return Map.of(name, header);
+    }
+    public record FeishuWebhook(String url, String secret) {}
+    public FeishuWebhook feishu(String id, WorkflowPrivacy privacy) {
+        requireKey();
+        var rows = jdbc.queryForList("SELECT kind,encrypted FROM automation_credential WHERE id=?", id);
+        if (rows.isEmpty()) throw new IllegalArgumentException("飞书机器人凭据不存在，请重新选择");
+        var row = rows.getFirst();
+        if (!"feishu".equals(row.get("kind"))) throw new IllegalArgumentException("请选择飞书机器人凭据");
+        var value = read(decrypt(id, row.get("encrypted").toString()));
+        String url = WorkflowFeishu.webhookUrl(value.get("webhookUrl")), secret = text(value.get("secret"));
+        privacy.secret(url); privacy.secret(url.substring(url.lastIndexOf('/') + 1)); privacy.secret(secret);
+        return new FeishuWebhook(url, secret);
     }
     private void requireKey() { if (key == null) throw new IllegalArgumentException("凭据存储尚未启用，请联系管理员配置加密密钥"); }
     private String encrypt(String id, String value) {
