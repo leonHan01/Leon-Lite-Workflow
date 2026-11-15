@@ -111,7 +111,7 @@ public class WorkflowHttp {
     static boolean publicAddress(InetAddress address) {
         if (address.isAnyLocalAddress() || address.isLoopbackAddress() || address.isLinkLocalAddress() || address.isSiteLocalAddress() || address.isMulticastAddress()) return false;
         byte[] b = address.getAddress(); int first = b[0] & 255;
-        if (b.length == 16) return (first & 0xe0) == 0x20 && (b[1] & 255) != 0x02
+        if (b.length == 16) return (first & 0xe0) == 0x20 && !(first == 0x20 && (b[1] & 255) == 0x02)
                 && !(first == 0x20 && (b[1] & 255) == 0x01 && (((b[2] & 255) == 0x0d && (b[3] & 255) == 0xb8) || (b[2] == 0 && b[3] == 0)));
         int second = b[1] & 255, third = b[2] & 255;
         return first != 0 && first < 224 && !(first == 100 && second >= 64 && second <= 127) && !(first == 198 && (second == 18 || second == 19))

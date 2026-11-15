@@ -170,6 +170,14 @@ class WorkflowEmailTest {
             assertTrue(socket.getInetAddress().isLoopbackAddress());
         }
     }
+    @Test void blockedSmtpAddressesReportThatNoMailWasSent() throws Exception {
+        var value = new LinkedHashMap<>(smtp(465, "ssl")); value.put("host", "127.0.0.1");
+        String id = text(credentials.create(Map.of("name", "受限地址", "kind", "smtp", "value", value)).get("id"));
+        var error = assertThrows(IllegalArgumentException.class, () -> email.execute(config(id), input(), Map.of(), new WorkflowPrivacy()));
+        assertTrue(error.getMessage().contains("邮件未发送"));
+        assertTrue(error.getMessage().contains("目标地址不允许访问"));
+        assertFalse(error.getMessage().contains("可能已收到"));
+    }
 
     /** Local protocol peer; TLS and AUTH must finish before it accepts an envelope. */
     static class SmtpServer implements AutoCloseable {

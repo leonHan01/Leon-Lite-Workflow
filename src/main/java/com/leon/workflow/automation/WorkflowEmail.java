@@ -83,8 +83,14 @@ public class WorkflowEmail {
         String body = required(resolve(config.get("body"), input, ctx), "邮件正文解析后不能为空", MAX_BYTES);
         if (body.getBytes(StandardCharsets.UTF_8).length > MAX_BYTES) throw new IllegalArgumentException("邮件正文不能超过 1 MB");
         int timeout = integer(config.get("timeoutMs"), 10_000, 100, 30_000);
+        SmtpSockets transport;
+        try { transport = sockets(text(credential.get("host"))); }
+        catch (IOException e) {
+            if (Thread.currentThread().isInterrupted()) throw new InterruptedException();
+            throw new IllegalArgumentException("邮件未发送：" + WorkflowNetworkErrors.describe(e, true, false));
+        }
         AtomicBoolean timedOut = new AtomicBoolean();
-        try (var sockets = sockets(text(credential.get("host")))) {
+        try (var sockets = transport) {
             JavaMailSenderImpl sender = sender(credential, timeout, sockets);
             MimeMessage message = sender.createMimeMessage();
             message.setFrom(addresses(text(credential.get("from")), "发件人", true)[0]);
