@@ -38,6 +38,10 @@ public class WorkflowHttp {
     }
     /** Typed nodes resolve their message templates once, before handing off to this transport. */
     Map<String, Object> executeResolved(Map<String, Object> config, WorkflowPrivacy privacy) throws Exception {
+        return executeResolved(config, privacy, 30_000);
+    }
+    /** Only built-in integrations may request longer deadlines; ordinary HTTP nodes keep their 30s limit. */
+    Map<String, Object> executeResolved(Map<String, Object> config, WorkflowPrivacy privacy, int timeoutCeiling) throws Exception {
         URI uri;
         try { uri = URI.create(text(config.get("url"))); }
         catch (IllegalArgumentException e) { throw new IllegalArgumentException("HTTP 地址格式无效"); }
@@ -55,7 +59,7 @@ public class WorkflowHttp {
         // Validate literal addresses too; an implementation may bypass the resolver for numeric hosts.
         try { dns.resolve(uri.getHost()); }
         catch (UnknownHostException error) { throw new IllegalArgumentException("HTTP 请求未完成：" + WorkflowNetworkErrors.describe(error, false, false)); }
-        int timeout = integer(config.get("timeoutMs"), 10_000, 100, 30_000);
+        int timeout = integer(config.get("timeoutMs"), 10_000, 100, timeoutCeiling);
         var manager = PoolingHttpClientConnectionManagerBuilder.create().setDnsResolver(dns)
                 .setDefaultConnectionConfig(ConnectionConfig.custom().setConnectTimeout(Timeout.ofMilliseconds(timeout)).setSocketTimeout(Timeout.ofMilliseconds(timeout)).build()).build();
         var request = new HttpUriRequestBase(text(config.getOrDefault("method", "GET")), uri);

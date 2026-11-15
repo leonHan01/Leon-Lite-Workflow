@@ -231,6 +231,12 @@ HTTPS 代理通过内部 `/auth/check` 校验管理页面和静态资源的会�
 
 填写收件人、可选抄送 / 密送、主题及纯文本或 HTML 正文；多个邮箱用逗号分隔，每封邮件最多 100 个收件人。上述内容支持 `{{ input.items[0].json.name }}` 等上游引用，只解析一次；主题和邮箱不允许换行，正文最多 1 MB。每次节点执行提交一封邮件，SMTP 接收后继续传递原输入，密送地址不写入邮件头。「发送测试邮件」也会实际发送。连接、读写和整体提交有超时限制，失败不自动重试；SMTP 接收不等于最终投递成功，失败、取消或超时后可能已有部分收件人收到，确认后再手动重跑。服务端回复可能包含认证数据，因此错误按认证、DNS、连接、超时、TLS 与邮件拒收分类，仅提取 SMTP 数字响应码，不保存原始 SMTP 回复。
 
+**GitHub Trending 分析。** 节点库中的「GitHub Trending」在服务器通过 HTTPS 抓取 `https://github.com/trending`，用 Jsoup 解析 `article.Box-row` 中的仓库名称、链接、描述、语言及 Star 信息，然后将这些结构化数据交给 DeepSeek 逐个分析项目用途和适用场景。无需 DeepSeek 联网，页面脚本不执行；网页文字作为资料处理，不作为指令。复用高级设置中的 `DEEPSEEK_API_KEY`，节点及运行输出不保存密钥。当前使用 `deepseek-flash` 和 JSON 输出模式。默认最多 25 个项目，可设置 1–25 个；不足上限时分析全部项目。默认总超时 180 秒，可设置 1–240 秒，抓取阶段最多 30 秒，沿用工作流 HTTP 的地址校验、1 MB 响应限制和不自动重试策略。榜单不可访问、解析为空或异常、分析项目遗漏 / 重复 / 顺序不符、JSON 无效或结果截断都会明确失败。
+
+输出为一个 `items[0].json`，包含 `projects`（仓库资料、`purpose`、`useCases`）、`summary`、`count`、`totalProjects`、`generatedAt`，以及准备好的 `feishuText`、`emailSubject`、`emailBody`、`emailHtml`。飞书摘要按消息字节预算收短每项说明并保留所有项目及链接，邮件保留完整说明；HTML 正文统一转义。分析根据榜单描述，资料不足会明确说明，不声称已读取源码。调试时可在弹窗预览飞书正文和邮件正文，此节点只生成内容，不发送消息。
+
+将分析节点连接到飞书、邮件节点（可以从同一出口分支到两者），在后续节点点击「使用 Trending 分析结果」即可填入正文引用：飞书使用 `{{ input.items[0].json.feishuText }}`；邮件主题和正文分别使用 `{{ input.items[0].json.emailSubject }}`、`{{ input.items[0].json.emailBody }}`。如需 HTML 邮件，将格式改为 HTML，正文改用 `{{ input.items[0].json.emailHtml }}`。后续仍需配置飞书机器人、SMTP 邮箱和收件人，再发布运行或启用定时。
+
 **定时执行。** 在工作流右上方点击「定时执行」，选择每分钟、每 5 / 15 分钟、每小时、每天 09:00、工作日 09:00，或填写六段 Cron（秒、分、时、日、月、周）。默认时区为 `Asia/Shanghai`，可使用其他 IANA 时区，预览会显示该时区下接下来 5 次执行时间。先发布工作流才能启用，启用后每次执行当时最新的已发布版本；草稿编辑不参与定时运行。定时输入单独保存，首次配置默认复制当前手动运行输入；HTTP 和飞书消息节点继续通过凭据 ID 引用加密凭据。
 
 定时配置保存在 H2，服务重启后保留。同一工作流已有排队或运行实例时，跳过本次定时执行点；暂停只停止后续触发，已有实例继续运行。服务停机错过的执行点不补跑，恢复后从下一个时间点开始。轮询使用独立线程，每秒检查一次；创建实例与推进下次执行时间在一个数据库事务内完成，防止并发轮询重复创建实例。队列已满时实例标记失败，不立即重试。`LEON_WORKFLOW_SCHEDULING_ENABLED=false` 可暂停整个工作流调度循环，默认启用；它不会启用原来独立开关控制的待办统计或日结任务。
@@ -255,7 +261,7 @@ HTTP 节点仅接受 HTTP/HTTPS；默认阻止回环、内网、链路本地、�
 
 数据保存在原有 H2 内新增的 `automation_workflow`、`automation_version`、`automation_run`、`automation_node_run`、`automation_credential`、`automation_schedule` 表，不替换现有数据。节点开始和结束分别持久化状态；正常关闭服务会取消任务，异常重启会将遗留未完成任务标为失败，均不自动重放。历史实例新增触发方式和计划时间字段，旧实例默认标记为手动触发，已有 ID、版本、输入输出保留。HTTP 已发出、结果尚未保存时不能断言对端是否成功，取消也不能撤销已发送的请求；请确认对端结果或使用业务幂等键后再手动重跑。删除工作流使用逻辑删除并保留历史，执行中的流程须先停止。
 
-工作流后端测试包含 `WorkflowCredentialsTest`、`WorkflowIntegrationTest`、`WorkflowFeishuTest`、`WorkflowEmailTest`、`ScriptProcessRunnerTest`；浏览器测试为 `src/test/browser/workflows.cjs`，沿用 `PLAYWRIGHT_MODULE_PATH` 和 `CHROME_PATH`，验证飞书图标及机器人凭据、文本与卡片配置、SMTP 邮箱凭据及邮件字段、双击配置、新增节点、双语言源码保留、拖动、发布执行、分支状态、凭据及手机布局，不启动游戏。
+工作流后端测试包含 `WorkflowGithubTrendingTest`、`WorkflowCredentialsTest`、`WorkflowIntegrationTest`、`WorkflowFeishuTest`、`WorkflowEmailTest`、`ScriptProcessRunnerTest`；浏览器测试为 `src/test/browser/workflows.cjs`，沿用 `PLAYWRIGHT_MODULE_PATH` 和 `CHROME_PATH`，验证飞书图标及机器人凭据、文本与卡片配置、SMTP 邮箱凭据及邮件字段、双击配置、新增节点、双语言源码保留、拖动、发布执行、分支状态、凭据及手机布局，不启动游戏。
 
 ### 现有业务模块
 

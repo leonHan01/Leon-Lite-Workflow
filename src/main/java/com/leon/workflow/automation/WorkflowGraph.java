@@ -117,6 +117,7 @@ public record WorkflowGraph(List<Node> nodes, List<Edge> edges) {
             case "start", "end" -> {}
             case "feishu" -> WorkflowFeishu.validateConfig(c);
             case "email" -> WorkflowEmail.validateConfig(c);
+            case "github-trending" -> WorkflowGithubTrending.validateConfig(c);
             case "script" -> {
                 if (!Set.of("javascript", "groovy").contains(text(c.get("language")))) throw new IllegalArgumentException("请选择 JavaScript 或 Groovy");
                 required(c.get("source"), "脚本不能为空且不能超过 64 KB", 65_536);

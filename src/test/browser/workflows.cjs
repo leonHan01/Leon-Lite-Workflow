@@ -28,7 +28,7 @@ const server = http.createServer(async (req, res) => {
             const page = Number(url.searchParams.get('page') || 1), pageSize = Number(url.searchParams.get('pageSize') || 20);
             return reply({ items: filtered.slice((page-1)*pageSize,page*pageSize), total:filtered.length, page,pageSize,summary:{total:filtered.length,active:filtered.filter(r=>['RUNNING','QUEUED'].includes(r.status)).length,succeeded:filtered.filter(r=>r.status==='SUCCEEDED').length,failed:filtered.filter(r=>r.status==='FAILED').length} });
         }
-        if (route === '/capabilities') return reply({ runtimes: { javascript: 'GraalJS', groovy: 'Groovy' }, sandbox: 'macOS Sandbox', credentialsEnabled: true });
+        if (route === '/capabilities') return reply({ runtimes: { javascript: 'GraalJS', groovy: 'Groovy' }, sandbox: 'macOS Sandbox', credentialsEnabled: true, githubTrendingReady: true });
         if (route === '/credentials') {
             if (req.method === 'POST') { lastCredential = data; const value = { id: 'credential-' + (credentials.length + 1), name: data.name, kind: data.kind }; credentialValues.set(value.id,structuredClone(data.value)); credentials.push(value); return reply(value); }
             return reply(credentials);
@@ -46,7 +46,8 @@ const server = http.createServer(async (req, res) => {
             const value = Object.fromEntries(Object.entries(credentialValues.get(id)).filter(([key]) => !['token','password','secret','webhookUrl'].includes(key)));
             return reply({...credential,value});
         }
-        if (route === '/test-node') { lastTest = data; if (testFailure) return reply(testFailure,400); return reply({ output: ['feishu', 'email'].includes(data.node.type) ? data.input : { items: [{ json: { name: 'LEON' } }] }, logs: data.node.type === 'feishu' ? '飞书消息已发送' : data.node.type === 'email' ? '邮件已提交至 SMTP 服务器' : '调试完成', durationMs: 22, branch: '' }); }
+        if (route === '/test-node') { lastTest = data; if (testFailure) return reply(testFailure,400);
+            if (data.node.type==='github-trending') return reply({output:{items:[{json:{count:2,title:'GitHub Trending 项目解读',feishuText:'sample/one：开发工具。\nsample/two：资料不足。',emailSubject:'GitHub Trending 项目解读',emailBody:'项目用途：sample/one 提供开发工具。\nsample/two 资料不足。',emailHtml:'<p>项目用途：开发工具</p>'}}]},logs:'已抓取 GitHub Trending 并生成消息正文',durationMs:22,branch:''}); return reply({ output: ['feishu', 'email'].includes(data.node.type) ? data.input : { items: [{ json: { name: 'LEON' } }] }, logs: data.node.type === 'feishu' ? '飞书消息已发送' : data.node.type === 'email' ? '邮件已提交至 SMTP 服务器' : '调试完成', durationMs: 22, branch: '' }); }
         if (!route) {
             if (req.method === 'POST') workflow = { id: 'workflow-1', name: data.name, definition: initial(), revision: 1, publishedVersion: 0 };
             return reply(req.method === 'POST' ? workflow : workflow ? [workflow] : []);
@@ -101,7 +102,7 @@ const server = http.createServer(async (req, res) => {
             await page.getByRole('button', {name:'保存草稿',exact:true}).click();
             await page.waitForFunction(() => document.querySelector('[data-version]').textContent.includes('草稿已保存'));
         };
-        for (const [kind, scale] of [['http',1],['javascript',.5],['groovy',2],['feishu',1],['email',1],['if',1]]) {
+        for (const [kind, scale] of [['http',1],['javascript',.5],['groovy',2],['github-trending',1],['feishu',1],['email',1],['if',1]]) {
             await page.locator('[data-node="end"]').click();
             await page.getByRole('button',{name:'重置画布缩放',exact:true}).click();
             for (let i=0; i<(scale===.5?5:scale===2?10:0); i++) await page.getByRole('button',{name:scale===.5?'缩小画布':'放大画布',exact:true}).click();
@@ -144,6 +145,29 @@ const server = http.createServer(async (req, res) => {
             assert.equal(await page.locator('.wf-library-preview').count(),0);
             assert.equal(await page.locator('.is-library-drop-target').count(),0);
         }
+        assert.equal(await page.locator('.wf-library-count').textContent(),'7');
+        await page.locator('[data-node="start"]').click();
+        await page.locator('[data-add="github-trending"]').click();
+        assert.equal(await page.getByRole('textbox',{name:'Trending 榜单地址',exact:true}).inputValue(),'https://github.com/trending');
+        await page.locator('[data-field="maxProjects"]').fill('10');
+        await page.locator('[data-field="timeoutMs"]').fill('120000');
+        await savePaletteGraph();
+        const trending = workflow.definition.nodes.find(n=>n.type==='github-trending');
+        assert.deepEqual(trending.config,{sourceUrl:'https://github.com/trending',maxProjects:10,timeoutMs:120000});
+        await page.locator(`[data-node="${trending.id}"] .wf-node-head`).dblclick();
+        await page.getByRole('button',{name:'生成 Trending 分析',exact:true}).click();
+        await page.locator('[data-node-dialog] [data-node-debug]').getByRole('heading',{name:'飞书消息预览',exact:true}).waitFor();
+        await page.waitForFunction(()=>{
+            const preview=document.querySelector('[data-node-dialog] [data-node-debug] h3')?.getBoundingClientRect();
+            const header=document.querySelector('[data-node-dialog] > .wf-dialog-head').getBoundingClientRect();
+            const footer=document.querySelector('.wf-node-dialog-footer').getBoundingClientRect();
+            return preview && preview.top>=header.bottom && preview.bottom<footer.top;
+        });
+        assert.ok((await page.locator('[data-node-dialog] [data-node-debug]').textContent()).includes('项目用途：sample/one 提供开发工具'));
+        assert.equal(await page.getByRole('textbox',{name:'邮件正文（纯文本）引用',exact:true}).inputValue(),'{{ input.items[0].json.emailBody }}');
+        await page.screenshot({path:'/private/tmp/leon-trending-analysis-node.png',fullPage:false});
+        await page.getByRole('button',{name:'返回画布',exact:true}).click();
+        await page.getByRole('button',{name:'删除节点',exact:true}).click();
         await page.locator('[data-add="feishu"]').click();
         await page.locator('[data-action="feishu-credentials"]').click();
         await page.waitForSelector('[data-credentials-dialog][open]');
@@ -160,6 +184,8 @@ const server = http.createServer(async (req, res) => {
         assert.equal(await credentialForm.locator('[name="feishuSecret"]').inputValue(), '');
         await page.locator('[data-close="credentials"]').click();
         assert.equal(await page.locator('[data-field="credentialId"]').inputValue(), 'credential-1');
+        await page.getByRole('button',{name:'使用 Trending 分析结果',exact:true}).click();
+        assert.equal(await page.locator('[data-field="text"]').inputValue(),'{{ input.items[0].json.feishuText }}');
         assert.equal(await page.locator('[data-feishu-title]').isVisible(), false);
         const message = '通知：{{ input.items[0].json.name }}';
         await page.getByRole('textbox', {name:'飞书消息内容',exact:true}).fill(message);
@@ -205,6 +231,9 @@ const server = http.createServer(async (req, res) => {
         assert.equal(await credentialForm.locator('[name="smtpPassword"]').inputValue(), '');
         await page.locator('[data-close="credentials"]').click();
         assert.equal(await page.locator('[data-field="credentialId"]').inputValue(), 'credential-2');
+        await page.getByRole('button',{name:'使用 Trending 分析结果',exact:true}).click();
+        assert.equal(await page.locator('[data-field="subject"]').inputValue(),'{{ input.items[0].json.emailSubject }}');
+        assert.equal(await page.locator('[data-field="body"]').inputValue(),'{{ input.items[0].json.emailBody }}');
         await page.locator('[data-field="to"]').fill('{{ input.items[0].json.email }}');
         await page.locator('[data-field="cc"]').fill('copy@example.com');
         await page.locator('[data-field="bcc"]').fill('hidden@example.com');
