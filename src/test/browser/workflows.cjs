@@ -82,6 +82,53 @@ const server = http.createServer(async (req, res) => {
         assert.equal(await page.locator('[data-node="start"] .wf-port-in').count(), 0);
         assert.equal(await page.locator('[data-node="end"] .wf-port-out').count(), 0);
         assert.equal(await page.locator('[data-action="delete-node"]').count(), 0);
+        const savePaletteGraph = async () => {
+            await page.getByRole('button', {name:'保存草稿',exact:true}).click();
+            await page.waitForFunction(() => document.querySelector('[data-version]').textContent.includes('草稿已保存'));
+        };
+        for (const [kind, scale] of [['http',1],['javascript',.5],['groovy',2],['feishu',1],['if',1]]) {
+            await page.locator('[data-node="end"]').click();
+            await page.getByRole('button',{name:'重置画布缩放',exact:true}).click();
+            for (let i=0; i<(scale===.5?5:scale===2?10:0); i++) await page.getByRole('button',{name:scale===.5?'缩小画布':'放大画布',exact:true}).click();
+            await page.evaluate(() => { window.scrollTo(0,0); const board=document.querySelector('.wf-canvas-scroll'); board.scrollLeft=350; board.scrollTop=220; });
+            const board = await page.locator('.wf-canvas-scroll').boundingBox();
+            const source = await page.locator(`[data-add="${kind}"]`).boundingBox();
+            const drop = {x:board.x+320,y:board.y+310};
+            const beforeEdges = structuredClone(workflow.definition.edges), endPosition = structuredClone(workflow.definition.nodes.find(n=>n.id==='end').position);
+            await page.mouse.move(source.x+source.width/2,source.y+source.height/2); await page.mouse.down();
+            await page.mouse.move(drop.x,drop.y,{steps:12});
+            assert.equal(await page.locator('[data-node]').count(),2,'松开前创建了节点');
+            assert.equal(await page.locator('.wf-library-preview.is-valid').count(),1,'拖动节点没有有效落点预览');
+            const expected = await page.locator('.wf-canvas-scroll').evaluate((e,{drop,scale}) => {
+                const r=e.getBoundingClientRect(); return {x:(drop.x-r.left+e.scrollLeft)/scale-104,y:(drop.y-r.top+e.scrollTop)/scale-50};
+            },{drop,scale});
+            if (kind==='feishu') await page.screenshot({path:'/private/tmp/leon-workflow-library-drag.png',fullPage:false});
+            await page.mouse.up(); await savePaletteGraph();
+            assert.equal(workflow.definition.nodes.length,3,'拖入没有创建一个节点或重复创建');
+            const added = workflow.definition.nodes.find(n=>!['start','end'].includes(n.type));
+            assert.equal(added.type,['javascript','groovy'].includes(kind)?'script':kind);
+            if (added.type==='script') assert.equal(added.config.language,kind);
+            assert.ok(Math.abs(added.position.x-expected.x)<1 && Math.abs(added.position.y-expected.y)<1,`缩放 ${scale} 或滚动后落点错误`);
+            assert.deepEqual(workflow.definition.edges,beforeEdges,'拖入节点改变了现有连线');
+            assert.deepEqual(workflow.definition.nodes.find(n=>n.id==='end').position,endPosition,'拖入节点移动了结束节点');
+            assert.equal(await page.locator('.wf-library-preview').count(),0);
+            assert.equal(await page.locator('.is-library-drop-target').count(),0);
+            await page.getByRole('button',{name:'删除节点',exact:true}).click(); await savePaletteGraph();
+        }
+        await page.getByRole('button',{name:'重置画布缩放',exact:true}).click();
+        await page.evaluate(() => { window.scrollTo(0,0); document.querySelector('.wf-canvas-scroll').scrollTo(0,0); });
+        for (const cancel of ['outside','escape','pointercancel']) {
+            const source=await page.locator('[data-add="feishu"]').boundingBox(), board=await page.locator('.wf-canvas-scroll').boundingBox();
+            await page.mouse.move(source.x+source.width/2,source.y+source.height/2); await page.mouse.down();
+            await page.mouse.move(board.x+320,board.y+310,{steps:10});
+            if (cancel==='outside') await page.mouse.move(board.x-30,board.y+100,{steps:4});
+            if (cancel==='escape') await page.keyboard.press('Escape');
+            if (cancel==='pointercancel') await page.locator('[data-add="feishu"]').dispatchEvent('pointercancel',{pointerId:1,pointerType:'mouse'});
+            await page.mouse.up(); await savePaletteGraph();
+            assert.equal(workflow.definition.nodes.length,2,`取消 ${cancel} 仍创建了节点`);
+            assert.equal(await page.locator('.wf-library-preview').count(),0);
+            assert.equal(await page.locator('.is-library-drop-target').count(),0);
+        }
         await page.locator('[data-add="feishu"]').click();
         await page.locator('[data-action="feishu-credentials"]').click();
         await page.waitForSelector('[data-credentials-dialog][open]');
@@ -368,6 +415,6 @@ const server = http.createServer(async (req, res) => {
         assert.equal(await page.locator('body').evaluate(e=>e.classList.contains('wf-focus-open')),false);
         assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+2),false,'移动端编排界面横向溢出');
         assert.deepEqual(errors, []);
-        console.log('Workflow browser checks passed: Feishu icon/credentials/text/card configuration, canvas, languages, scheduling, instances, navigation and mobile.');
+        console.log('Workflow browser checks passed: library drag/drop for all nodes, zoom/scroll positions, cancellation, Feishu configuration, canvas, scheduling, instances, navigation and mobile.');
     } finally { await browser.close(); server.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; server.close(); });

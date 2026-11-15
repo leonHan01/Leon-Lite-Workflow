@@ -24,6 +24,7 @@ export function mount(pane, workspace) {
     const MAX_POSITION = 50000;
     let zoom = 1, world = { width: 2400, height: 1600 }, focused = false, focusPanels = null;
     let dirty = false, busy = false, active = false, initialized = false, timer = null, currentRun = null, capabilities = {}, credentials = [], schedule = null;
+    let cancelLibraryDrag = null;
     const notice = (message, error = false) => {
         $('[data-notice]').textContent = message; $('[data-notice]').classList.toggle('is-error', error);
         const dialog = pane.querySelector('dialog[open]');
@@ -332,11 +333,11 @@ export function mount(pane, workspace) {
         } else if (connecting) connect(connecting.source, nodeId, connecting.branch);
         else selectNode(nodeId);
     }
-    function add(kind) {
+    function add(kind, position) {
         if (!workflow) return notice('请先新建工作流。', true);
         commitInspector(); const maxNodes = capabilities.maxNodes || 65;
         if (graph.nodes.length >= maxNodes) throw new Error(`一个流程最多包含 ${maxNodes} 个节点`);
-        const parent = graph.nodes.find(n => n.id === selected), id = 'n_' + crypto.randomUUID().replaceAll('-', '').slice(0, 10);
+        const parent = position ? null : graph.nodes.find(n => n.id === selected), id = 'n_' + crypto.randomUUID().replaceAll('-', '').slice(0, 10);
         if (parent?.type === 'end') throw new Error('请选择开始或处理节点，再添加后续节点');
         const end = graph.nodes.find(n => n.type === 'end');
         const type = ['javascript', 'groovy'].includes(kind) ? 'script' : kind;
@@ -345,7 +346,7 @@ export function mount(pane, workspace) {
             : type === 'feishu' ? { credentialId: credentials.find(v => v.kind === 'feishu')?.id || '', messageType: 'text', title: '工作流通知', text: '工作流通知：{{ input.items[0].json.name }}', timeoutMs: 10000 }
             : { left: '{{ input.items[0].json.amount }}', operator: 'gte', right: 100 };
         const node = { id, type, name: kind === 'groovy' ? 'Groovy 脚本' : kind === 'javascript' ? 'JavaScript 脚本' : labels[type], config,
-            position: { x: Math.min(MAX_POSITION - 300, (parent?.position?.x || 60) + 280), y: parent?.position?.y || 140 } };
+            position: position || { x: Math.min(MAX_POSITION - 300, (parent?.position?.x || 60) + 280), y: parent?.position?.y || 140 } };
         graph.nodes.push(node);
         if (parent) {
             const branch = (parent.type === 'if' ? ['true', 'false'] : ['']).find(b => !graph.edges.some(e => e.source === parent.id && (e.branch || '') === b && e.target !== end?.id));
@@ -355,12 +356,13 @@ export function mount(pane, workspace) {
             }
             if (branch === 'false') node.position.y = Math.min(MAX_POSITION, node.position.y + 180);
         }
-        if (end) {
+        if (end && !position) {
             for (const branch of type === 'if' ? ['true', 'false'] : ['']) graph.edges.push({ id: 'e_' + crypto.randomUUID(), source: id, target: end.id, branch });
             if (node.position.x + 240 > (end.position?.x || 0)) end.position = { x: Math.min(MAX_POSITION, node.position.x + 280), y: node.position.y };
         }
-        selected = id; selectedEdge = null; markDirty(); renderCanvas(); inspector();
+        selected = id; selectedEdge = null; connecting = null; markDirty(); renderCanvas(); inspector();
         const element = pane.querySelector(`[data-node="${CSS.escape(id)}"]`); element?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+        if (position) notice('节点已放置，可拖动端口连接其他节点。');
     }
     function example() {
         if (dirty && !confirm('载入示例将替换当前草稿，是否继续？')) return;
@@ -524,12 +526,72 @@ export function mount(pane, workspace) {
         } catch (error) { notice(error.message, true); }
     });
     pane.addEventListener('keydown', event => {
+        if (event.key === 'Escape' && cancelLibraryDrag) { event.preventDefault(); cancelLibraryDrag(); return; }
         if (event.key === 'Escape') { const wasConnecting = !!connecting; connecting = null; if (graph) renderCanvas(); if (!wasConnecting && !pane.querySelector('dialog[open]')) focus(false); }
         if (['Delete', 'Backspace'].includes(event.key) && selectedEdge && !event.target.closest('input,textarea,select,[contenteditable="true"],dialog')) { event.preventDefault(); deleteEdge(); }
         if ((event.key === 'Enter' || event.key === ' ') && event.target.matches('[data-edge]')) { event.preventDefault(); try { selectEdge(event.target.dataset.edge); } catch (e) { notice(e.message, true); } }
         if ((event.key === 'Enter' || event.key === ' ') && event.target.matches('[data-reconnect]')) { event.preventDefault(); beginReconnect(event.target.dataset.edgeId, event.target.dataset.reconnect); }
         if ((event.key === 'Enter' || event.key === ' ') && event.target.matches('[data-node]')) { event.preventDefault(); try { selectNode(event.target.dataset.node); } catch (e) { notice(e.message, true); } }
         if (event.key === 'Tab' && event.target.matches('[data-field="source"]')) { event.preventDefault(); const t = event.target; t.setRangeText('  ', t.selectionStart, t.selectionEnd, 'end'); t.dispatchEvent(new Event('input', { bubbles: true })); }
+    });
+    pane.querySelectorAll('[data-add]').forEach(button => { button.title = '点击添加，或按住拖到画布指定位置'; });
+    pane.addEventListener('dragstart', event => { if (event.target.closest('[data-add]')) event.preventDefault(); });
+    pane.addEventListener('pointerdown', event => {
+        const button = event.target.closest('[data-add]');
+        if (!button || event.button !== 0 || event.isPrimary === false || !workflow || busy) return;
+        const scroll = $('.wf-canvas-scroll'), start = { x: event.clientX, y: event.clientY };
+        let moved = false, cancelled = false, preview = null;
+        const dropPosition = e => {
+            const rect = scroll.getBoundingClientRect();
+            if (e.clientX < rect.left || e.clientX >= rect.left + scroll.clientWidth || e.clientY < rect.top || e.clientY >= rect.top + scroll.clientHeight
+                    || !scroll.contains(document.elementFromPoint(e.clientX, e.clientY))) return null;
+            return { x: Math.max(15, Math.min(MAX_POSITION, (e.clientX - rect.left + scroll.scrollLeft) / zoom - 104)),
+                y: Math.max(20, Math.min(MAX_POSITION, (e.clientY - rect.top + scroll.scrollTop) / zoom - 50)) };
+        };
+        const move = e => {
+            if (cancelled) return;
+            moved ||= Math.abs(e.clientX - start.x) + Math.abs(e.clientY - start.y) > 5;
+            if (!moved) return;
+            e.preventDefault();
+            if (!preview) {
+                const kind = button.dataset.add, style = nodeStyle({ type: ['javascript', 'groovy'].includes(kind) ? 'script' : kind, config: { language: kind } });
+                preview = document.createElement('div'); preview.className = 'wf-library-preview'; preview.setAttribute('aria-hidden', 'true');
+                preview.innerHTML = `<b class="wf-icon wf-${style.kind}">${style.icon}</b><div><strong>${esc(style.label)}</strong><small>松开放置节点</small></div>`;
+                pane.append(preview); button.classList.add('is-dragging');
+            }
+            let position = dropPosition(e);
+            if (position) {
+                const rect = scroll.getBoundingClientRect();
+                if (e.clientX > rect.left + scroll.clientWidth - 30) scroll.scrollLeft += 18; else if (e.clientX < rect.left + 30) scroll.scrollLeft -= 18;
+                if (e.clientY > rect.top + scroll.clientHeight - 30) scroll.scrollTop += 18; else if (e.clientY < rect.top + 30) scroll.scrollTop -= 18;
+                position = dropPosition(e);
+            }
+            const rect = scroll.getBoundingClientRect();
+            preview.style.left = (position ? rect.left + position.x * zoom - scroll.scrollLeft : e.clientX - 104 * zoom) + 'px';
+            preview.style.top = (position ? rect.top + position.y * zoom - scroll.scrollTop : e.clientY - 50 * zoom) + 'px';
+            preview.style.transform = `scale(${zoom})`;
+            preview.classList.toggle('is-valid', !!position); scroll.classList.toggle('is-library-drop-target', !!position);
+        };
+        const cancel = () => { cancelled = true; preview?.remove(); scroll.classList.remove('is-library-drop-target'); button.classList.remove('is-dragging'); };
+        const end = e => {
+            button.removeEventListener('pointermove', move); button.removeEventListener('pointerup', end); button.removeEventListener('pointercancel', end); button.removeEventListener('lostpointercapture', end);
+            window.removeEventListener('blur', end); cancelLibraryDrag = null;
+            if (button.hasPointerCapture(event.pointerId)) button.releasePointerCapture(event.pointerId);
+            preview?.remove(); scroll.classList.remove('is-library-drop-target'); button.classList.remove('is-dragging');
+            if (moved || cancelled) {
+                // Pointer capture sends the synthetic click back to the library button after a drop.
+                const ignoreClick = click => { click.preventDefault(); click.stopImmediatePropagation(); };
+                button.addEventListener('click', ignoreClick, { capture: true, once: true });
+                setTimeout(() => button.removeEventListener('click', ignoreClick, true), 0);
+            }
+            if (e.type !== 'pointerup' || !moved || cancelled) return;
+            const position = dropPosition(e);
+            if (!position) return notice('拖拽已取消，请松开到画布内放置节点。');
+            try { add(button.dataset.add, position); } catch (error) { notice(error.message, true); }
+        };
+        cancelLibraryDrag = cancel; button.setPointerCapture(event.pointerId);
+        button.addEventListener('pointermove', move); button.addEventListener('pointerup', end); button.addEventListener('pointercancel', end); button.addEventListener('lostpointercapture', end);
+        window.addEventListener('blur', end);
     });
     pane.addEventListener('pointerdown', event => {
         const handle = event.target.closest('[data-drag]'); if (!handle || event.button !== 0) return;
@@ -658,6 +720,6 @@ export function mount(pane, workspace) {
                 } else { schedulePoll(); if (workflow) refreshSchedule().catch(e => notice(e.message, true)); }
             }
         },
-        deactivate() { active = false; clearTimeout(timer); focus(false); },
+        deactivate() { cancelLibraryDrag?.(); active = false; clearTimeout(timer); focus(false); },
     };
 }
