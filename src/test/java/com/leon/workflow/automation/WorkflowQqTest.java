@@ -72,6 +72,20 @@ class WorkflowQqTest {
         assertEquals(WorkflowQq.API + "/v2/groups/" + TARGET + "/messages", requests.getLast().get("url"));
         assertEquals(Map.of("msg_type", 2, "markdown", Map.of("content", "{{ input.items[0].json.noExpansion }}")), requests.getLast().get("body"));
     }
+    @Test void bindingDiscoversOfficialGatewayWithAuthenticationAndRejectsOtherDestinations() throws Exception {
+        authBody = Map.of("access_token", TOKEN, "expires_in", "7200");
+        assertEquals(TOKEN, qq.bindingAccessToken(credentialId));
+        requests.clear(); sendBody = Map.of("url", "wss://api.bot.qq.com/websocket/");
+        assertEquals("wss://api.bot.qq.com/websocket/", qq.bindingGateway(TOKEN).toString());
+        assertEquals("GET", requests.getLast().get("method"));
+        assertEquals(WorkflowQq.API + "/gateway", requests.getLast().get("url"));
+        assertEquals(Map.of("Authorization", "QQBot " + TOKEN), requests.getLast().get("headers"));
+        for (String url : List.of("ws://api.bot.qq.com/websocket/", "wss://127.0.0.1/websocket/", "wss://api.bot.qq.com.evil.test/websocket/", "wss://user@api.bot.qq.com/websocket/", "wss://api.bot.qq.com:8443/websocket/", "wss://api.bot.qq.com/websocket/?token=private", "wss://api.bot.qq.com/other")) {
+            sendBody = Map.of("url", url);
+            var error = assertThrows(IllegalArgumentException.class, () -> qq.bindingGateway(TOKEN));
+            assertFalse(error.getMessage().contains(url));
+        }
+    }
     @Test void cacheReusesTokensButChangingCredentialSecretRefreshesBeforeNextSend() throws Exception {
         qq.execute(config(), input(), Map.of(), new WorkflowPrivacy());
         var privacy = new WorkflowPrivacy(); qq.execute(config(), input(), Map.of(), privacy);

@@ -6,6 +6,8 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE_PATH || 'playwright')
 const root = path.resolve(__dirname, '../../main/resources/static');
 let workflow = null, versions = [], runs = [], credentials = [], lastCredential = null, lastTest = null;
 let testFailure = null;
+let qqBinding = null, qqBindingResult = null, qqBindingCount = 0, qqBindingPostDelay = 0;
+const cancelledQqBindings = [];
 let extraWorkflows = [];
 const credentialValues = new Map();
 let schedule = { enabled: false, cron: '0 0 9 * * *', timeZone: 'Asia/Shanghai', input: { items: [{ json: {} }] }, revision: 0, nextRunAt: null };
@@ -30,6 +32,19 @@ const server = http.createServer(async (req, res) => {
             return reply({ items: filtered.slice((page-1)*pageSize,page*pageSize), total:filtered.length, page,pageSize,summary:{total:filtered.length,active:filtered.filter(r=>['RUNNING','QUEUED'].includes(r.status)).length,succeeded:filtered.filter(r=>r.status==='SUCCEEDED').length,failed:filtered.filter(r=>r.status==='FAILED').length} });
         }
         if (route === '/capabilities') return reply({ runtimes: { javascript: 'GraalJS', groovy: 'Groovy' }, sandbox: 'macOS Sandbox', credentialsEnabled: true, githubTrendingReady: true });
+        if (route === '/qq-bindings' && req.method === 'POST') {
+            qqBindingResult = null;
+            const value = {id:'binding-' + (++qqBindingCount), credentialId:data.credentialId, targetType:data.targetType, status:'WAITING', code:'qq-bind:browser-onetime-code-' + qqBindingCount, expiresAt:Date.now()+120000, targetId:'', error:''};
+            qqBinding = value;
+            if (qqBindingPostDelay) await new Promise(resolve=>setTimeout(resolve,qqBindingPostDelay));
+            return reply(value);
+        }
+        if (route.startsWith('/qq-bindings/')) {
+            const id = route.split('/')[2];
+            if (req.method === 'DELETE') { cancelledQqBindings.push(id); if(qqBinding?.id===id) qqBinding.status='CANCELLED'; return reply({status:'CANCELLED'}); }
+            if (!qqBinding || qqBinding.id!==id) return reply({message:'绑定失效'},404);
+            return reply({...qqBinding,...(qqBindingResult || {})});
+        }
         if (route === '/credentials') {
             if (req.method === 'POST') { lastCredential = data; const value = { id: 'credential-' + (credentials.length + 1), name: data.name, kind: data.kind }; credentialValues.set(value.id,structuredClone(data.value)); credentials.push(value); return reply(value); }
             return reply(credentials);
@@ -779,13 +794,49 @@ const server = http.createServer(async (req, res) => {
         await page.locator('[data-action="qq-event-target"]').click();
         assert.equal(await page.locator('[data-field="targetId"]').inputValue(),qqId);
         assert.equal(await page.locator('[data-qq-event]').inputValue(),'');
+        const boundQqId = 'QQ_BOUND_USER_OPENID_BROWSER_1234567890';
+        const qqNodeId = await page.locator('.wf-node.is-selected').getAttribute('data-node');
+        await page.locator('[data-action="qq-bind"]').click();
+        await page.locator('[data-qq-binding-code]').waitFor();
+        assert.equal(qqBinding.credentialId,'credential-4'); assert.equal(qqBinding.targetType,'user');
+        assert.ok((await page.locator('[data-qq-binding-code]').inputValue()).startsWith('qq-bind:'));
+        await page.screenshot({path:'/private/tmp/leon-workflow-qq-binding-waiting.png',fullPage:false});
+        qqBindingResult = {status:'BOUND',targetId:boundQqId,code:''};
+        await page.waitForFunction(id=>document.querySelector('[data-field="targetId"]')?.value===id,boundQqId);
+        assert.ok((await page.locator('[data-qq-binding]').textContent()).includes('绑定成功'));
+        await page.locator('[data-field="targetType"]').selectOption('group');
+        await page.locator('[data-action="qq-bind"]').click(); await page.locator('[data-qq-binding-code]').waitFor();
+        assert.equal(qqBinding.targetType,'group'); const cancelledGroup = qqBinding.id;
+        await page.locator('[data-action="qq-cancel-binding"]').click();
+        await page.waitForFunction(()=>!document.querySelector('[data-qq-binding-code]'));
+        assert.ok(cancelledQqBindings.includes(cancelledGroup));
+        await page.locator('[data-field="targetType"]').selectOption('user');
+        await page.locator('[data-action="qq-bind"]').click(); await page.locator('[data-qq-binding-code]').waitFor();
+        qqBindingResult = {status:'EXPIRED',code:'',error:'绑定已超时，请重新生成绑定码'};
+        await page.waitForFunction(()=>document.querySelector('[data-qq-binding]')?.textContent.includes('绑定码已过期'));
+        assert.equal(await page.locator('[data-field="targetId"]').inputValue(),boundQqId);
+        await page.locator('[data-action="qq-bind"]').click(); await page.locator('[data-qq-binding-code]').waitFor();
+        const switchedBinding = qqBinding.id;
+        await page.locator('[data-field="targetType"]').selectOption('group');
+        await page.waitForFunction(()=>!document.querySelector('[data-qq-binding-code]'));
+        assert.ok(cancelledQqBindings.includes(switchedBinding));
+        await page.locator('[data-field="targetType"]').selectOption('user');
+        qqBindingPostDelay = 250;
+        await page.locator('[data-action="qq-bind"]').click();
+        await page.locator('[data-node="start"]').click();
+        await new Promise(resolve=>setTimeout(resolve,400));
+        assert.ok(cancelledQqBindings.includes(qqBinding.id),'切换节点后迟到的绑定创建响应必须取消');
+        qqBindingPostDelay = 0;
+        await page.locator(`[data-node="${qqNodeId}"]`).click();
+        assert.equal(await page.locator('[data-qq-binding-code]').count(),0);
+        assert.equal(await page.locator('[data-field="targetId"]').inputValue(),boundQqId);
         await page.locator('[data-action="use-summary-qq"]').click();
         assert.equal(await page.locator('[data-field="text"]').inputValue(),'{{ input.items[0].json.summary }}');
         await page.locator('[data-field="messageType"]').selectOption('markdown');
         await page.locator('[data-action="test"]').click();
         await page.waitForFunction(()=>document.querySelector('[data-node-debug]')?.textContent.includes('QQ 平台已接受消息'));
         assert.equal(lastTest.node.type,'qq'); assert.equal(lastTest.node.config.messageType,'markdown');
-        assert.equal(lastTest.node.config.targetId,qqId);
+        assert.equal(lastTest.node.config.targetId,boundQqId);
         await page.locator('[data-action="edit-node-credential"]').click();
         await page.waitForSelector('[data-credentials-dialog][open]');
         await page.getByRole('button',{name:'保存修改',exact:true}).waitFor();
@@ -799,6 +850,8 @@ const server = http.createServer(async (req, res) => {
         await page.getByRole('button',{name:'保存草稿',exact:true}).click();
         assert.ok(!JSON.stringify(workflow.definition).includes('private event body'));
         assert.ok(!JSON.stringify(workflow.definition).includes('browser-qq-secret'));
+        assert.ok(!JSON.stringify(workflow.definition).includes('qq-bind:'));
+        assert.equal(workflow.definition.nodes.find(n=>n.type==='qq').config.targetId,boundQqId);
         await page.screenshot({path:'/private/tmp/leon-workflow-qq-node.png',fullPage:false});
         await page.getByRole('button',{name:'← 返回列表',exact:true}).click();
         await page.locator('[data-workflow-row="workflow-1"]').waitFor();

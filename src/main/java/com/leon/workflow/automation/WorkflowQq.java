@@ -1,6 +1,7 @@
 package com.leon.workflow.automation;
 
 import org.springframework.stereotype.Component;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
@@ -98,11 +99,25 @@ public class WorkflowQq {
         var privacy = new WorkflowPrivacy();
         return accessToken(id, credentials.qq(id, privacy), privacy, System.nanoTime() + TimeUnit.SECONDS.toNanos(20));
     }
+    URI bindingGateway(String token) throws Exception {
+        var privacy = new WorkflowPrivacy(); privacy.secret(token);
+        var result = request("/gateway", "GET", Map.of(), Map.of("Authorization", "QQBot " + token), privacy,
+                System.nanoTime() + TimeUnit.SECONDS.toNanos(10), "获取绑定网关");
+        try {
+            URI url = URI.create(text(result.get("url")));
+            if ("wss".equals(url.getScheme()) && "api.bot.qq.com".equals(url.getHost()) && (url.getPort() == -1 || url.getPort() == 443)
+                    && url.getUserInfo() == null && url.getRawQuery() == null && url.getFragment() == null && "/websocket/".equals(url.getRawPath())) return url;
+        } catch (IllegalArgumentException ignored) {}
+        throw new IllegalArgumentException("QQ 返回的绑定网关地址无效，请稍后重试");
+    }
     private Map<String, Object> request(String path, Object body, Map<String, String> headers, WorkflowPrivacy privacy, long deadline, String action) throws Exception {
+        return request(path, "POST", body, headers, privacy, deadline, action);
+    }
+    private Map<String, Object> request(String path, String method, Object body, Map<String, String> headers, WorkflowPrivacy privacy, long deadline, String action) throws Exception {
         if (Thread.currentThread().isInterrupted()) throw new InterruptedException();
         long remaining = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime());
         if (remaining < 100) throw new IllegalArgumentException("QQ 节点超时，请确认接收情况后再运行");
-        var response = http.executeResolved(Map.of("url", API + path, "method", "POST", "body", body, "headers", headers,
+        var response = http.executeResolved(Map.of("url", API + path, "method", method, "body", body, "headers", headers,
                 "failOnHttpError", false, "timeoutMs", (int)Math.min(30_000, remaining)), privacy);
         var json = object(object(((List<?>)response.get("items")).getFirst()).get("json"));
         Object raw = json.get("body");

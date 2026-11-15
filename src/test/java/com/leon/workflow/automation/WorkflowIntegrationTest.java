@@ -74,6 +74,14 @@ class WorkflowIntegrationTest {
                 .andExpect(status().isForbidden());
         mvc.perform(get("/api/workflows/capabilities").cookie(cookie)).andExpect(status().isOk()).andExpect(jsonPath("$.runtimes.javascript").exists()).andExpect(jsonPath("$.runtimes.groovy").exists());
         mvc.perform(get("/workflows.html").cookie(cookie)).andExpect(status().isOk());
+        for (var request : List.of(post("/api/workflows/qq-bindings"), delete("/api/workflows/qq-bindings/missing"))) {
+            mvc.perform(request.header("Authorization", "Bearer integration-test-token").contentType(MediaType.APPLICATION_JSON).content("{}"))
+                    .andExpect(status().isForbidden());
+        }
+        mvc.perform(post("/api/workflows/qq-bindings").cookie(cookie).header("Origin", "https://evil.test").header("X-Requested-With", "XMLHttpRequest")
+                .contentType(MediaType.APPLICATION_JSON).content("{}")) .andExpect(status().isForbidden());
+        mvc.perform(get("/api/workflows/qq-bindings/missing").cookie(cookie)).andExpect(status().isNotFound());
+        mvc.perform(get("/api/workflows/qq-bindings/missing").header("Authorization", "Bearer integration-test-token")).andExpect(status().isForbidden());
     }
     @Test void newWorkflowsContainProtectedTerminalsAndRejectMissingOrDuplicateTerminalsOnSave() throws Exception {
         var workflow = request(post("/api/workflows").content(write(Map.of("name", "起止节点"))));

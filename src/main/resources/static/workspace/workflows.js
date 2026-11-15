@@ -51,6 +51,7 @@ export function mount(pane, workspace) {
     let dirty = false, busy = false, active = false, initialized = false, timer = null, currentRun = null, capabilities = {}, credentials = [], schedule = null;
     let cancelLibraryDrag = null;
     let editingCredential = null;
+    let qqBinding = null, qqBindingTimer = null;
     const notice = (message, error = false) => {
         $('[data-notice]').textContent = message; $('[data-notice]').classList.toggle('is-error', error);
         const dialog = [...pane.querySelectorAll('dialog[open]')].at(-1);
@@ -114,7 +115,7 @@ export function mount(pane, workspace) {
         pane.querySelectorAll('[data-list-only]').forEach(el => el.hidden = visible);
         $('[data-page-title]').textContent = visible ? '工作流编排' : '工作流列表';
         if (visible) clearTimeout(listRunTimer);
-        if (!visible) { closeNodeDialog(false); cancelLibraryDrag?.(); clearTimeout(timer); focus(false); renderWorkflowList(); }
+        if (!visible) { stopQqBinding(); closeNodeDialog(false); cancelLibraryDrag?.(); clearTimeout(timer); focus(false); renderWorkflowList(); }
         else requestAnimationFrame(syncWorld);
     }
     async function deleteWorkflow(id) {
@@ -151,6 +152,7 @@ export function mount(pane, workspace) {
     }
 
     async function load(id, push = false) {
+        stopQqBinding();
         closeNodeDialog(false);
         clearTimeout(timer); currentRun = null; zoom = 1; world = { width: 2400, height: 1600 };
         $('.wf-canvas-scroll').scrollTo(0, 0);
@@ -376,6 +378,7 @@ export function mount(pane, workspace) {
         $('[data-inspector]').innerHTML = `<h2>连线配置</h2><p class="wf-help">可删除或修改两端节点，也可拖动蓝色端点重新连接；Esc 取消时保留原连线。</p>${field('起点节点', `<select data-edge-field="source">${options(graph.nodes.filter(n => n.type !== 'end'), edge.source)}</select>`)}<label data-edge-branch ${source?.type === 'if' ? '' : 'hidden'}>起点出口<select data-edge-field="branch">${(source?.type === 'if' ? ['true', 'false'] : ['']).map(b => `<option value="${b}" ${b === (edge.branch || '') ? 'selected' : ''}>${b || '默认'}</option>`).join('')}</select></label>${field('终点节点', `<select data-edge-field="target">${options(graph.nodes.filter(n => n.type !== 'start'), edge.target)}</select>`)}<div class="wf-edge-actions"><button type="button" data-action="apply-edge">保存连线修改</button><button type="button" data-action="reconnect-source">重新连接起点</button><button type="button" data-action="reconnect-target">重新连接终点</button><button type="button" class="wf-danger" data-action="delete-edge">删除连线</button></div><p class="wf-help">也可按 Delete / Backspace 删除选中连线。同一出口可以连接多个后续节点。</p>`;
     }
     function inspector() {
+        if (qqBinding && !sameQqBinding(qqBinding)) stopQqBinding();
         const edge = graph?.edges.find(e => e.id === selectedEdge);
         if (edge) { edgeInspector(edge); return; }
         const node = graph?.nodes.find(n => n.id === selected);
@@ -459,9 +462,10 @@ export function mount(pane, workspace) {
             content += '<button type="button" data-action="qq-credentials">添加 QQ 机器人</button>';
             content += `<button type="button" data-action="edit-node-credential" ${c.credentialId ? '' : 'disabled'}>编辑所选凭据</button>`;
             content += field('发送到', select('targetType', c.targetType || 'user', [['user', 'QQ 单聊'], ['group', 'QQ 群聊']]));
+            content += '<div data-qq-binding></div>';
             content += field('接收目标 OpenID', inputField('targetId', c.targetId, 'maxlength="1000" placeholder="填写此机器人收到的用户或群 OpenID，支持字段引用"'));
-            content += '<p class="wf-help">不能填写 QQ 号或群号。单聊填写该机器人的 user_openid，群聊填写 group_openid；可以粘贴 QQ 官方消息事件提取目标。</p>';
-            content += '<details><summary>从 QQ 消息事件提取接收目标</summary><label>QQ 消息事件 JSON<textarea data-qq-event rows="4" spellcheck="false" placeholder="粘贴 C2C_MESSAGE_CREATE 或 GROUP_AT_MESSAGE_CREATE 事件"></textarea></label><button type="button" data-action="qq-event-target">提取 OpenID</button><p class="wf-help">只在本页解析，原始事件不会保存。尚无事件时，按 README 中的脚本说明获取接收目标。</p></details>';
+            content += '<p class="wf-help">点击上方绑定即可自动填入。也可手动填写此机器人对应的用户或群 OpenID，不能使用 QQ 号或群号。</p>';
+            content += '<details><summary>从 QQ 消息事件提取接收目标</summary><label>QQ 消息事件 JSON<textarea data-qq-event rows="4" spellcheck="false" placeholder="粘贴 C2C_MESSAGE_CREATE 或 GROUP_AT_MESSAGE_CREATE 事件"></textarea></label><button type="button" data-action="qq-event-target">提取 OpenID</button><p class="wf-help">只在本页解析，原始事件不会保存。通常直接使用上方绑定即可，无需粘贴事件。</p></details>';
             content += field('消息类型', select('messageType', c.messageType || 'text', [['text', '文本'], ['markdown', 'Markdown']]));
             content += field('消息内容', `<textarea aria-label="QQ 消息内容" data-field="text" rows="6" maxlength="65536" spellcheck="false">${esc(c.text)}</textarea>`);
             content += '<button type="button" data-action="use-summary-qq">使用上游摘要</button>';
@@ -485,7 +489,78 @@ export function mount(pane, workspace) {
         if (node.type !== 'end') content += `<h3 class="wf-section-label">连接出口</h3>${connectionFields(node)}`;
         content += `<div class="wf-node-actions"><button type="button" data-action="test">${['feishu', 'qq'].includes(node.type) ? '发送测试消息' : node.type === 'email' ? '发送测试邮件' : node.type === 'rss' ? '预览订阅文章' : node.type === 'ai-summary' ? '测试 AI 总结' : node.type === 'tech-weekly' ? '生成周刊分析' : node.type === 'github-trending' ? '生成 Trending 分析' : '调试此节点'}</button>${!['start', 'end'].includes(node.type) ? '<button type="button" class="wf-danger" data-action="delete-node">删除节点</button>' : ''}</div>`;
         $('[data-inspector]').innerHTML = `<h2>${esc(style.label)}</h2><div data-node-error></div>${content}<div data-node-debug></div>`;
-        nodeError(); highlight(); controls();
+        nodeError(); highlight(); renderQqBinding(); controls();
+    }
+    function sameQqBinding(binding) {
+        const node = graph?.nodes.find(n => n.id === selected);
+        return active && editorVisible && workflow?.id === binding.workflowId && node?.type === 'qq' && node.id === binding.nodeId
+            && node.config.credentialId === binding.credentialId && (node.config.targetType || 'user') === binding.targetType;
+    }
+    function stopQqBinding() {
+        clearTimeout(qqBindingTimer); qqBindingTimer = null;
+        const previous = qqBinding; qqBinding = null;
+        if (previous?.id && ['CONNECTING', 'WAITING'].includes(previous.status))
+            api('/qq-bindings/' + encodeURIComponent(previous.id), {method:'DELETE'}).catch(() => {});
+    }
+    function renderQqBinding() {
+        const panel = $('[data-qq-binding]'); if (!panel) return;
+        const node = graph?.nodes.find(n => n.id === selected), binding = qqBinding;
+        const group = (node?.config.targetType || 'user') === 'group';
+        const pending = binding && ['CONNECTING', 'WAITING'].includes(binding.status);
+        let content = `<button type="button" data-action="qq-bind" ${pending ? 'disabled' : ''}>${group ? '绑定 QQ 群' : '绑定我的 QQ'}</button>`;
+        if (!binding) content += `<p class="wf-help">${group ? '先将机器人添加到目标群，再点击绑定，在群里 @机器人发送绑定码。' : '先添加所选机器人为好友，再点击绑定，用自己的 QQ 给它发送绑定码。'}</p>`;
+        else {
+            const title = {CONNECTING:'正在连接 QQ…', WAITING:'等待你发送绑定码', BOUND:'绑定成功，已填入 OpenID', EXPIRED:'绑定码已过期', CANCELLED:'绑定已取消', FAILED:'绑定未完成'}[binding.status] || '绑定未完成';
+            content += `<div class="wf-qq-binding-status" role="status"><strong>${esc(title)}</strong>`;
+            if (binding.status === 'WAITING') {
+                const seconds = Math.max(0, Math.ceil((binding.expiresAt - Date.now()) / 1000));
+                content += `<p>${group ? '在目标 QQ 群里 @所选机器人，并发送以下完整绑定码。' : '用要接收通知的 QQ，在与所选机器人的私聊中发送以下完整绑定码。'}</p><label>一次性绑定码<textarea readonly data-qq-binding-code rows="2" spellcheck="false">${esc(binding.code)}</textarea></label><button type="button" data-action="qq-copy-binding">复制绑定码</button><small>剩余 ${seconds} 秒，收到后会自动填入接收目标。</small>`;
+            }
+            if (binding.error) content += `<p>${esc(binding.error)}</p>`;
+            if (binding.status === 'BOUND') content += '<p>请保存草稿并发布新版本，让后续运行使用此接收目标。</p>';
+            if (pending) content += '<button type="button" data-action="qq-cancel-binding">取消绑定</button>';
+            content += '</div>';
+        }
+        panel.innerHTML = content;
+    }
+    async function startQqBinding() {
+        commitInspector(); const node = graph?.nodes.find(n => n.id === selected);
+        if (node?.type !== 'qq' || !node.config.credentialId) throw new Error('请先添加并选择 QQ 机器人凭据');
+        stopQqBinding();
+        const context = {workflowId:workflow.id, nodeId:node.id, credentialId:node.config.credentialId, targetType:node.config.targetType || 'user', status:'CONNECTING'};
+        qqBinding = context; renderQqBinding();
+        try {
+            const result = await send('/qq-bindings', {credentialId:context.credentialId, targetType:context.targetType});
+            if (qqBinding !== context || !sameQqBinding(context)) {
+                api('/qq-bindings/' + encodeURIComponent(result.id), {method:'DELETE'}).catch(() => {}); return;
+            }
+            Object.assign(context, result); renderQqBinding(); await pollQqBinding(context);
+        } catch (error) {
+            if (qqBinding === context) { context.status = 'FAILED'; context.error = error.message; renderQqBinding(); }
+        }
+    }
+    async function pollQqBinding(context) {
+        if (qqBinding !== context) return;
+        if (!sameQqBinding(context)) { stopQqBinding(); return; }
+        try {
+            const result = await api('/qq-bindings/' + encodeURIComponent(context.id));
+            if (qqBinding !== context) return;
+            if (!sameQqBinding(context)) { stopQqBinding(); return; }
+            if (result.credentialId !== context.credentialId || result.targetType !== context.targetType) throw new Error('绑定目标已变化，请重新开始绑定');
+            Object.assign(context, result);
+            if (result.status === 'BOUND') {
+                if (typeof result.targetId !== 'string' || !/^[A-Za-z0-9_-]{16,128}$/.test(result.targetId) || /^\d+$/.test(result.targetId)) throw new Error('QQ 未返回有效的接收目标，请重新绑定');
+                commitInspector(); graph.nodes.find(n => n.id === context.nodeId).config.targetId = result.targetId;
+                $('[data-field="targetId"]').value = result.targetId; markDirty();
+                notice('QQ 绑定成功。请保存草稿并发布新版本。');
+            }
+            renderQqBinding();
+            if (['CONNECTING', 'WAITING'].includes(context.status)) qqBindingTimer = setTimeout(() => pollQqBinding(context), 1000);
+        } catch (error) {
+            if (qqBinding !== context) return;
+            api('/qq-bindings/' + encodeURIComponent(context.id), {method:'DELETE'}).catch(() => {});
+            context.status = 'FAILED'; context.error = error.message; renderQqBinding();
+        }
     }
     function nodeError() {
         const target = $('[data-node-error]'); if (!target) return;
@@ -769,11 +844,19 @@ export function mount(pane, workspace) {
         credentials: () => openCredentials(),
         'feishu-credentials': () => openCredentials('feishu'),
         'qq-credentials': () => openCredentials('qq'),
+        'qq-bind': startQqBinding,
+        'qq-cancel-binding': () => { stopQqBinding(); renderQqBinding(); },
+        'qq-copy-binding': async () => {
+            const field = $('[data-qq-binding-code]'); if (!field) return;
+            try { await navigator.clipboard.writeText(field.value); notice('绑定码已复制，请在 QQ 中发送给机器人。'); }
+            catch { field.focus(); field.select(); notice('请复制已选中的绑定码，在 QQ 中发送给机器人。'); }
+        },
         'use-summary-qq': () => {
             commitInspector(); const node = graph.nodes.find(n => n.id === selected); if (node?.type !== 'qq') return;
             node.config.text = '{{ input.items[0].json.summary }}'; markDirty(); inspector();
         },
         'qq-event-target': () => {
+            stopQqBinding();
             let event;
             try { event = JSON.parse($('[data-qq-event]').value); } catch { throw new Error('请粘贴有效的 QQ 消息事件 JSON'); }
             const data = event?.d || event;
@@ -837,6 +920,7 @@ export function mount(pane, workspace) {
         if (target.matches('[data-name]')) { markDirty(); return; }
         if (!target.matches('[data-inspector] input,[data-inspector] textarea,[data-inspector] select')) return;
         const node = graph?.nodes.find(n => n.id === selected); if (!node) return;
+        if (node.type === 'qq' && target.matches('[data-field="targetId"]')) { stopQqBinding(); renderQqBinding(); }
         if (target.dataset.field === 'source') {
             node.config.source = target.value; node.config.sources ||= {}; node.config.sources[node.config.language] = target.value; highlight();
         }
@@ -856,7 +940,8 @@ export function mount(pane, workspace) {
         if (target.matches('[data-field="credentialId"]')) $('[data-action="edit-node-credential"]').disabled = !target.value;
         if (target.matches('[data-field="sourceUrl"]')) $('[data-trending-url]').value = target.value;
         try {
-            if (target.matches('[data-field="messageType"]')) { commitInspector(); $('[data-feishu-title]').hidden = target.value !== 'card'; }
+            if (target.matches('[data-field="messageType"]')) { commitInspector(); const title = $('[data-feishu-title]'); if (title) title.hidden = target.value !== 'card'; }
+            if (graph?.nodes.find(n => n.id === selected)?.type === 'qq' && target.matches('[data-field="credentialId"],[data-field="targetType"]')) { stopQqBinding(); commitInspector(); renderQqBinding(); }
             if (target.matches('[data-edge-field="source"]')) {
                 const isIf = graph.nodes.find(n => n.id === target.value)?.type === 'if';
                 $('[data-edge-branch]').hidden = !isIf;
@@ -1086,6 +1171,6 @@ export function mount(pane, workspace) {
                 if (!busy) refreshSchedule().catch(e => notice(e.message, true));
             }
         },
-        deactivate() { clearTimeout(listRunTimer); closeNodeDialog(false); cancelLibraryDrag?.(); active = false; clearTimeout(timer); focus(false); },
+        deactivate() { stopQqBinding(); clearTimeout(listRunTimer); closeNodeDialog(false); cancelLibraryDrag?.(); active = false; clearTimeout(timer); focus(false); },
     };
 }

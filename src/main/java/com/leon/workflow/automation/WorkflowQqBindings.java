@@ -32,7 +32,7 @@ public class WorkflowQqBindings implements AutoCloseable {
         @Override void close();
     }
     interface Gateway extends AutoCloseable {
-        Connection open() throws Exception;
+        Connection open(URI url) throws Exception;
         @Override default void close() {}
     }
     @Autowired public WorkflowQqBindings(WorkflowCredentials credentials, WorkflowQq qq) {
@@ -64,8 +64,12 @@ public class WorkflowQqBindings implements AutoCloseable {
         synchronized void finish(String state, String target, String message, boolean interrupt) {
             if (!active()) return;
             status = state; targetId = target; error = message;
-            if (connection != null) connection.close();
+            if (connection != null) { connection.close(); connection = null; }
             if (interrupt && task != null) task.cancel(true);
+        }
+        synchronized void invalidate() {
+            if ("BOUND".equals(status)) { status = "FAILED"; targetId = ""; error = "机器人凭据已修改或删除，请重新开始绑定"; }
+            else finish("FAILED", "", "机器人凭据已修改或删除，请重新开始绑定", true);
         }
     }
     public Map<String, Object> start(Map<String, Object> request) {
@@ -80,7 +84,7 @@ public class WorkflowQqBindings implements AutoCloseable {
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "此机器人正在绑定，请先取消已有绑定或等待两分钟后重试");
             if (bindings.values().stream().filter(Binding::active).count() >= 2)
                 throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "同时最多绑定两个机器人，请稍后再试");
-            while (bindings.size() >= 32) bindings.remove(bindings.keySet().iterator().next());
+            while (bindings.size() >= 32) bindings.remove(bindings.values().stream().filter(b -> !b.active()).findFirst().orElseThrow().id);
             Binding b = new Binding(id, type, credential, clock.getAsLong() + TTL);
             bindings.put(b.id, b); b.task = workers.submit(() -> listen(b));
             return b.snapshot();
@@ -88,7 +92,7 @@ public class WorkflowQqBindings implements AutoCloseable {
     }
     public Map<String, Object> get(String id) {
         Binding b = find(id);
-        if (b.active() && !current(b)) b.finish("FAILED", "", "机器人凭据已修改或删除，请重新开始绑定", true);
+        if (!current(b)) b.invalidate();
         return b.snapshot();
     }
     public Map<String, Object> cancel(String id) {
@@ -114,7 +118,7 @@ public class WorkflowQqBindings implements AutoCloseable {
         try {
             String token = qq.bindingAccessToken(b.credentialId);
             if (!b.active() || !current(b)) { b.finish("FAILED", "", "机器人凭据已修改或删除，请重新开始绑定", false); return; }
-            try (Connection connection = gateway.open()) {
+            try (Connection connection = gateway.open(qq.bindingGateway(token))) {
                 if (!b.attach(connection)) return;
                 Long sequence = null;
                 boolean identified = false, ready = false;
@@ -175,21 +179,22 @@ public class WorkflowQqBindings implements AutoCloseable {
     }
     private static final class OfficialGateway implements Gateway {
         private final HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).followRedirects(HttpClient.Redirect.NEVER).build();
-        public Connection open() throws Exception {
+        public Connection open(URI url) throws Exception {
             Socket connection = new Socket();
-            var future = client.newWebSocketBuilder().connectTimeout(Duration.ofSeconds(10)).buildAsync(URI.create("wss://api.bot.qq.com/websocket/"), connection);
+            var future = client.newWebSocketBuilder().connectTimeout(Duration.ofSeconds(10)).buildAsync(url, connection);
             try { connection.socket = future.get(10, TimeUnit.SECONDS); return connection; }
             catch (Exception error) { connection.close(); future.thenAccept(WebSocket::abort); future.cancel(true); throw error; }
         }
         public void close() { client.shutdownNow(); }
     }
-    private static final class Socket implements Connection, WebSocket.Listener {
+    static final class Socket implements Connection, WebSocket.Listener {
         private final BlockingQueue<Object> events = new ArrayBlockingQueue<>(32);
         private final StringBuilder frame = new StringBuilder();
         private volatile WebSocket socket;
         private volatile boolean closed;
         public void onOpen(WebSocket ws) { socket = ws; if (closed) ws.abort(); else ws.request(1); }
-        public CompletionStage<?> onText(WebSocket ws, CharSequence data, boolean last) {
+        public synchronized CompletionStage<?> onText(WebSocket ws, CharSequence data, boolean last) {
+            if (closed) return null;
             try {
                 if (frame.length() + data.length() > 262_144) throw new IOException("QQ 事件超过大小限制");
                 frame.append(data);
@@ -204,13 +209,17 @@ public class WorkflowQqBindings implements AutoCloseable {
         public CompletionStage<?> onBinary(WebSocket ws, java.nio.ByteBuffer data, boolean last) { fail(); return null; }
         public CompletionStage<?> onClose(WebSocket ws, int status, String reason) { fail(); return null; }
         public void onError(WebSocket ws, Throwable error) { fail(); }
-        private void fail() { events.clear(); events.offer(new IOException("QQ 网关连接中断")); close(); }
+        private void fail() { close(); }
         public Map<String, Object> receive(long timeoutMs) throws Exception {
             Object event = events.poll(Math.max(1, timeoutMs), TimeUnit.MILLISECONDS);
             if (event instanceof Exception error) throw error;
             return event == null ? null : object(event);
         }
         public void send(Map<String, Object> event) throws Exception { socket.sendText(write(event), true).get(5, TimeUnit.SECONDS); }
-        public void close() { closed = true; if (socket != null) socket.abort(); }
+        public synchronized void close() {
+            if (closed) return;
+            closed = true; frame.setLength(0); events.clear(); events.offer(new IOException("QQ 网关连接中断"));
+            if (socket != null) socket.abort();
+        }
     }
 }
