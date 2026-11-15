@@ -56,6 +56,75 @@ sidebarToggle.addEventListener('click', () => {
 compactSidebar.addEventListener('change', updateSidebar);
 updateSidebar();
 
+const navigation = sidebar.querySelector('.lw-nav');
+const navigationOrderKey = 'leon-workspace-navigation-order';
+const navigationItems = () => Array.from(navigation.children);
+const navigationId = item => item.dataset.navGroup ? 'group:' + item.dataset.navGroup : new URL(item.href).pathname;
+function restoreNavigationOrder(order) {
+    if (!Array.isArray(order)) return;
+    const items = new Map(navigationItems().map(item => [navigationId(item), item]));
+    for (const id of order) {
+        const item = items.get(id);
+        if (item) { navigation.append(item); items.delete(id); }
+    }
+    for (const item of items.values()) navigation.append(item);
+}
+function saveNavigationOrder() {
+    try { localStorage.setItem(navigationOrderKey, JSON.stringify(navigationItems().map(navigationId))); } catch { /* Keep the current order in memory. */ }
+}
+try { restoreNavigationOrder(JSON.parse(localStorage.getItem(navigationOrderKey))); } catch { /* Use the default order. */ }
+window.addEventListener('storage', event => {
+    if (event.key !== navigationOrderKey || !event.newValue) return;
+    try { restoreNavigationOrder(JSON.parse(event.newValue)); } catch { /* Ignore invalid preferences. */ }
+});
+
+let draggedNavigationItem = null;
+function clearNavigationDrag() {
+    navigationItems().forEach(item => item.classList.remove('is-nav-dragging', 'is-nav-drop-before', 'is-nav-drop-after'));
+}
+for (const item of navigationItems()) {
+    const handle = item.matches('.lw-nav-group') ? item.querySelector('.lw-nav-toggle') : item;
+    handle.draggable = true;
+    handle.setAttribute('aria-keyshortcuts', 'Alt+Shift+ArrowUp Alt+Shift+ArrowDown');
+    handle.setAttribute('aria-description', '拖动排序，或按 Alt 加 Shift 和上下方向键调整顺序');
+    if (item.matches('.lw-nav-group')) handle.title = '工作流（拖动排序）';
+    if (item.matches('.lw-nav-group')) item.querySelectorAll('a').forEach(link => { link.draggable = false; });
+    handle.addEventListener('dragstart', event => {
+        draggedNavigationItem = item; item.classList.add('is-nav-dragging');
+        event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', navigationId(item));
+    });
+    handle.addEventListener('dragend', () => { draggedNavigationItem = null; clearNavigationDrag(); });
+    handle.addEventListener('keydown', event => {
+        if (!event.altKey || !event.shiftKey || !['ArrowUp', 'ArrowDown'].includes(event.key)) return;
+        const neighbor = event.key === 'ArrowUp' ? item.previousElementSibling : item.nextElementSibling;
+        if (!neighbor) return;
+        event.preventDefault();
+        navigation.insertBefore(item, event.key === 'ArrowUp' ? neighbor : neighbor.nextElementSibling);
+        saveNavigationOrder(); handle.focus();
+    });
+}
+navigation.addEventListener('dragover', event => {
+    if (!draggedNavigationItem) return;
+    const target = Array.from(navigation.children).find(item => item.contains(event.target));
+    clearNavigationDrag(); draggedNavigationItem.classList.add('is-nav-dragging');
+    if (!target || target === draggedNavigationItem) return;
+    event.preventDefault(); event.dataTransfer.dropEffect = 'move';
+    const rect = target.getBoundingClientRect();
+    const horizontal = matchMedia('(max-width: 700px)').matches;
+    const before = horizontal ? event.clientX < rect.left + rect.width / 2 : event.clientY < rect.top + rect.height / 2;
+    target.classList.add(before ? 'is-nav-drop-before' : 'is-nav-drop-after');
+});
+navigation.addEventListener('drop', event => {
+    if (!draggedNavigationItem) return;
+    const target = navigationItems().find(item => item.classList.contains('is-nav-drop-before') || item.classList.contains('is-nav-drop-after'));
+    if (target) {
+        event.preventDefault();
+        navigation.insertBefore(draggedNavigationItem, target.classList.contains('is-nav-drop-before') ? target : target.nextElementSibling);
+        saveNavigationOrder();
+    }
+    draggedNavigationItem = null; clearNavigationDrag();
+});
+
 async function getView(definition, url) {
     const [key, , className] = definition;
     if (views.has(key)) return views.get(key);
@@ -109,7 +178,7 @@ function updateNavigation(definition) {
     document.getElementById('workspaceTitle').textContent = definition[1];
     document.title = definition[1] + ' · Leon Workflow';
     for (const link of document.querySelectorAll('.lw-nav-link')) {
-        link.title = link.getAttribute('aria-label') || link.textContent.trim();
+        link.title = (link.getAttribute('aria-label') || link.textContent.trim()) + (link.parentElement === navigation ? '（拖动排序）' : '');
         const target = routes[new URL(link.href).pathname];
         const selected = target?.[0] === key;
         link.classList.toggle('is-active', selected);

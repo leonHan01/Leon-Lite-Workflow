@@ -4,6 +4,16 @@
 .workspace-app .lw-topbar { border-radius:0; }
 .workspace-app.is-workflow-page .lw-topbar { height:48px; padding:0 24px; }
 .workspace-app .lw-nav-group { min-width:0; }
+.workspace-app .lw-nav > .lw-nav-link,.workspace-app .lw-nav > .lw-nav-group > .lw-nav-toggle { position:relative; }
+.workspace-app .lw-nav > .lw-nav-link::before,.workspace-app .lw-nav > .lw-nav-group > .lw-nav-toggle::before { content:'⠿'; position:absolute; left:-8px; color:#a5aec0; opacity:0; cursor:grab; }
+.workspace-app .lw-nav > .lw-nav-link:hover::before,.workspace-app .lw-nav > .lw-nav-group > .lw-nav-toggle:hover::before { opacity:1; }
+.workspace-app .lw-nav > .is-nav-dragging { opacity:.4; }
+.workspace-app .lw-nav > .is-nav-drop-before { box-shadow:0 -3px #4669e8; }
+.workspace-app .lw-nav > .is-nav-drop-after { box-shadow:0 3px #4669e8; }
+@media(max-width:700px) {
+    .workspace-app .lw-nav > .is-nav-drop-before { box-shadow:-3px 0 #4669e8; }
+    .workspace-app .lw-nav > .is-nav-drop-after { box-shadow:3px 0 #4669e8; }
+}
 .workspace-app .lw-nav-toggle { display:flex; align-items:center; gap:12px; width:100%; min-height:44px; padding:0 13px; border:0 !important; border-radius:9px; background:transparent !important; box-shadow:none !important; color:#7a8388 !important; font:600 13px var(--lw-font); text-align:left; cursor:pointer; }
 .workspace-app .lw-nav-toggle:hover { background:#f4f6fc !important; color:#4669e8 !important; }
 .workspace-app .lw-nav-group.has-active>.lw-nav-toggle { color:#4669e8 !important; }
