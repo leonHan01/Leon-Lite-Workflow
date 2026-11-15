@@ -243,7 +243,9 @@ HTTPS 代理通过内部 `/auth/check` 校验管理页面和静态资源的会�
 
 HTTP 节点仅接受 HTTP/HTTPS；默认阻止回环、内网、链路本地、云元数据及其他保留地址。连接时使用校验过的 DNS 地址，防止二次解析绕过限制；不自动重试、不跟随重定向。确需调用内部系统时，由运维通过 `LEON_WORKFLOW_HTTP_ALLOWED_ORIGINS` 明确配置允许的来源，例如 `http://127.0.0.1:9000`；多个来源用逗号分隔，准确匹配协议、主机和端口，不在节点中开放绕过选项。输入、输出和 HTTP 响应最大 1 MB、最多 1000 个 item；日志最多 16 KB。
 
-「管理凭据」支持 Bearer、Basic、自定义 Header 和飞书机器人 Webhook。启用前在应用私有环境配置中设置 `LEON_WORKFLOW_CREDENTIAL_KEY`，值为独立生成的 32 字节随机密钥的 Base64 编码。不要把密钥写进仓库、日志或网页存储，升级保留该配置；更换密钥前需安排凭据重新加密，不能直接替换。密钥不设置时仍可使用无凭据 HTTP 节点，凭据保存及读取会拒绝。凭据在 H2 中使用 AES-256-GCM 加密，接口只返回名称、类型和 ID，发送凭据必须使用 HTTPS。运行记录会隐藏常见敏感字段及已知凭据的回显，脚本和配置中应只引用凭据 ID。SQL 备份包含加密后的凭据记录，恢复后还需原有服务器加密密钥。
+「管理凭据」支持 Bearer、Basic、自定义 Header、飞书机器人 Webhook 和 SMTP 邮箱。启用前在应用私有环境配置中设置 `LEON_WORKFLOW_CREDENTIAL_KEY`，值为独立生成的 32 字节随机密钥的 Base64 编码。不要把密钥写进仓库、日志或网页存储，升级保留该配置；更换密钥前需安排凭据重新加密，不能直接替换。密钥不设置时仍可使用无凭据 HTTP 节点，凭据保存及读取会拒绝。凭据在 H2 中使用 AES-256-GCM 加密，列表和保存接口只返回名称、类型和 ID；编辑详情仅额外返回 SMTP 连接信息、用户名或 Header 名称等非密钥字段，发送凭据必须使用 HTTPS。运行记录会隐藏常见敏感字段及已知凭据的回显，脚本和配置中应只引用凭据 ID。SQL 备份包含加密后的凭据记录，恢复后还需原有服务器加密密钥。
+
+已保存凭据可在「管理凭据」列表中点击「编辑」，也可从节点配置点击「编辑所选凭据」。保存沿用原 ID 和类型，所有引用此凭据的节点后续执行时使用新配置，无需重新发布工作流；不替换已经建立的连接。密码、令牌、Webhook 和签名密钥不回显，编辑时留空保留旧值，飞书签名密钥可显式清除。关闭弹窗会清空表单中的密钥输入。`GET /api/workflows/credentials/{id}` 返回可编辑详情，`PUT` 更新同一记录；均受管理页会话保护，更新还校验写入来源。
 
 正式 ECS 的凭据主密钥保存在 `/etc/leon-lite-workflow-workflows.env`（root 所有、`0600`），由 `96-workflows.conf` 加载。`scripts/install_workflow_runtime.py` 会保留已有密钥、检查或安装 bubblewrap，并备份后补充受登录保护的 HTTPS 路由；它不单独重启应用。随后统一运行 `python3 scripts/deploy.py --description ...`，成功标记和备份清理前，会在线执行使用加密凭据的 HTTP → JavaScript → Groovy 流程，还会验证真实定时触发和独立实例列表，同时验证原有数据 ID 保留。验收只清理本次创建的测试流程、凭据与临时会话。
 
@@ -251,7 +253,7 @@ HTTP 节点仅接受 HTTP/HTTPS；默认阻止回环、内网、链路本地、�
 
 数据保存在原有 H2 内新增的 `automation_workflow`、`automation_version`、`automation_run`、`automation_node_run`、`automation_credential`、`automation_schedule` 表，不替换现有数据。节点开始和结束分别持久化状态；正常关闭服务会取消任务，异常重启会将遗留未完成任务标为失败，均不自动重放。历史实例新增触发方式和计划时间字段，旧实例默认标记为手动触发，已有 ID、版本、输入输出保留。HTTP 已发出、结果尚未保存时不能断言对端是否成功，取消也不能撤销已发送的请求；请确认对端结果或使用业务幂等键后再手动重跑。删除工作流使用逻辑删除并保留历史，执行中的流程须先停止。
 
-工作流后端测试包含 `WorkflowIntegrationTest`、`WorkflowFeishuTest`、`WorkflowEmailTest`、`ScriptProcessRunnerTest`；浏览器测试为 `src/test/browser/workflows.cjs`，沿用 `PLAYWRIGHT_MODULE_PATH` 和 `CHROME_PATH`，验证飞书图标及机器人凭据、文本与卡片配置、SMTP 邮箱凭据及邮件字段、双击配置、新增节点、双语言源码保留、拖动、发布执行、分支状态、凭据及手机布局，不启动游戏。
+工作流后端测试包含 `WorkflowCredentialsTest`、`WorkflowIntegrationTest`、`WorkflowFeishuTest`、`WorkflowEmailTest`、`ScriptProcessRunnerTest`；浏览器测试为 `src/test/browser/workflows.cjs`，沿用 `PLAYWRIGHT_MODULE_PATH` 和 `CHROME_PATH`，验证飞书图标及机器人凭据、文本与卡片配置、SMTP 邮箱凭据及邮件字段、双击配置、新增节点、双语言源码保留、拖动、发布执行、分支状态、凭据及手机布局，不启动游戏。
 
 ### 现有业务模块
 

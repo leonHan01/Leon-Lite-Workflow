@@ -62,6 +62,8 @@ public class WorkflowController {
     @PostMapping("/test-node") public ResponseEntity<?> test(@RequestBody Map<String, Object> body) { return response(engine.test(JSON.convertValue(body.get("node"), WorkflowGraph.Node.class), object(body.get("input")))); }
     @GetMapping("/credentials") public ResponseEntity<?> credentials() { return response(credentials.list()); }
     @PostMapping("/credentials") public ResponseEntity<?> credential(@RequestBody Map<String, Object> body) { return response(credentials.create(body)); }
+    @GetMapping("/credentials/{id}") public ResponseEntity<?> credential(@PathVariable String id) { return response(credentials.get(id)); }
+    @PutMapping("/credentials/{id}") public ResponseEntity<?> updateCredential(@PathVariable String id, @RequestBody Map<String, Object> body) { return response(credentials.update(id, body)); }
     @DeleteMapping("/credentials/{id}") public ResponseEntity<?> deleteCredential(@PathVariable String id) { credentials.delete(id); return response(Map.of("deleted", true)); }
     private long revision(Map<String, Object> body) {
         try { return Long.parseLong(text(body.get("revision"))); }

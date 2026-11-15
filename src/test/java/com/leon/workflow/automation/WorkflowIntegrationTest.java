@@ -240,6 +240,21 @@ class WorkflowIntegrationTest {
         assertNotNull(encrypted); assertFalse(encrypted.contains("example-credential-value"));
         mvc.perform(get("/api/workflows/credentials").cookie(cookie)).andExpect(status().isOk()).andExpect(jsonPath("$[0].value").doesNotExist());
     }
+    @Test void credentialEditingRequiresAnAdminSessionAndExactWriteOriginAndNeverReturnsSecrets() throws Exception {
+        var created = request(post("/api/workflows/credentials").content(write(Map.of("name", "编辑测试", "kind", "basic", "value", Map.of("username", "old-user", "password", "test-edit-password")))));
+        String endpoint = "/api/workflows/credentials/" + created.get("id");
+        String update = write(Map.of("name", "已编辑", "kind", "basic", "value", Map.of("username", "new-user", "password", "")));
+        mvc.perform(get(endpoint)).andExpect(status().isUnauthorized());
+        mvc.perform(get(endpoint).header("Authorization", "Bearer integration-test-token")).andExpect(status().isForbidden());
+        mvc.perform(put(endpoint).contentType(MediaType.APPLICATION_JSON).content(update)).andExpect(status().isUnauthorized());
+        mvc.perform(put(endpoint).header("Authorization", "Bearer integration-test-token").contentType(MediaType.APPLICATION_JSON).content(update)).andExpect(status().isForbidden());
+        mvc.perform(put(endpoint).cookie(cookie).header("Origin", "https://evil.test").header("X-Requested-With", "XMLHttpRequest").contentType(MediaType.APPLICATION_JSON).content(update)).andExpect(status().isForbidden());
+        mvc.perform(get(endpoint).cookie(cookie)).andExpect(status().isOk()).andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(jsonPath("$.value.username").value("old-user")).andExpect(jsonPath("$.value.password").doesNotExist());
+        var result = request(put(endpoint).content(update));
+        assertEquals(created.get("id"), result.get("id")); assertEquals("已编辑", result.get("name")); assertEquals(Set.of("id", "name", "kind"), result.keySet());
+        mvc.perform(get(endpoint).cookie(cookie)).andExpect(status().isOk()).andExpect(jsonPath("$.value.username").value("new-user")).andExpect(jsonPath("$.value.password").doesNotExist());
+    }
     @Test void feishuCredentialsAreEncryptedAndOnlyMetadataIsReturnedByTheApi() throws Exception {
         String url = "https://open.feishu.cn/open-apis/bot/v2/hook/integration-example", secret = "integration-feishu-secret";
         var created = request(post("/api/workflows/credentials").content(write(Map.of("name", "飞书测试机器人", "kind", "feishu", "value", Map.of("webhookUrl", url, "secret", secret)))));

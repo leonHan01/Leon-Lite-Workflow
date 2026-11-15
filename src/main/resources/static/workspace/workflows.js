@@ -20,17 +20,25 @@ export function mount(pane, workspace) {
     }
     if (!document.getElementById('workflow-runs-css')) { const link = document.createElement('link'); link.id = 'workflow-runs-css'; link.rel = 'stylesheet'; link.href = '/workspace/workflow-runs.css'; document.head.append(link); }
     const $ = selector => pane.querySelector(selector);
+    const nodeDialog = $('[data-node-dialog]');
+    const inspectorContent = $('[data-inspector]');
+    const inspectorPanel = $('.wf-layout > .wf-inspector');
     let workflows = [], workflow = null, graph = null, selected = null, selectedEdge = null, connecting = null;
     const MAX_POSITION = 50000;
     let zoom = 1, world = { width: 2400, height: 1600 }, focused = false, focusPanels = null;
     let dirty = false, busy = false, active = false, initialized = false, timer = null, currentRun = null, capabilities = {}, credentials = [], schedule = null;
     let cancelLibraryDrag = null;
+    let editingCredential = null;
     const notice = (message, error = false) => {
         $('[data-notice]').textContent = message; $('[data-notice]').classList.toggle('is-error', error);
-        const dialog = pane.querySelector('dialog[open]');
+        const dialog = [...pane.querySelectorAll('dialog[open]')].at(-1);
         if (dialog) {
             let status = dialog.querySelector('[data-form-status]');
-            if (!status) { status = document.createElement('p'); status.dataset.formStatus = ''; status.className = 'wf-notice'; status.setAttribute('role', 'status'); dialog.append(status); }
+            if (!status) {
+                status = document.createElement('p'); status.dataset.formStatus = ''; status.className = 'wf-notice'; status.setAttribute('role', 'status');
+                const footer = dialog.querySelector('.wf-node-dialog-footer');
+                if (footer) footer.prepend(status); else dialog.append(status);
+            }
             status.textContent = message; status.classList.toggle('is-error', error);
         }
     };
@@ -48,7 +56,7 @@ export function mount(pane, workspace) {
         finally { busy = false; controls(); }
     }
     function controls() {
-        pane.querySelectorAll('[data-action="save"],[data-action="publish"],[data-action="create"],[data-action="reload"],[data-action="delete-workflow"],[data-action="test"]').forEach(b => b.disabled = busy || (!workflow && b.dataset.action !== 'create'));
+        pane.querySelectorAll('[data-action="save"],[data-action="save-node"],[data-action="publish"],[data-action="create"],[data-action="reload"],[data-action="delete-workflow"],[data-action="test"]').forEach(b => b.disabled = busy || (!workflow && b.dataset.action !== 'create'));
         const run = $('[data-action="run"]');
         run.disabled = busy || !workflow?.publishedVersion;
         run.textContent = workflow?.publishedVersion ? `▶ 运行 v${workflow.publishedVersion}` : '先发布后运行';
@@ -60,6 +68,7 @@ export function mount(pane, workspace) {
     }
     async function loadList() { workflows = await api(); picker(); }
     async function load(id) {
+        closeNodeDialog(false);
         clearTimeout(timer); currentRun = null; zoom = 1; world = { width: 2400, height: 1600 };
         $('.wf-canvas-scroll').scrollTo(0, 0);
         workflow = await api('/' + encodeURIComponent(id)); graph = structuredClone(workflow.definition);
@@ -118,12 +127,28 @@ export function mount(pane, workspace) {
     }
     function configureNode(id, focusField = false) {
         if (selected !== id || selectedEdge) selectNode(id);
-        panel('inspector', false);
-        if (focusField) requestAnimationFrame(() => {
+        if (!focusField) { panel('inspector', false); return; }
+        $('[data-node-settings]').append(inspectorContent);
+        nodeDialog.querySelector('[data-form-status]')?.remove();
+        if (!nodeDialog.open) nodeDialog.showModal();
+        document.body.classList.add('wf-node-dialog-open');
+        requestAnimationFrame(() => {
             const input = $('[data-inspector] [data-field="name"]');
             input?.focus({ preventScroll: true }); input?.scrollIntoView({ block: 'nearest' });
         });
     }
+    function closeNodeDialog(commit = true) {
+        if (!nodeDialog.open) return;
+        if (commit) commitInspector();
+        inspectorPanel.append(inspectorContent);
+        nodeDialog.close();
+        document.body.classList.remove('wf-node-dialog-open');
+        pane.querySelector(`[data-node="${CSS.escape(selected || '')}"]`)?.focus({ preventScroll: true });
+    }
+    nodeDialog.addEventListener('cancel', event => {
+        event.preventDefault();
+        try { closeNodeDialog(); } catch (error) { notice(error.message, true); }
+    });
     function selectEdge(id) {
         commitInspector(); selected = null; selectedEdge = id; connecting = null;
         renderCanvas(); inspector(); panel('inspector', false);
@@ -266,6 +291,7 @@ export function mount(pane, workspace) {
             content += field('请求方法', select('method', c.method || 'GET', ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'].map(v => [v, v])));
             content += field('请求地址', inputField('url', c.url, 'placeholder="https://example.com/api"'));
             content += field('凭据', select('credentialId', c.credentialId || '', [['', '不使用凭据'], ...credentials.filter(v => ['bearer', 'basic', 'header'].includes(v.kind)).map(v => [v.id, v.name])]));
+            content += `<button type="button" data-action="edit-node-credential" ${c.credentialId ? '' : 'disabled'}>编辑所选凭据</button>`;
             content += field('Headers（JSON）', `<textarea data-field="headers" spellcheck="false">${esc(pretty(c.headers || {}))}</textarea>`);
             content += field('Body（JSON 或文本）', `<textarea data-field="body" spellcheck="false">${esc(displayValue(c.body))}</textarea>`);
             content += '<p class="wf-help">字段可引用 {{ input.items[0].json.name }}。凭据通过上方“管理凭据”保存。请求不会自动重试或跟随重定向。</p>';
@@ -280,6 +306,7 @@ export function mount(pane, workspace) {
         if (node.type === 'feishu') {
             content += field('飞书机器人', select('credentialId', c.credentialId || '', [['', '请选择机器人凭据'], ...credentials.filter(v => v.kind === 'feishu').map(v => [v.id, v.name])]));
             content += '<button type="button" data-action="feishu-credentials">添加飞书机器人</button>';
+            content += `<button type="button" data-action="edit-node-credential" ${c.credentialId ? '' : 'disabled'}>编辑所选凭据</button>`;
             content += field('消息类型', select('messageType', c.messageType || 'text', [['text', '文本'], ['card', 'Markdown 卡片']]));
             content += `<label data-feishu-title ${c.messageType === 'card' ? '' : 'hidden'}>卡片标题${inputField('title', c.title || '工作流通知', 'maxlength="200"')}</label>`;
             content += field('消息内容', `<textarea aria-label="飞书消息内容" data-field="text" rows="5" maxlength="20480" spellcheck="false">${esc(c.text)}</textarea>`);
@@ -288,6 +315,7 @@ export function mount(pane, workspace) {
         if (node.type === 'email') {
             content += field('SMTP 邮箱', select('credentialId', c.credentialId || '', [['', '请选择邮箱凭据'], ...credentials.filter(v => v.kind === 'smtp').map(v => [v.id, v.name])]));
             content += '<button type="button" data-action="smtp-credentials">添加 SMTP 邮箱</button>';
+            content += `<button type="button" data-action="edit-node-credential" ${c.credentialId ? '' : 'disabled'}>编辑所选凭据</button>`;
             content += field('收件人', inputField('to', c.to, 'placeholder="name@example.com，多个邮箱用逗号分隔" maxlength="8192"'));
             content += field('抄送（可选）', inputField('cc', c.cc, 'maxlength="8192"'));
             content += field('密送（可选）', inputField('bcc', c.bcc, 'maxlength="8192"'));
@@ -346,6 +374,7 @@ export function mount(pane, workspace) {
     }
     function beginReconnect(id, endpoint) {
         commitInspector(); const edge = graph.edges.find(e => e.id === id); if (!edge) return;
+        closeNodeDialog();
         selected = null; selectedEdge = id; connecting = { edgeId: id, endpoint };
         renderCanvas(); inspector();
         $('.wf-canvas-scroll').focus({ preventScroll: true });
@@ -429,10 +458,42 @@ export function mount(pane, workspace) {
         }
     }
     function credentialList() {
-        $('[data-credential-list]').innerHTML = credentials.length ? credentials.map(c => `<div class="wf-credential-row"><span>${esc(c.name)} <small class="wf-muted">${esc(c.kind === 'feishu' ? '飞书机器人' : c.kind === 'smtp' ? 'SMTP 邮箱' : c.kind)}</small></span><button type="button" data-delete-credential="${esc(c.id)}">删除</button></div>`).join('') : '<p class="wf-muted">尚未保存凭据</p>';
+        $('[data-credential-list]').innerHTML = credentials.length ? credentials.map(c => `<div class="wf-credential-row"><span>${esc(c.name)} <small class="wf-muted">${esc(c.kind === 'feishu' ? '飞书机器人' : c.kind === 'smtp' ? 'SMTP 邮箱' : c.kind)}</small></span><div class="wf-actions"><button type="button" data-edit-credential="${esc(c.id)}">编辑</button><button type="button" data-delete-credential="${esc(c.id)}">删除</button></div></div>`).join('') : '<p class="wf-muted">尚未保存凭据</p>';
         $('[data-credential-form] button[type="submit"]').disabled = !capabilities.credentialsEnabled;
-        $('[data-credential-hint]').textContent = capabilities.credentialsEnabled ? 'HTTP / 飞书使用 HTTPS；SMTP 邮箱使用 SSL/TLS 或 STARTTLS。' : '凭据存储尚未启用，请联系管理员配置后使用。';
+        $('[data-credential-hint]').textContent = !capabilities.credentialsEnabled ? '凭据存储尚未启用，请联系管理员配置后使用。' : editingCredential ? '密码、令牌、Webhook 和签名密钥不回显，留空保留原值。修改将用于所有引用此凭据的节点。' : 'HTTP / 飞书使用 HTTPS；SMTP 邮箱使用 SSL/TLS 或 STARTTLS。';
         credentialFields();
+    }
+    function resetCredentialForm(kind = 'bearer') {
+        editingCredential = null;
+        $('[data-credentials-dialog] [data-form-status]')?.remove();
+        const form = $('[data-credential-form]'); form.reset(); form.elements.kind.disabled = false; form.elements.kind.value = kind;
+        $('[data-credential-title]').textContent = '新增凭据';
+        form.querySelector('button[type="submit"]').textContent = '保存凭据';
+        $('[data-action="new-credential"]').hidden = true;
+        for (const name of ['secret', 'webhookUrl', 'feishuSecret', 'smtpPassword']) form.elements[name].placeholder = '';
+        credentialFields();
+    }
+    async function editCredential(id) {
+        commitInspector();
+        const credential = await api('/credentials/' + encodeURIComponent(id));
+        resetCredentialForm(credential.kind); editingCredential = credential;
+        const form = $('[data-credential-form]'), value = credential.value;
+        form.elements.name.value = credential.name; form.elements.kind.disabled = true;
+        if (credential.kind === 'smtp') {
+            for (const [field, key] of Object.entries({smtpHost:'host', smtpPort:'port', smtpSecurity:'security', smtpUsername:'username', smtpFrom:'from'})) form.elements[field].value = value[key] ?? '';
+        } else if (['basic', 'header'].includes(credential.kind)) form.elements.username.value = value[credential.kind === 'basic' ? 'username' : 'header'] || '';
+        for (const name of ['secret', 'webhookUrl', 'feishuSecret', 'smtpPassword']) form.elements[name].placeholder = '留空保留原值';
+        $('[data-credential-title]').textContent = '编辑凭据';
+        form.querySelector('button[type="submit"]').textContent = '保存修改';
+        $('[data-action="new-credential"]').hidden = false;
+        credentialList();
+        form.elements.name.focus(); form.elements.name.scrollIntoView({block:'nearest'});
+    }
+    async function openCredentials(kind = 'bearer', id = null) {
+        commitInspector(); credentials = await api('/credentials'); resetCredentialForm(kind); credentialList();
+        if (id) await editCredential(id);
+        $('[data-credentials-dialog]').showModal();
+        $('[data-credential-form]').elements.name.focus();
     }
     function credentialFields() {
         const form = $('[data-credential-form]'), kind = form.elements.kind.value, isFeishu = kind === 'feishu', isSmtp = kind === 'smtp';
@@ -441,9 +502,12 @@ export function mount(pane, workspace) {
         $('[data-credential-feishu]').hidden = !isFeishu;
         $('[data-credential-smtp]').hidden = !isSmtp;
         $('[data-credential-smtp]').disabled = !isSmtp;
-        form.elements.secret.disabled = isFeishu || isSmtp; form.elements.secret.required = !isFeishu && !isSmtp;
-        form.elements.webhookUrl.disabled = !isFeishu; form.elements.webhookUrl.required = isFeishu;
+        form.elements.secret.disabled = isFeishu || isSmtp; form.elements.secret.required = !editingCredential && !isFeishu && !isSmtp;
+        form.elements.webhookUrl.disabled = !isFeishu; form.elements.webhookUrl.required = !editingCredential && isFeishu;
         form.elements.feishuSecret.disabled = !isFeishu;
+        form.elements.smtpPassword.required = !editingCredential && isSmtp;
+        $('[data-credential-clear]').hidden = !editingCredential || !isFeishu;
+        form.elements.clearSecret.disabled = !editingCredential || !isFeishu;
     }
     async function refreshSchedule() {
         const id = workflow?.id; if (!id) return;
@@ -484,18 +548,21 @@ export function mount(pane, workspace) {
         create: () => { $('[data-create-dialog]').showModal(); $('[data-create-form] input').focus(); },
         reload: async () => { if (!dirty || confirm('重新加载会丢弃未保存的草稿，是否继续？')) { await loadList(); if (workflow) await load(workflow.id); } },
         save,
+        'save-node': async () => { await save(); closeNodeDialog(); },
         publish: async () => { await save(); workflow = await send('/' + workflow.id + '/publish', { revision: workflow.revision }); controls(); notice(`版本 v${workflow.publishedVersion} 已发布。后续编辑不会影响该版本。`); },
         run: async () => { const run = await send('/' + workflow.id + '/runs', { input: runInput() }); showRun(run); await refreshRuns(); schedulePoll(); notice(`正在运行已发布版本 v${run.version}${dirty ? '；当前草稿修改不参与本次运行' : ''}。`); },
         test: async () => { commitInspector(); const node = graph.nodes.find(n => n.id === selected); const result = await send('/test-node', { node, input: runInput() }); $('[data-run-detail]').innerHTML = `<div class="wf-run-summary"><span>草稿节点调试 · ${esc(node.name)}</span><span>${result.durationMs} ms</span>${result.branch ? `<span>分支 ${esc(result.branch)}</span>` : ''}</div><h3>输出</h3><pre>${esc(pretty(result.output))}</pre><h3>日志</h3><pre>${esc(result.logs || '无日志')}</pre>`; notice('节点调试成功。'); },
-        'delete-node': () => { const node = graph.nodes.find(n => n.id === selected); if (['start', 'end'].includes(node?.type)) return; graph.nodes = graph.nodes.filter(n => n.id !== selected); graph.edges = graph.edges.filter(e => e.source !== selected && e.target !== selected); selected = graph.nodes[0]?.id; markDirty(); renderCanvas(); inspector(); },
+        'delete-node': () => { const node = graph.nodes.find(n => n.id === selected); if (['start', 'end'].includes(node?.type)) return; closeNodeDialog(false); graph.nodes = graph.nodes.filter(n => n.id !== selected); graph.edges = graph.edges.filter(e => e.source !== selected && e.target !== selected); selected = graph.nodes[0]?.id; markDirty(); renderCanvas(); inspector(); },
         'delete-workflow': async () => { if (!workflow || !confirm(`删除“${workflow.name}”？历史运行记录会保留。`)) return; await api('/' + workflow.id, { method: 'DELETE' }); workflow = null; graph = null; dirty = false; currentRun = null; clearTimeout(timer); $('[data-editor]').hidden = true; workspace.replace('/workflows.html'); await loadList(); if (workflows.length) await load(workflows[0].id); else notice('工作流已删除。'); },
         'refresh-runs': refreshRuns,
         'cancel-run': async () => { if (currentRun) { showRun(await send('/runs/' + currentRun.id + '/cancel', {})); await refreshRuns(); notice('运行已停止。已经发送的请求或邮件可能已在对端生效。'); } },
         versions: async () => { const versions = await api('/' + workflow.id + '/versions'); $('[data-run-detail]').innerHTML = '<h3>发布版本记录</h3>' + versions.map(v => `<details><summary>v${v.version}<small>${esc(date(v.createdAt))}</small></summary><pre>${esc(pretty(v.runtimes))}</pre></details>`).join(''); },
         example,
-        credentials: async () => { credentials = await api('/credentials'); credentialList(); $('[data-credentials-dialog]').showModal(); },
-        'feishu-credentials': async () => { credentials = await api('/credentials'); $('[data-credential-form]').elements.kind.value = 'feishu'; credentialList(); $('[data-credentials-dialog]').showModal(); $('[data-credential-form]').elements.name.focus(); },
-        'smtp-credentials': async () => { credentials = await api('/credentials'); $('[data-credential-form]').elements.kind.value = 'smtp'; credentialList(); $('[data-credentials-dialog]').showModal(); $('[data-credential-form]').elements.name.focus(); },
+        credentials: () => openCredentials(),
+        'feishu-credentials': () => openCredentials('feishu'),
+        'smtp-credentials': () => openCredentials('smtp'),
+        'edit-node-credential': () => { const id = $('[data-field="credentialId"]')?.value; if (id) return openCredentials('bearer', id); },
+        'new-credential': () => { resetCredentialForm($('[data-credential-form]').elements.kind.value); credentialList(); },
     };
     pane.addEventListener('click', event => {
         const target = event.target.closest('button,[data-node],[data-edge],[data-reconnect]'); if (!target) return;
@@ -511,7 +578,12 @@ export function mount(pane, workspace) {
             else if (action === 'focus') focus(!focused);
             return;
         }
-        if (target.dataset.close) { pane.querySelector(`[data-${target.dataset.close}-dialog]`).close(); return; }
+        if (target.dataset.close) {
+            if (target.dataset.close === 'node') {
+                try { closeNodeDialog(); } catch (error) { notice(error.message, true); }
+            } else pane.querySelector(`[data-${target.dataset.close}-dialog]`).close();
+            return;
+        }
         if (target.dataset.action) { perform(actions[target.dataset.action]); return; }
         try {
             if (target.dataset.edge || target.dataset.selectEdge) selectEdge(target.dataset.edge || target.dataset.selectEdge);
@@ -520,7 +592,8 @@ export function mount(pane, workspace) {
             else if (target.dataset.source && (event.detail === 0 || connecting?.edgeId)) connectPort('source', target.dataset.source, target.dataset.branch);
             else if (target.dataset.target) connectPort('target', target.dataset.target);
             else if (target.dataset.run) perform(() => viewRun(target.dataset.run));
-            else if (target.dataset.deleteCredential) perform(async () => { if (!confirm('删除后，引用此凭据的节点需要重新选择凭据，是否继续？')) return; await api('/credentials/' + target.dataset.deleteCredential, { method: 'DELETE' }); credentials = await api('/credentials'); credentialList(); inspector(); });
+            else if (target.dataset.editCredential) perform(() => editCredential(target.dataset.editCredential));
+            else if (target.dataset.deleteCredential) perform(async () => { if (!confirm('删除后，引用此凭据的节点需要重新选择凭据，是否继续？')) return; await api('/credentials/' + target.dataset.deleteCredential, { method: 'DELETE' }); if (editingCredential?.id === target.dataset.deleteCredential) resetCredentialForm(); credentials = await api('/credentials'); credentialList(); inspector(); });
             else if (target.dataset.node) configureNode(target.dataset.node);
         } catch (error) { notice(error.message, true); }
     });
@@ -552,6 +625,7 @@ export function mount(pane, workspace) {
         if (target.matches('[data-workflows]')) { const id = target.value; if (dirty && !confirm('切换将丢弃未保存的草稿，是否继续？')) { picker(); return; } perform(() => load(id)); }
         if (target.matches('[data-credential-form] [name="kind"]')) credentialFields();
         if (target.matches('[data-credential-form] [name="smtpSecurity"]')) $('[data-credential-form]').elements.smtpPort.value = target.value === 'ssl' ? '465' : '587';
+        if (target.matches('[data-field="credentialId"]')) $('[data-action="edit-node-credential"]').disabled = !target.value;
         try {
             if (target.matches('[data-field="messageType"]')) { commitInspector(); $('[data-feishu-title]').hidden = target.value !== 'card'; }
             if (target.matches('[data-edge-field="source"]')) {
@@ -568,6 +642,7 @@ export function mount(pane, workspace) {
         } catch (error) { notice(error.message, true); }
     });
     pane.addEventListener('keydown', event => {
+        if (event.key === 'Escape' && pane.querySelector('dialog[open]')) return;
         if (event.key === 'Escape' && cancelLibraryDrag) { event.preventDefault(); cancelLibraryDrag(); return; }
         if (event.key === 'Escape') { const wasConnecting = !!connecting; connecting = null; if (graph) renderCanvas(); if (!wasConnecting && !pane.querySelector('dialog[open]')) focus(false); }
         if (['Delete', 'Backspace'].includes(event.key) && selectedEdge && !event.target.closest('input,textarea,select,[contenteditable="true"],dialog')) { event.preventDefault(); deleteEdge(); }
@@ -731,18 +806,19 @@ export function mount(pane, workspace) {
         perform(async () => { if (dirty && !confirm('新建将离开当前未保存的草稿，是否继续？')) return; const result = await send('', { name: form.elements.name.value }); $('[data-create-dialog]').close(); form.reset(); await loadList(); await load(result.id); });
     });
     $('[data-credential-form]').addEventListener('submit', event => {
-        event.preventDefault(); const form = event.currentTarget, data = new FormData(form), kind = data.get('kind'), secret = data.get('secret');
+        event.preventDefault(); const form = event.currentTarget, data = new FormData(form), kind = form.elements.kind.value, secret = data.get('secret'), editingId = editingCredential?.id;
         perform(async () => {
             const value = kind === 'feishu' ? { webhookUrl: data.get('webhookUrl'), secret: data.get('feishuSecret') || '' }
                 : kind === 'smtp' ? { host: data.get('smtpHost'), port: Number(data.get('smtpPort')), security: data.get('smtpSecurity'), username: data.get('smtpUsername'), password: data.get('smtpPassword'), from: data.get('smtpFrom') }
                 : kind === 'bearer' ? { token: secret } : kind === 'basic' ? { username: data.get('username'), password: secret } : { header: data.get('username'), secret };
-            const created = await send('/credentials', { name: data.get('name'), kind, value });
-            if ((kind === 'feishu' && graph?.nodes.find(n => n.id === selected)?.type === 'feishu') || (kind === 'smtp' && graph?.nodes.find(n => n.id === selected)?.type === 'email')) {
+            const created = await send('/credentials' + (editingId ? '/' + encodeURIComponent(editingId) : ''), { name: data.get('name'), kind, value, clearSecret: data.get('clearSecret') === 'on' }, editingId ? 'PUT' : 'POST');
+            if (!editingId && ((kind === 'feishu' && graph?.nodes.find(n => n.id === selected)?.type === 'feishu') || (kind === 'smtp' && graph?.nodes.find(n => n.id === selected)?.type === 'email'))) {
                 commitInspector(); graph.nodes.find(n => n.id === selected).config.credentialId = created.id; markDirty();
             }
-            form.reset(); credentials = await api('/credentials'); credentialList(); inspector(); notice('凭据已保存。');
+            resetCredentialForm(); credentials = await api('/credentials'); credentialList(); inspector(); notice(editingId ? '凭据已更新，已有节点继续使用此凭据。' : '凭据已保存。');
         });
     });
+    $('[data-credentials-dialog]').addEventListener('close', () => { if (!$('[data-credentials-dialog]').open) resetCredentialForm(); });
     window.addEventListener('beforeunload', event => { if (dirty) { event.preventDefault(); event.returnValue = ''; } });
     return {
         async activate(url) {
@@ -763,6 +839,6 @@ export function mount(pane, workspace) {
                 } else { schedulePoll(); if (workflow) refreshSchedule().catch(e => notice(e.message, true)); }
             }
         },
-        deactivate() { cancelLibraryDrag?.(); active = false; clearTimeout(timer); focus(false); },
+        deactivate() { closeNodeDialog(false); cancelLibraryDrag?.(); active = false; clearTimeout(timer); focus(false); },
     };
 }

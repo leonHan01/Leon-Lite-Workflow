@@ -3,6 +3,8 @@ package com.leon.workflow.automation;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 import javax.crypto.Cipher;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
@@ -26,7 +28,59 @@ public class WorkflowCredentials {
     public Map<String, Object> create(Map<String, Object> request) {
         requireKey();
         String name = required(request.get("name"), "凭据名称需要 1–100 个字符", 100), kind = text(request.get("kind"));
-        Map<String, Object> value = object(request.get("value"));
+        Map<String, Object> value = validate(kind, object(request.get("value")));
+        String id = UUID.randomUUID().toString();
+        jdbc.update("INSERT INTO automation_credential(id,name,kind,encrypted,created_at) VALUES(?,?,?,?,?)", id, name, kind, encrypt(id, write(value)), System.currentTimeMillis());
+        return Map.of("id", id, "name", name, "kind", kind);
+    }
+    public Map<String, Object> get(String id) {
+        requireKey();
+        var row = stored(id);
+        String kind = text(row.get("kind"));
+        var value = read(decrypt(id, text(row.get("encrypted"))));
+        Map<String, Object> editable = new LinkedHashMap<>();
+        for (String field : publicFields(kind)) if (value.containsKey(field)) editable.put(field, value.get(field));
+        return Map.of("id", id, "name", row.get("name"), "kind", kind, "value", editable);
+    }
+    public Map<String, Object> update(String id, Map<String, Object> request) {
+        requireKey();
+        var row = stored(id);
+        String kind = text(row.get("kind"));
+        if (request.containsKey("kind") && !kind.equals(request.get("kind"))) throw new IllegalArgumentException("编辑凭据时不能更改类型，请新建其他类型的凭据");
+        String name = required(request.getOrDefault("name", row.get("name")), "凭据名称需要 1–100 个字符", 100);
+        var value = new LinkedHashMap<>(read(decrypt(id, text(row.get("encrypted")))));
+        var changes = object(request.getOrDefault("value", Map.of()));
+        for (String field : publicFields(kind)) if (changes.containsKey(field)) value.put(field, changes.get(field));
+        for (String field : privateFields(kind)) if (!text(changes.get(field)).isBlank()) value.put(field, changes.get(field));
+        if ("feishu".equals(kind) && Boolean.TRUE.equals(request.get("clearSecret"))) value.put("secret", "");
+        var validated = validate(kind, value);
+        if (jdbc.update("UPDATE automation_credential SET name=?,encrypted=? WHERE id=? AND encrypted=?", name, encrypt(id, write(validated)), id, row.get("encrypted")) != 1)
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "凭据已被修改或删除，请重新打开后编辑");
+        return Map.of("id", id, "name", name, "kind", kind);
+    }
+    private Map<String, Object> stored(String id) {
+        var rows = jdbc.queryForList("SELECT name,kind,encrypted FROM automation_credential WHERE id=?", id);
+        if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "凭据不存在，请刷新后重试");
+        return rows.getFirst();
+    }
+    private List<String> publicFields(String kind) {
+        return switch (kind) {
+            case "smtp" -> List.of("host", "port", "security", "username", "from");
+            case "basic" -> List.of("username");
+            case "header" -> List.of("header");
+            default -> List.of();
+        };
+    }
+    private List<String> privateFields(String kind) {
+        return switch (kind) {
+            case "smtp", "basic" -> List.of("password");
+            case "bearer" -> List.of("token");
+            case "header" -> List.of("secret");
+            case "feishu" -> List.of("webhookUrl", "secret");
+            default -> List.of();
+        };
+    }
+    private Map<String, Object> validate(String kind, Map<String, Object> value) {
         switch (kind) {
             case "smtp" -> value = WorkflowEmail.credential(value);
             case "bearer" -> required(value.get("token"), "请填写访问令牌", 8192);
@@ -40,9 +94,7 @@ public class WorkflowCredentials {
             }
             default -> throw new IllegalArgumentException("不支持的凭据类型");
         }
-        String id = UUID.randomUUID().toString();
-        jdbc.update("INSERT INTO automation_credential(id,name,kind,encrypted,created_at) VALUES(?,?,?,?,?)", id, name, kind, encrypt(id, write(value)), System.currentTimeMillis());
-        return Map.of("id", id, "name", name, "kind", kind);
+        return value;
     }
     public void delete(String id) { jdbc.update("DELETE FROM automation_credential WHERE id=?", id); }
     public Map<String, String> headers(String id, WorkflowPrivacy privacy) {
