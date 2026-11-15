@@ -19,11 +19,13 @@ public class WorkflowController {
     private final WorkflowCredentials credentials;
     private final ApiTokenInterceptor auth;
     private final WorkflowSchedules schedules;
+    private final WorkflowQqBindings qqBindings;
     private final boolean schedulingEnabled;
-    public WorkflowController(WorkflowStore store, WorkflowEngine engine, WorkflowCredentials credentials, ApiTokenInterceptor auth, WorkflowSchedules schedules,
+    public WorkflowController(WorkflowStore store, WorkflowEngine engine, WorkflowCredentials credentials, ApiTokenInterceptor auth, WorkflowSchedules schedules, WorkflowQqBindings qqBindings,
             @Value("${leon.workflows.scheduling-enabled:true}") boolean schedulingEnabled) {
         this.store = store; this.engine = engine; this.credentials = credentials; this.auth = auth;
         this.schedules = schedules;
+        this.qqBindings = qqBindings;
         this.schedulingEnabled = schedulingEnabled;
     }
     @ModelAttribute void authorize(HttpServletRequest request) {
@@ -61,6 +63,9 @@ public class WorkflowController {
     @PostMapping("/runs/{id}/cancel") public ResponseEntity<?> cancel(@PathVariable String id) { return response(engine.cancel(id)); }
     @PostMapping("/test-node") public ResponseEntity<?> test(@RequestBody Map<String, Object> body) { return response(engine.test(JSON.convertValue(body.get("node"), WorkflowGraph.Node.class), object(body.get("input")))); }
     @GetMapping("/credentials") public ResponseEntity<?> credentials() { return response(credentials.list()); }
+    @PostMapping("/qq-bindings") public ResponseEntity<?> bindQq(@RequestBody Map<String, Object> body) { return response(qqBindings.start(body)); }
+    @GetMapping("/qq-bindings/{id}") public ResponseEntity<?> qqBinding(@PathVariable String id) { return response(qqBindings.get(id)); }
+    @DeleteMapping("/qq-bindings/{id}") public ResponseEntity<?> cancelQqBinding(@PathVariable String id) { return response(qqBindings.cancel(id)); }
     @PostMapping("/credentials") public ResponseEntity<?> credential(@RequestBody Map<String, Object> body) { return response(credentials.create(body)); }
     @GetMapping("/credentials/{id}") public ResponseEntity<?> credential(@PathVariable String id) { return response(credentials.get(id)); }
     @PutMapping("/credentials/{id}") public ResponseEntity<?> updateCredential(@PathVariable String id, @RequestBody Map<String, Object> body) { return response(credentials.update(id, body)); }

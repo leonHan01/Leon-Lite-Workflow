@@ -94,6 +94,10 @@ public class WorkflowQq {
             return token;
         }
     }
+    String bindingAccessToken(String id) throws Exception {
+        var privacy = new WorkflowPrivacy();
+        return accessToken(id, credentials.qq(id, privacy), privacy, System.nanoTime() + TimeUnit.SECONDS.toNanos(20));
+    }
     private Map<String, Object> request(String path, Object body, Map<String, String> headers, WorkflowPrivacy privacy, long deadline, String action) throws Exception {
         if (Thread.currentThread().isInterrupted()) throw new InterruptedException();
         long remaining = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime());
