@@ -9,11 +9,13 @@ let notes = [{id:1,content:'插件已有便签',archived:false,createTime:new Da
 const collection = {id:1,name:'共享集合',groups:[{id:2,name:'默认分组',items:[{id:3,name:'共享网页',url:'https://example.com',sortOrder:0}]}]};
 const server = http.createServer(async (req,res) => {
   const url = new URL(req.url,'http://localhost');
+  res.setHeader('X-Frame-Options', 'DENY');
   if (url.pathname.startsWith('/api/')) {
     let body=''; for await (const chunk of req) body+=chunk;
     if (!['GET','HEAD'].includes(req.method)) assert.equal(req.headers['x-requested-with'],'XMLHttpRequest');
     let data=[];
     if (url.pathname === '/api/web-collections' || url.pathname === '/api/web-collections/full') data=[collection];
+    else if (url.pathname === '/api/toolbox' && req.method === 'GET') data=[{id:5,name:'共享工具',url:'https://example.com'}];
     else if (url.pathname === '/api/notes' && req.method === 'POST') { const input=JSON.parse(body); const note={id:notes.length+1,content:input.content,archived:false,createTime:new Date().toISOString()}; notes.push(note); data=note; }
     else if (url.pathname === '/api/notes') data=notes;
     else if (url.pathname === '/api/llm-sessions' && req.method === 'POST') { const input=JSON.parse(body); const session={id:1,title:input.title,messages:[]}; sessions.push(session); data=session; }
@@ -37,13 +39,17 @@ const server = http.createServer(async (req,res) => {
   const page=await browser.newPage({viewport:{width:1400,height:900}}); page.setDefaultTimeout(8000); const errors=[]; page.on('pageerror',e=>errors.push(e.message));
   const base='http://127.0.0.1:'+server.address().port;
   await page.goto(base+'/workspace/tools-pro.html',{waitUntil:'networkidle'});
-  const frame=page.frameLocator('iframe[title="Leon Tools Pro"]');
+  assert.equal(await page.locator('iframe[title="Leon Tools Pro"]').count(), 0);
+  const frame=page.locator('.workspace-tools-pro-panel');
   await frame.getByText('共享集合',{exact:true}).waitFor();
   await frame.getByText('共享集合',{exact:true}).click();
   await frame.getByText('共享网页',{exact:true}).waitFor();
   await page.screenshot({path:'/private/tmp/leon-tools-pro-collection.png'});
   await frame.getByRole('tab',{name:'便签',exact:true}).click();
   await frame.getByText('插件已有便签',{exact:true}).waitFor();
+  await frame.getByPlaceholder('搜索便签').fill('插件');
+  assert.equal(await frame.evaluate(e => e.shadowRoot.activeElement?.id), 'note-search');
+  await frame.getByPlaceholder('搜索便签').fill('');
   await frame.getByPlaceholder('写一条便签，回车发送').fill('工作台新便签');
   const notification = page.waitForResponse(r=>r.url().endsWith('/api/workspace-notification'));
   await frame.getByPlaceholder('写一条便签，回车发送').press('Enter');
@@ -52,12 +58,16 @@ const server = http.createServer(async (req,res) => {
   await notification;
   assert.ok(notifications.some(n=>n.title==='新增便签' && n.text==='工作台新便签'));
   const other=await browser.newPage(); await other.goto(base+'/workspace/tools-pro.html',{waitUntil:'networkidle'});
-  const second=other.frameLocator('iframe[title="Leon Tools Pro"]'); await second.getByRole('tab',{name:'便签',exact:true}).click();
+  const second=other.locator('.workspace-tools-pro-panel'); await second.getByRole('tab',{name:'便签',exact:true}).click();
   await second.getByText('工作台新便签',{exact:true}).waitFor();
   await frame.getByRole('tab',{name:'待办',exact:true}).click();
   await frame.getByPlaceholder('添加待办，回车保存').waitFor();
   await frame.getByRole('tab',{name:'工具',exact:true}).click();
   await frame.getByText('JSON 格式化',{exact:true}).waitFor();
+  await frame.getByText('共享工具',{exact:true}).click({button:'right'});
+  await frame.getByRole('menuitem',{name:'编辑',exact:true}).click();
+  await frame.getByRole('heading',{name:'编辑工具',exact:true}).waitFor();
+  await frame.getByRole('button',{name:'取消',exact:true}).click();
   await frame.getByRole('tab',{name:'LLM',exact:true}).click();
   await frame.getByPlaceholder('输入消息，回车发送').fill('测试问题');
   await frame.getByPlaceholder('输入消息，回车发送').press('Enter');

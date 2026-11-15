@@ -1,4 +1,5 @@
-import { el, icon, faviconImg, restoreFocus, TOOL_ICONS, hasIcon } from "./dom.js";
+import { chrome } from "../shim.js";
+import { el, icon, faviconImg, restoreFocus, setRenderRoot, TOOL_ICONS, hasIcon } from "./dom.js";
 import { createIconPicker } from "./icon-picker.js";
 import {
   DEFAULT_API_BASE,
@@ -56,6 +57,8 @@ import {
 } from "./toolbox.js";
 import { renderTool, renderToolsHome } from "./tools.js";
 
+export function mountToolsPanel(root, navigate = path => { window.location.href = path; }) {
+setRenderRoot(root);
 const ui = {
   tab: "collections",
   collectionId: null,
@@ -72,31 +75,26 @@ let applyingRemote = false;
 let syncPromise = null;
 let syncRetryTimer = null;
 
-const contentEl = document.getElementById("content");
-const sheetRoot = document.getElementById("sheet-root");
-const toastEl = document.getElementById("toast");
-const syncStatusEl = document.getElementById("sync-status");
+const contentEl = root.querySelector("#content");
+const sheetRoot = root.querySelector("#sheet-root");
+const toastEl = root.querySelector("#toast");
+const syncStatusEl = root.querySelector("#sync-status");
 
-document.querySelectorAll(".tab").forEach((button) => {
+root.querySelectorAll(".tab").forEach((button) => {
   button.addEventListener("click", () => switchTab(button.dataset.tab));
 });
 
-const settingsBtn = document.getElementById("settings-btn");
+const settingsBtn = root.querySelector("#settings-btn");
 if (settingsBtn) {
   settingsBtn.append(icon("gear"), "高级设置");
-  settingsBtn.addEventListener("click", () => { window.parent.location.href = "/advanced-settings.html"; });
+  settingsBtn.addEventListener("click", () => { navigate("/advanced-settings.html"); });
 }
 
-window.addEventListener("unhandledrejection", (event) => {
-  event.preventDefault();
-  toast(event.reason instanceof Error ? event.reason.message : "操作失败，请检查后端连接");
-});
-
-init();
-window.addEventListener("message", (event) => {
-  if (event.origin !== location.origin || event.source !== window.parent || event.data !== "leon-tools-refresh") return;
-  if (!sheetRoot.children.length && !isChatSending()) syncInBackground();
-});
+const ready = init().catch(error => toast(error instanceof Error ? error.message : "操作失败，请检查后端连接"));
+const refresh = () => {
+  if (!(root.host || root).closest("[hidden]") && !sheetRoot.children.length && !isChatSending()) syncInBackground();
+};
+window.addEventListener("focus", refresh);
 
 async function init() {
   const savedUi = await loadUi();
@@ -166,7 +164,7 @@ async function refreshActiveTab() {
 }
 
 async function refreshActiveTabAndRender({ follow = false } = {}) {
-  const active = document.activeElement;
+  const active = root.activeElement || document.activeElement;
   const focus = {
     id: active?.id,
     start: active?.selectionStart,
@@ -202,7 +200,7 @@ async function revealCurrentPage() {
 
 function scrollToCurrentPage() {
   queueMicrotask(() => {
-    document.querySelector(".current-page")?.scrollIntoView({ block: "center" });
+    root.querySelector(".current-page")?.scrollIntoView({ block: "center" });
   });
 }
 
@@ -232,7 +230,7 @@ function switchTab(tab) {
 }
 
 function syncTabButtons() {
-  document.querySelectorAll(".tab").forEach((button) => {
+  root.querySelectorAll(".tab").forEach((button) => {
     const active = button.dataset.tab === ui.tab;
     button.classList.toggle("active", active);
     button.setAttribute("aria-selected", String(active));
@@ -587,7 +585,7 @@ function dragHandle(payload) {
     contentEl.classList.toggle("item-dragging", payload.type === "item");
   });
   handle.addEventListener("dragend", () => {
-    document.querySelectorAll(".dragging, .drag-over").forEach((node) => {
+    root.querySelectorAll(".dragging, .drag-over").forEach((node) => {
       node.classList.remove("dragging", "drag-over");
     });
     contentEl.classList.remove("item-dragging");
@@ -1278,7 +1276,7 @@ function toolsAddBar() {
           }
           ui.toolUrl = page.url;
           input.value = page.url;
-          const urlInput = document.getElementById("url-source");
+          const urlInput = root.querySelector("#url-source");
           if (urlInput) urlInput.value = page.url;
           try {
             const result = await addToToolbox(page);
@@ -1354,4 +1352,7 @@ async function renderTools({ refresh = true } = {}) {
     reload: () => renderTools(),
   });
   contentEl.replaceChildren(toolsAddBar(), view);
+}
+
+return { activate() { ready.then(refresh); } };
 }

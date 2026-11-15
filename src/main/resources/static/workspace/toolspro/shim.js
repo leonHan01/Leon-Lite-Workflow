@@ -1,5 +1,5 @@
 // Web-hosted adapter: transient cache only; business data remains on the server.
-(() => {
+export const chrome = (() => {
     const listeners = () => ({ addListener() {}, removeListener() {} });
     const area = () => {
         const data = new Map();
@@ -19,7 +19,7 @@
         };
     };
     const unavailable = async () => { throw new Error('此功能需要在 Chrome 扩展中使用'); };
-    globalThis.chrome = {
+    return {
         storage: { local: area(), session: area() },
         tabs: { query: async () => [], onActivated: listeners(), onUpdated: listeners(), duplicate: unavailable, update: unavailable, remove: unavailable },
         windows: { getCurrent: async () => ({ id: 0 }) },

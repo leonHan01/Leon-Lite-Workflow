@@ -8,12 +8,14 @@ import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.time.Instant;
 import java.util.*;
+import java.util.regex.Pattern;
 import static com.leon.workflow.automation.WorkflowJson.*;
 
 /** Sends one custom-bot message; webhook credentials never become part of the workflow definition. */
 @Component
 public class WorkflowFeishu {
     private static final int MAX_MESSAGE_BYTES = 20 * 1024;
+    private static final Pattern TRENDING_TEXT = Pattern.compile("\\{\\{\\s*input\\.items\\[0]\\.json\\.feishuText\\s*}}");
     private final WorkflowCredentials credentials;
     private final WorkflowHttp http;
     public WorkflowFeishu(WorkflowCredentials credentials, WorkflowHttp http) { this.credentials = credentials; this.http = http; }
@@ -46,9 +48,11 @@ public class WorkflowFeishu {
         validateConfig(config);
         var credential = credentials.feishu(text(config.get("credentialId")), privacy);
         String content = required(WorkflowExpressions.resolveRequired(config.get("text"), input, ctx, "飞书正文"), "飞书消息内容解析后不能为空", MAX_MESSAGE_BYTES);
+        Map<String, Object> trending = trendingCard(config, input, ctx);
         Map<String, Object> payload = new LinkedHashMap<>();
-        if ("card".equals(config.get("messageType"))) {
-            String title = required(WorkflowExpressions.resolveRequired(config.get("title"), input, ctx, "飞书标题"), "飞书卡片标题解析后不能为空", 200);
+        if ("card".equals(config.get("messageType")) || trending != null) {
+            String title = trending == null ? required(WorkflowExpressions.resolveRequired(config.get("title"), input, ctx, "飞书标题"), "飞书卡片标题解析后不能为空", 200) : text(trending.get("title"));
+            if (trending != null) content = text(trending.get("content"));
             payload.put("msg_type", "interactive");
             payload.put("card", Map.of("schema", "2.0", "config", Map.of("update_multi", true),
                     "header", Map.of("title", Map.of("tag", "plain_text", "content", title), "template", "blue"),
@@ -77,5 +81,32 @@ public class WorkflowFeishu {
             default -> "飞书消息发送失败，错误码 " + code;
         });
         return input;
+    }
+
+    private static Map<String, Object> trendingCard(Map<String, Object> config, Map<String, Object> input, Map<String, Object> ctx) {
+        if (!"text".equals(text(config.getOrDefault("messageType", "text"))) || !(config.get("text") instanceof String template)) return null;
+        var match = TRENDING_TEXT.matcher(template);
+        if (!match.find()) return null;
+        int start = match.start(), end = match.end();
+        if (match.find()) return null;
+        if (!(input.get("items") instanceof List<?> items) || items.isEmpty() || !(items.getFirst() instanceof Map<?, ?> item)
+                || !(item.get("json") instanceof Map<?, ?> json)) return null;
+        if (!"服务器抓取 + DeepSeek 分析".equals(json.get("sourceReadBy")) || !(json.get("feishuMarkdown") instanceof String markdown)
+                || markdown.isBlank() || !(json.get("title") instanceof String title) || title.isBlank()) return null;
+        title = required(title, "飞书卡片标题解析后不能为空", 200);
+        String before = text(WorkflowExpressions.resolveRequired(template.substring(0, start), input, ctx, "飞书正文"));
+        String after = text(WorkflowExpressions.resolveRequired(template.substring(end), input, ctx, "飞书正文"));
+        String content = markdownLiteral(before) + markdown + markdownLiteral(after);
+        return Map.of("title", title, "content", required(content, "飞书消息内容解析后不能为空", MAX_MESSAGE_BYTES));
+    }
+
+    private static String markdownLiteral(String value) {
+        StringBuilder result = new StringBuilder();
+        value.replace("<", "＜").replace(">", "＞").codePoints().forEach(cp -> {
+            String character = new String(Character.toChars(cp));
+            if ("\\`*_{}[]()#+-.!|~".contains(character)) result.append('\\');
+            result.append(character);
+        });
+        return result.toString();
     }
 }

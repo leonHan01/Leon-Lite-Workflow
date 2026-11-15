@@ -19,7 +19,7 @@ export function closeContextMenu() {
 }
 
 function onPointerDown(event) {
-  if (menu && !menu.contains(event.target)) closeContextMenu();
+  if (menu && !event.composedPath().includes(menu)) closeContextMenu();
 }
 
 function onKeyDown(event) {
@@ -50,7 +50,7 @@ export function openContextMenu(event, actions) {
       )
     )
   );
-  document.body.append(menu);
+  (event.target.getRootNode() instanceof ShadowRoot ? event.target.getRootNode() : document.body).append(menu);
   const rect = menu.getBoundingClientRect();
   const pos = menuPosition(event.clientX, event.clientY, rect.width, rect.height, window.innerWidth, window.innerHeight);
   menu.style.left = `${pos.left}px`;

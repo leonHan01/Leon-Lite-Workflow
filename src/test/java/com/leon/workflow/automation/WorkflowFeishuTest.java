@@ -92,6 +92,35 @@ class WorkflowFeishuTest {
         assertTrue(text(markdown.get("content")).contains("<text_tag color='blue'>周榜</text_tag>"));
         assertFalse(text(payload.get("sign")).isBlank());
     }
+    @Test void existingPublishedTextBindingAutomaticallySendsTrendingAsCard() throws Exception {
+        String id = credential(SECRET); var config = config(id);
+        config.put("text", "工作流通知：{{ input.items[0].json.feishuText }}\n结束 *原样*");
+        var report = WorkflowGithubTrending.report(Map.of("summary", "开发工具概览", "projects", List.of(Map.of("repo", "sample/tool", "purpose", "提升开发效率", "useCases", "日常开发"))),
+                new WorkflowGithubTrending.Page(1, List.of(Map.of("repo", "sample/tool", "url", "https://github.com/sample/tool"))));
+        when(http.executeResolved(anyMap(), any())).thenReturn(response(Map.of("code", 0)));
+        String workflowId = published(config);
+        var run = await(text(engine.start(workflowId, report).get("id")));
+        assertEquals("SUCCEEDED", run.get("status"), text(run.get("error")));
+        assertEquals(report, run.get("output"));
+        var payload = object(sent().get("body")); var card = object(payload.get("card"));
+        assertEquals("interactive", payload.get("msg_type"));
+        assertTrue(text(object(object(card.get("header")).get("title")).get("content")).contains("GitHub Trending 周榜"));
+        String content = text(object(((List<?>)object(card.get("body")).get("elements")).getFirst()).get("content"));
+        assertTrue(content.startsWith("工作流通知："));
+        assertTrue(content.contains("**用途：** 提升开发效率"));
+        assertTrue(content.contains("结束 \\*原样\\*"));
+        assertEquals("text", config.get("messageType"));
+        assertTrue(write(store.get(workflowId)).contains("{{ input.items[0].json.feishuText }}"));
+    }
+    @Test void ordinaryTextAndOlderInputsKeepTheirExistingFormat() throws Exception {
+        String id=credential(""); var config=config(id); config.put("text", "工作流通知：{{ input.items[0].json.feishuText }}");
+        var input = Map.<String,Object>of("items", List.of(Map.of("json", Map.of("feishuText", "普通正文", "feishuMarkdown", "**模拟**", "title", "其他来源"))));
+        when(http.executeResolved(anyMap(), any())).thenReturn(response(Map.of("code", 0)));
+        feishu.execute(config, input, Map.of(), new WorkflowPrivacy());
+        var payload=object(sent().get("body"));
+        assertEquals("text", payload.get("msg_type"));
+        assertEquals("工作流通知：普通正文", object(payload.get("content")).get("text"));
+    }
     @Test void cardMessagesUseSigningAndResolveTemplatesOnlyOnce() throws Exception {
         String id = credential(SECRET); var config = config(id);
         config.put("messageType", "card"); config.put("title", "通知：{{ input.items[0].json.name }}"); config.put("text", "{{ input.items[0].json.literal }}");

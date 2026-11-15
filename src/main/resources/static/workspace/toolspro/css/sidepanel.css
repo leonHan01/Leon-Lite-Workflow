@@ -2,7 +2,7 @@
   box-sizing: border-box;
 }
 
-:root {
+:root, :host {
   --color-bg: #f4f8ff;
   --color-bg-soft: #eef6ff;
   --color-surface: #ffffff;
@@ -20,8 +20,7 @@
   --shadow: 0 10px 30px rgba(20, 33, 61, 0.12);
 }
 
-html,
-body {
+html, body, :host {
   margin: 0;
   height: 100%;
   color: var(--color-text);

@@ -1,3 +1,4 @@
+import { chrome } from "../shim.js";
 import { el, icon, faviconImg } from "./dom.js";
 import { getApiBase, loadSyncMeta } from "./settings.js";
 import { exportJson, formatDateTime, hostnameOf, importJson } from "./storage.js";

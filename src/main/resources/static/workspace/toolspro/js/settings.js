@@ -1,3 +1,4 @@
+import { chrome } from "../shim.js";
 export const STORAGE_KEY = "myWorkflow.v1";
 export const NOTES_KEY = "myWorkflow.notes.v1";
 export const TODOS_KEY = "myWorkflow.todos.v1";

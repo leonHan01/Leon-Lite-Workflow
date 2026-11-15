@@ -1,3 +1,4 @@
+import { chrome } from "../shim.js";
 import * as api from "./api.js";
 import { groupByCreatedDate, normalizeFoldKeys } from "./day-groups.js";
 import { el, icon, restoreFocus } from "./dom.js";

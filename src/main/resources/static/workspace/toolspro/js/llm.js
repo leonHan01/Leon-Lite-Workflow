@@ -1,3 +1,4 @@
+import { chrome } from "../shim.js";
 import * as api from "./api.js";
 import { el, icon, restoreFocus } from "./dom.js";
 import { withBackend } from "./persist.js";
@@ -455,7 +456,7 @@ export function renderChatPage({ toast, confirmDelete, openSheet, closeSheet }) 
   }
 
   function paintStream(next) {
-    const node = document.querySelector("#content .chat-bubble.pending .chat-stream");
+    const node = thread.querySelector(".chat-bubble.pending .chat-stream");
     if (!node) return;
     node.textContent = next.content || "正在回复…";
     const threadNode = node.closest(".chat-thread");

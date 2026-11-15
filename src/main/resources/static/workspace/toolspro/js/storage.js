@@ -1,3 +1,4 @@
+import { chrome } from "../shim.js";
 import * as api from "./api.js";
 import { PENDING_KEY, STORAGE_KEY, loadUi, saveUi } from "./settings.js";
 

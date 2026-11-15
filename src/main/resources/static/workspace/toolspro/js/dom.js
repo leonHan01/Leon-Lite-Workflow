@@ -100,9 +100,12 @@ export function faviconImg(pageUrl, stored, className = "favicon") {
   return img;
 }
 
+let renderRoot = document;
+export function setRenderRoot(root) { renderRoot = root; }
+
 export function restoreFocus(id, start, end) {
   if (!id) return;
-  const node = document.getElementById(id);
+  const node = renderRoot.querySelector(`#${CSS.escape(id)}`);
   if (!node) return;
   node.focus();
   if (typeof start === "number" && node.setSelectionRange) {

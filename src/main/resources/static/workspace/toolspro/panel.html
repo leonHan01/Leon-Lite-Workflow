@@ -6,7 +6,7 @@
     <title>Leon Tools Pro</title>
     <link rel="stylesheet" href="css/sidepanel.css" />
   </head>
-  <body>
+  <body class="workspace-tools-pro-panel">
     <div class="app">
       <nav class="tabs" role="tablist">
         <button class="tab active" type="button" data-tab="collections" role="tab" aria-selected="true">集合</button>
@@ -23,6 +23,6 @@
     </div>
     <div id="sheet-root"></div>
     <div id="toast" class="toast" hidden></div>
-    <script src="/admin-auth.js"></script><script src="shim.js"></script><script type="module" src="js/sidepanel.js"></script>
+    <script src="/admin-auth.js"></script><script type="module">import { mountToolsPanel } from "./js/sidepanel.js"; mountToolsPanel(document.body);</script>
   </body>
 </html>

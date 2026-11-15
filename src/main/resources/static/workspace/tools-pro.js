@@ -1,6 +1,11 @@
-export function mount(pane) {
-    const frame = pane.querySelector('iframe');
-    const refresh = () => frame.contentWindow?.postMessage('leon-tools-refresh', location.origin);
-    window.addEventListener('focus', () => { if (!pane.hidden) refresh(); });
-    return { activate: refresh };
+import { mountToolsPanel } from './toolspro/js/sidepanel.js';
+
+export function mount(pane, workspace) {
+    const host = pane.querySelector('.workspace-tools-pro-panel');
+    const root = host.attachShadow({ mode: 'open' });
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = '/workspace/toolspro/css/sidepanel.css';
+    root.append(link, ...host.childNodes);
+    return mountToolsPanel(root, workspace.navigate);
 }

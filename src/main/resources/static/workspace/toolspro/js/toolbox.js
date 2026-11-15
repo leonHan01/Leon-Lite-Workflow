@@ -1,3 +1,4 @@
+import { chrome } from "../shim.js";
 import * as api from "./api.js";
 import { openContextMenu } from "./context-menu.js";
 import { el, icon, faviconImg, hasIcon } from "./dom.js";

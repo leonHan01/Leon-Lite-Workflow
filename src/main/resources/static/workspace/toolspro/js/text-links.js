@@ -1,3 +1,4 @@
+import { chrome } from "../shim.js";
 const TEXT_URL = /https?:\/\/[^\s<>"']+/gi;
 
 function pushText(parts, value) {
