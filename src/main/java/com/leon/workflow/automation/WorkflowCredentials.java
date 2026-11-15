@@ -28,6 +28,7 @@ public class WorkflowCredentials {
         String name = required(request.get("name"), "凭据名称需要 1–100 个字符", 100), kind = text(request.get("kind"));
         Map<String, Object> value = object(request.get("value"));
         switch (kind) {
+            case "smtp" -> value = WorkflowEmail.credential(value);
             case "bearer" -> required(value.get("token"), "请填写访问令牌", 8192);
             case "basic" -> { required(value.get("username"), "请填写用户名", 1000); required(value.get("password"), "请填写密码", 8192); }
             case "header" -> { required(value.get("header"), "请填写 Header 名称", 100); required(value.get("secret"), "请填写 Header 值", 8192); }
@@ -59,11 +60,22 @@ public class WorkflowCredentials {
                 header = "Basic " + Base64.getEncoder().encodeToString((text(value.get("username")) + ":" + text(value.get("password"))).getBytes(StandardCharsets.UTF_8));
             }
             case "header" -> { name = text(value.get("header")); header = text(value.get("secret")); }
-            default -> throw new IllegalArgumentException("请选择 HTTP 认证凭据；飞书机器人凭据仅用于飞书消息节点");
+            default -> throw new IllegalArgumentException("请选择 HTTP 认证凭据；飞书和 SMTP 凭据仅用于对应消息节点");
         }
         privacy.secret(header); return Map.of(name, header);
     }
     public record FeishuWebhook(String url, String secret) {}
+    public Map<String, Object> smtp(String id, WorkflowPrivacy privacy) {
+        requireKey();
+        var rows = jdbc.queryForList("SELECT kind,encrypted FROM automation_credential WHERE id=?", id);
+        if (rows.isEmpty()) throw new IllegalArgumentException("SMTP 邮箱凭据不存在，请重新选择");
+        var row = rows.getFirst();
+        if (!"smtp".equals(row.get("kind"))) throw new IllegalArgumentException("请选择 SMTP 邮箱凭据");
+        var value = WorkflowEmail.credential(read(decrypt(id, row.get("encrypted").toString())));
+        privacy.secret(text(value.get("password")));
+        privacy.secret(Base64.getEncoder().encodeToString(text(value.get("password")).getBytes(StandardCharsets.UTF_8)));
+        return value;
+    }
     public FeishuWebhook feishu(String id, WorkflowPrivacy privacy) {
         requireKey();
         var rows = jdbc.queryForList("SELECT kind,encrypted FROM automation_credential WHERE id=?", id);
