@@ -44,7 +44,7 @@ class WorkflowEmailTest {
         store = new WorkflowStore(jdbc); store.initialize();
         credentials = new WorkflowCredentials(jdbc, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=");
         email = spy(new WorkflowEmail(credentials));
-        engine = new WorkflowEngine(store, mock(ScriptProcessRunner.class), mock(WorkflowHttp.class), mock(WorkflowFeishu.class), email, mock(WorkflowGithubTrending.class));
+        engine = new WorkflowEngine(store, mock(ScriptProcessRunner.class), mock(WorkflowHttp.class), mock(WorkflowFeishu.class), email, mock(WorkflowGithubTrending.class), mock(WorkflowRss.class), mock(WorkflowAiSummary.class));
     }
     @AfterEach void close() { engine.close(); email.close(); jdbc.execute("SHUTDOWN"); }
     Map<String, Object> smtp(int port, String security) { return Map.of("host", "localhost", "port", port, "security", security, "username", "sender@example.com", "password", "test-mail-authorization", "from", "sender@example.com"); }

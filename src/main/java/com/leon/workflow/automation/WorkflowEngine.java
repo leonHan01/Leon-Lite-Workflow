@@ -17,6 +17,8 @@ public class WorkflowEngine {
     private final WorkflowFeishu feishu;
     private final WorkflowEmail email;
     private final WorkflowGithubTrending trending;
+    private final WorkflowRss rss;
+    private final WorkflowAiSummary aiSummary;
     private final ThreadPoolExecutor workers = new ThreadPoolExecutor(2, 2, 0, TimeUnit.SECONDS, new ArrayBlockingQueue<>(8),
             Thread.ofPlatform().daemon().name("workflow-", 0).factory(), new ThreadPoolExecutor.AbortPolicy());
     private final Map<String, FutureTask<Void>> tasks = new ConcurrentHashMap<>();
@@ -27,7 +29,7 @@ public class WorkflowEngine {
         public String logs() { return logs; }
     }
     private record PendingNode(WorkflowGraph.Node node, Map<String, Object> input) {}
-    public WorkflowEngine(WorkflowStore store, ScriptProcessRunner scripts, WorkflowHttp http, WorkflowFeishu feishu, WorkflowEmail email, WorkflowGithubTrending trending) { this.store = store; this.scripts = scripts; this.http = http; this.feishu = feishu; this.email = email; this.trending = trending; }
+    public WorkflowEngine(WorkflowStore store, ScriptProcessRunner scripts, WorkflowHttp http, WorkflowFeishu feishu, WorkflowEmail email, WorkflowGithubTrending trending, WorkflowRss rss, WorkflowAiSummary aiSummary) { this.store = store; this.scripts = scripts; this.http = http; this.feishu = feishu; this.email = email; this.trending = trending; this.rss = rss; this.aiSummary = aiSummary; }
     public Map<String, String> runtimes() { return Map.of("javascript", "GraalJS 25.0.2", "groovy", "Groovy " + groovy.lang.GroovySystem.getVersion()); }
     public Map<String, Object> capabilities() { return Map.of("runtimes", runtimes(), "sandbox", scripts.sandbox(), "maxNodes", WorkflowGraph.MAX_NODES, "maxConcurrentRuns", 2, "scheduledExecution", true, "githubTrendingReady", trending.configured()); }
     public Map<String, Object> start(String workflowId, Map<String, Object> input) {
@@ -115,6 +117,8 @@ public class WorkflowEngine {
         privacy.collect(config);
         Map<String, Object> ctx = Map.of("runId", runId, "nodeId", node.id(), "params", config.getOrDefault("params", Map.of()));
         if (Set.of("feishu", "email").contains(node.type())) trace.accept("解析消息模板；" + WorkflowDiagnostics.resolvedLengths(node, input, ctx));
+        if (Set.of("feishu", "email").contains(node.type()) && ((List<?>)input.get("items")).isEmpty())
+            return new NodeResult(input, "没有新增内容，跳过发送", "");
         return switch (node.type()) {
             case "start", "end" -> new NodeResult(input, "", "");
             case "script" -> {
@@ -126,6 +130,8 @@ public class WorkflowEngine {
             case "email" -> new NodeResult(email.execute(config, input, ctx, privacy), "邮件已提交至 SMTP 服务器", "");
             case "github-trending" -> new NodeResult(trending.execute(config, privacy, trace), "已抓取 GitHub Trending 并由 DeepSeek 生成项目解读、飞书消息和邮件正文", "");
             case "tech-weekly" -> new NodeResult(trending.executeWeekly(config, privacy, trace), "已分析最新科技爱好者周刊", "");
+            case "rss" -> new NodeResult(rss.execute(config, runId, node.id(), privacy, trace), "已读取 RSS / Atom 订阅", "");
+            case "ai-summary" -> new NodeResult(aiSummary.execute(config, input, privacy, trace), "已完成 AI 总结", "");
             case "if" -> new NodeResult(input, "", String.valueOf(WorkflowExpressions.condition(config, input, ctx)));
             default -> throw new IllegalArgumentException("不支持的节点类型");
         };
@@ -140,7 +146,7 @@ public class WorkflowEngine {
         try { task = workers.submit(() -> execute(node, input, "preview-" + UUID.randomUUID(), privacy, trace)); }
         catch (RejectedExecutionException e) { throw busy(); }
         try {
-            long timeout = Set.of("github-trending", "tech-weekly").contains(node.type()) ? integer(node.settings().get("timeoutMs"), WorkflowGithubTrending.DEFAULT_TIMEOUT, 1000, WorkflowGithubTrending.MAX_TIMEOUT) + 2000L : 32_000L;
+            long timeout = "rss".equals(node.type()) ? integer(node.settings().get("timeoutMs"), WorkflowRss.DEFAULT_TIMEOUT, 1000, WorkflowRss.MAX_TIMEOUT) + 2000L : Set.of("github-trending", "tech-weekly", "ai-summary").contains(node.type()) ? integer(node.settings().get("timeoutMs"), WorkflowGithubTrending.DEFAULT_TIMEOUT, 1000, WorkflowGithubTrending.MAX_TIMEOUT) + 2000L : 32_000L;
             NodeResult result = task.get(timeout, TimeUnit.MILLISECONDS); privacy.collect(result.output());
             trace.accept("调试完成；输出 " + WorkflowDiagnostics.summary(result.output()) + "；" + WorkflowDiagnostics.lengths(result.output()));
             return Map.of("output", privacy.mask(result.output()), "logs", privacy.message(WorkflowDiagnostics.combine(debug.toString(), result.logs())), "branch", result.branch(), "durationMs", System.currentTimeMillis() - started);

@@ -24,7 +24,7 @@ class WorkflowFeishuTest {
         store = new WorkflowStore(jdbc); store.initialize();
         credentials = new WorkflowCredentials(jdbc, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=");
         http = mock(WorkflowHttp.class); feishu = new WorkflowFeishu(credentials, http);
-        engine = new WorkflowEngine(store, mock(ScriptProcessRunner.class), http, feishu, mock(WorkflowEmail.class), mock(WorkflowGithubTrending.class));
+        engine = new WorkflowEngine(store, mock(ScriptProcessRunner.class), http, feishu, mock(WorkflowEmail.class), mock(WorkflowGithubTrending.class), mock(WorkflowRss.class), mock(WorkflowAiSummary.class));
     }
     @AfterEach void close() { engine.close(); jdbc.execute("SHUTDOWN"); }
     private String credential(String secret) {

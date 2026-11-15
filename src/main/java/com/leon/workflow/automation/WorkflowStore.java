@@ -61,11 +61,23 @@ public class WorkflowStore {
               id VARCHAR(36) PRIMARY KEY, name VARCHAR(100) NOT NULL, kind VARCHAR(20) NOT NULL,
               encrypted CLOB NOT NULL, created_at BIGINT NOT NULL)
             """);
+        jdbc.execute("""
+            CREATE TABLE IF NOT EXISTS automation_rss_seen (
+              workflow_id VARCHAR(36) NOT NULL, node_id VARCHAR(64) NOT NULL, article_key VARCHAR(64) NOT NULL,
+              processed_at BIGINT NOT NULL, PRIMARY KEY(workflow_id,node_id,article_key),
+              FOREIGN KEY(workflow_id) REFERENCES automation_workflow(id))
+            """);
+        jdbc.execute("""
+            CREATE TABLE IF NOT EXISTS automation_rss_pending (
+              run_id VARCHAR(36) NOT NULL, node_id VARCHAR(64) NOT NULL, article_key VARCHAR(64) NOT NULL,
+              PRIMARY KEY(run_id,node_id,article_key), FOREIGN KEY(run_id) REFERENCES automation_run(id))
+            """);
         long now = System.currentTimeMillis();
         jdbc.update("UPDATE automation_run SET status='FAILED', error=?, finished_at=? WHERE status IN ('QUEUED','RUNNING')",
                 "服务重启中断了执行；未自动重放，请确认外部接口结果后重新运行", now);
         jdbc.update("UPDATE automation_node_run SET status='FAILED', error=?, finished_at=? WHERE status='RUNNING'", "执行因服务重启中断", now);
         jdbc.update("UPDATE automation_node_run SET status='SKIPPED' WHERE status='PENDING'");
+        jdbc.update("DELETE FROM automation_rss_pending WHERE run_id IN (SELECT id FROM automation_run WHERE status NOT IN ('QUEUED','RUNNING'))");
     }
     public List<Map<String, Object>> list() {
         return jdbc.query("SELECT id,name,revision,published_version,created_at,updated_at FROM automation_workflow WHERE deleted=FALSE ORDER BY updated_at DESC",
@@ -136,6 +148,9 @@ public class WorkflowStore {
     }
     @Transactional public String createRun(String workflowId, int version, WorkflowGraph graph, Object input, String trigger, Long scheduledAt) {
         jdbc.queryForList("SELECT id FROM automation_workflow WHERE id=? FOR UPDATE", workflowId); get(workflowId);
+        if (graph.nodes().stream().anyMatch(n -> "rss".equals(n.type())) &&
+                jdbc.queryForObject("SELECT COUNT(*) FROM automation_run WHERE workflow_id=? AND status IN ('QUEUED','RUNNING')", Integer.class, workflowId) > 0)
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "此 RSS 工作流已有运行实例，请等待完成后再运行，避免重复推送");
         String id = UUID.randomUUID().toString();
         jdbc.update("INSERT INTO automation_run(id,workflow_id,version,status,input_json,created_at,trigger_type,scheduled_at) VALUES(?,?,?,'QUEUED',?,?,?,?)",
                 id, workflowId, version, write(redact(input)), System.currentTimeMillis(), trigger, scheduledAt);
@@ -220,10 +235,26 @@ public class WorkflowStore {
         jdbc.update("UPDATE automation_node_run SET logs=? WHERE run_id=? AND node_id=? AND status='RUNNING'", logs, run, node);
     }
     @Transactional public void finish(String id, String status, Object output, String error) {
-        jdbc.update("UPDATE automation_run SET status=?,output_json=?,error=?,finished_at=? WHERE id=? AND status IN ('QUEUED','RUNNING')",
+        jdbc.queryForList("SELECT id FROM automation_run WHERE id=? FOR UPDATE", id);
+        int changed = jdbc.update("UPDATE automation_run SET status=?,output_json=?,error=?,finished_at=? WHERE id=? AND status IN ('QUEUED','RUNNING')",
                 status, output == null ? null : write(redact(output)), error, System.currentTimeMillis(), id);
+        if (changed == 1 && "SUCCEEDED".equals(status)) jdbc.update("""
+            MERGE INTO automation_rss_seen(workflow_id,node_id,article_key,processed_at) KEY(workflow_id,node_id,article_key)
+            SELECT r.workflow_id,p.node_id,p.article_key,? FROM automation_rss_pending p JOIN automation_run r ON r.id=p.run_id WHERE p.run_id=?
+            """, System.currentTimeMillis(), id);
+        jdbc.update("DELETE FROM automation_rss_pending WHERE run_id=?", id);
         jdbc.update("UPDATE automation_node_run SET status='SKIPPED' WHERE run_id=? AND status='PENDING'", id);
         jdbc.update("UPDATE automation_node_run SET status=?,error=?,finished_at=? WHERE run_id=? AND status='RUNNING'", status, error, System.currentTimeMillis(), id);
+    }
+    public Set<String> rssSeen(String runId, String nodeId) {
+        if (runId.startsWith("preview-")) return Set.of();
+        return new HashSet<>(jdbc.queryForList("SELECT s.article_key FROM automation_rss_seen s JOIN automation_run r ON r.workflow_id=s.workflow_id WHERE r.id=? AND s.node_id=?", String.class, runId, nodeId));
+    }
+    @Transactional public void stageRss(String runId, String nodeId, Collection<String> keys) {
+        if (runId.startsWith("preview-")) return;
+        var states = jdbc.queryForList("SELECT status FROM automation_run WHERE id=? FOR UPDATE", String.class, runId);
+        if (states.isEmpty() || !"RUNNING".equals(states.getFirst())) throw new IllegalArgumentException("RSS 运行已结束，未确认新增记录");
+        for (String key : keys) jdbc.update("MERGE INTO automation_rss_pending(run_id,node_id,article_key) KEY(run_id,node_id,article_key) VALUES(?,?,?)", runId, nodeId, key);
     }
     private Object nullableJson(String value) { return value == null ? null : JSON.readValue(value, Object.class); }
     private static String time(Object value) { return value == null ? null : Instant.ofEpochMilli(((Number) value).longValue()).toString(); }

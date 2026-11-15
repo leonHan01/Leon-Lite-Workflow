@@ -154,7 +154,7 @@ const server = http.createServer(async (req, res) => {
             await page.getByRole('button', {name:'保存草稿',exact:true}).click();
             await page.waitForFunction(() => document.querySelector('[data-version]').textContent.includes('草稿已保存'));
         };
-        for (const [kind, scale] of [['http',1],['javascript',.5],['groovy',2],['github-trending',1],['feishu',1],['email',1],['if',1]]) {
+        for (const [kind, scale] of [['http',1],['javascript',.5],['groovy',2],['github-trending',1],['feishu',1],['email',1],['rss',1],['ai-summary',1],['if',1]]) {
             await page.locator('[data-node="end"]').click();
             await page.getByRole('button',{name:'重置画布缩放',exact:true}).click();
             for (let i=0; i<(scale===.5?5:scale===2?10:0); i++) await page.getByRole('button',{name:scale===.5?'缩小画布':'放大画布',exact:true}).click();
@@ -206,7 +206,35 @@ const server = http.createServer(async (req, res) => {
             assert.equal(await page.locator('.wf-library-preview').count(),0);
             assert.equal(await page.locator('.is-library-drop-target').count(),0);
         }
-        assert.equal(await page.locator('.wf-library-count').textContent(),'8');
+        assert.equal(await page.locator('.wf-library-count').textContent(),'10');
+        await page.locator('[data-node="start"]').click();
+        await page.locator('[data-add="rss"]').click();
+        assert.equal(await page.locator('[data-rss-row]').count(),7);
+        assert.equal(await page.locator('[data-rss-row]').nth(1).locator('[data-feed-field="titleContains"]').inputValue(),'科技爱好者周刊');
+        await page.locator('[data-rss-row]').first().locator('[data-feed-field="name"]').fill('InfoQ 架构资讯');
+        await page.getByRole('button',{name:'添加订阅源',exact:true}).click();
+        assert.equal(await page.locator('[data-rss-row]').count(),8);
+        assert.equal(await page.locator('[data-rss-row]').first().locator('[data-feed-field="name"]').inputValue(),'InfoQ 架构资讯');
+        await page.locator('[data-remove-rss="7"]').click();
+        await page.locator('[data-field="perSource"]').fill('3');
+        await savePaletteGraph();
+        const rssNode=workflow.definition.nodes.find(n=>n.type==='rss');
+        assert.equal(rssNode.config.sources.length,7); assert.equal(rssNode.config.perSource,3); assert.equal(rssNode.config.onlyNew,true);
+        await page.locator(`[data-node="${rssNode.id}"]`).dblclick();
+        await page.waitForSelector('[data-node-dialog][open]');
+        assert.equal(await page.locator('[data-node-settings] [data-rss-row]').count(),7);
+        await page.locator('[data-close="node"]').first().click();
+        await page.getByRole('button',{name:'删除节点',exact:true}).click();
+        await page.locator('[data-node="start"]').click();
+        await page.locator('[data-add="ai-summary"]').click();
+        await page.getByRole('textbox',{name:'AI 总结要求',exact:true}).fill('用中文汇总软件架构和 AI 更新，每条保留关键事实。');
+        await page.locator('[data-field="title"]').fill('我的科技日报');
+        await savePaletteGraph();
+        const aiNode=workflow.definition.nodes.find(n=>n.type==='ai-summary');
+        assert.equal(aiNode.config.model,'deepseek-flash'); assert.equal(aiNode.config.title,'我的科技日报');
+        assert.ok(aiNode.config.prompt.includes('软件架构')); assert.equal(aiNode.config.maxItems,50);
+        assert.equal(await page.getByRole('textbox',{name:'飞书卡片正文引用',exact:true}).inputValue(),'{{ input.items[0].json.feishuMarkdown }}');
+        await page.getByRole('button',{name:'删除节点',exact:true}).click();
         await page.locator('[data-node="start"]').click();
         await page.locator('[data-add="tech-weekly"]').click();
         assert.equal(await page.getByRole('textbox',{name:'飞书卡片正文引用',exact:true}).inputValue(),'{{ input.items[0].json.feishuMarkdown }}');
@@ -734,6 +762,6 @@ const server = http.createServer(async (req, res) => {
         assert.equal(await page.getByRole('button',{name:'＋ 新建工作流',exact:true}).isEnabled(),true);
         assert.equal(credentials.length,3,'删除工作流不应删除已有凭据');
         assert.deepEqual(errors, []);
-        console.log('Workflow browser checks passed: workflow list/editor routing, creation/deletion, history and draft retention, library drag/drop, credential editing and secret retention, Feishu/email configuration, node dialogs, canvas, scheduling, instances, navigation and mobile.');
+        console.log('Workflow browser checks passed: workflow list/editor routing, creation/deletion, history and draft retention, library drag/drop, credential editing and secret retention, Feishu/email configuration, RSS/AI settings and node dialogs, canvas, scheduling, instances, navigation and mobile.');
     } finally { await browser.close(); server.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; server.close(); });
