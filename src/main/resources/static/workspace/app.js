@@ -1,6 +1,6 @@
 const routes = {
     '/workflow-runs.html': ['workflow-runs', '运行实例', 'workspace-workflow-runs'],
-    '/workflows.html': ['workflows', '工作流编排', 'workspace-workflows'],
+    '/workflows.html': ['workflows', '工作流', 'workspace-workflows'],
     '/music-statistics.html': ['music-statistics', '歌曲统计', 'workspace-music'],
     '/music.html': ['music', '歌曲管理', 'workspace-music'],
     '/': ['home', '总览', 'workspace-overview'],
@@ -176,7 +176,7 @@ document.addEventListener('click', event => {
     const url = new URL(link.href);
     if (url.origin !== location.origin || !routes[url.pathname]) return;
     event.preventDefault();
-    navigate(url.href, { recall: !!link.closest('.lw-nav') });
+    navigate(url.href, { recall: !!link.closest('.lw-nav') && routes[url.pathname][0] !== 'workflows' });
 });
 window.addEventListener('popstate', () => navigate(location.href, { historyMode: 'none' }));
 navigate(location.href, { historyMode: 'none' });

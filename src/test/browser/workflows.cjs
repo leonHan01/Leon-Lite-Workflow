@@ -6,6 +6,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE_PATH || 'playwright')
 const root = path.resolve(__dirname, '../../main/resources/static');
 let workflow = null, versions = [], runs = [], credentials = [], lastCredential = null, lastTest = null;
 let testFailure = null;
+let extraWorkflows = [];
 const credentialValues = new Map();
 let schedule = { enabled: false, cron: '0 0 9 * * *', timeZone: 'Asia/Shanghai', input: { items: [{ json: {} }] }, revision: 0, nextRunAt: null };
 const initial = () => ({ nodes: [{ id: 'start', name: '开始', type: 'start', config: {}, position: { x: 80, y: 140 } }, { id: 'end', name: '结束', type: 'end', config: {}, position: { x: 420, y: 140 } }], edges: [{ id: 'start_end', source: 'start', target: 'end', branch: '' }] });
@@ -55,8 +56,9 @@ const server = http.createServer(async (req, res) => {
             } return reply({ output: ['feishu', 'email'].includes(data.node.type) ? data.input : { items: [{ json: { name: 'LEON' } }] }, logs: data.node.type === 'feishu' ? '飞书消息已发送' : data.node.type === 'email' ? '邮件已提交至 SMTP 服务器' : '调试完成', durationMs: 22, branch: '' }); }
         if (!route) {
             if (req.method === 'POST') workflow = { id: 'workflow-1', name: data.name, definition: initial(), revision: 1, publishedVersion: 0 };
-            return reply(req.method === 'POST' ? workflow : workflow ? [workflow] : []);
+            return reply(req.method === 'POST' ? workflow : [...(workflow ? [workflow] : []), ...extraWorkflows]);
         }
+        if (route === '/workflow-extra' && req.method === 'DELETE') { extraWorkflows = []; return reply({deleted:true}); }
         if (route === '/workflow-1') {
             if (req.method === 'PUT') workflow = { ...workflow, ...data, revision: workflow.revision + 1 };
             if (req.method === 'DELETE') { workflow = null; return reply({ deleted: true }); }
@@ -95,10 +97,41 @@ const server = http.createServer(async (req, res) => {
         const errors = []; page.on('pageerror', e => errors.push(e.message)); page.on('dialog', d => d.accept());
         const base = 'http://127.0.0.1:' + server.address().port;
         await page.goto(base + '/workflows.html', { waitUntil: 'networkidle' });
+        await page.locator('.wf-list-empty').waitFor();
+        assert.equal(await page.locator('[data-editor]').isVisible(),false,'入口应显示列表，不能自动进入编辑页');
+        assert.equal(await page.getByRole('button',{name:'重新加载',exact:true}).isEnabled(),true,'空列表也应支持刷新');
+        await page.getByRole('button', { name: '＋ 新建工作流', exact: true }).click();
+        await page.locator('[data-close="create"]').click();
+        assert.equal(await page.locator('[data-editor]').isVisible(),false,'取消新建应留在列表');
         await page.getByRole('button', { name: '＋ 新建工作流', exact: true }).click();
         await page.getByRole('textbox', { name: '新工作流名称' }).fill('双语言演示 <安全>');
         await page.getByRole('button', { name: '创建工作流', exact: true }).click();
         await page.waitForSelector('[data-node="start"]');
+        await page.waitForURL('**/workflows.html?id=workflow-1');
+        assert.equal(await page.locator('[data-workflow-list]').isVisible(),false,'创建完成后应进入编辑页');
+        extraWorkflows = [{id:'workflow-extra',name:'另一个工作流',publishedVersion:2,updatedAt:new Date().toISOString()}];
+        await page.getByRole('button',{name:'← 返回列表',exact:true}).click();
+        await page.waitForURL('**/workflows.html');
+        await page.locator('[data-workflow-row="workflow-extra"]').waitFor();
+        assert.equal(await page.locator('[data-editor]').isVisible(),false);
+        assert.equal(await page.locator('[data-workflow-row]').count(),2);
+        assert.equal(await page.locator('.wf-list-name').first().textContent(),'双语言演示 <安全>','工作流名称应作为文本显示');
+        await page.reload({waitUntil:'networkidle'});
+        await page.locator('[data-workflow-row="workflow-extra"]').waitFor();
+        assert.equal(await page.locator('[data-editor]').isVisible(),false,'已有工作流时刷新列表也不能自动打开编辑页');
+        await page.screenshot({path:'/private/tmp/leon-workflow-list-desktop.png',fullPage:false});
+        await page.getByRole('button',{name:'删除 另一个工作流',exact:true}).click();
+        await page.locator('[data-workflow-row="workflow-extra"]').waitFor({state:'detached'});
+        assert.equal(workflow.id,'workflow-1','删除其他流程不应影响当前草稿');
+        await page.goBack();
+        await page.locator('[data-editor]:not([hidden])').waitFor();
+        await page.goForward();
+        await page.locator('[data-workflow-list]:not([hidden])').waitFor();
+        await page.getByRole('link',{name:'编辑 双语言演示 <安全>',exact:true}).click();
+        await page.locator('[data-editor]:not([hidden])').waitFor();
+        await page.reload({waitUntil:'networkidle'});
+        await page.locator('[data-editor]:not([hidden])').waitFor();
+        assert.equal(await page.getByRole('textbox',{name:'工作流名称',exact:true}).inputValue(),'双语言演示 <安全>','带 ID 的旧链接应直接打开编辑页');
         assert.equal(await page.locator('[data-node]').count(), 2);
         assert.equal(await page.locator('[data-node="start"] .wf-port-in').count(), 0);
         assert.equal(await page.locator('[data-node="end"] .wf-port-out').count(), 0);
@@ -572,6 +605,9 @@ const server = http.createServer(async (req, res) => {
         await page.getByRole('textbox', { name: '工作流名称', exact: true }).fill('未保存草稿');
         await page.locator('.lw-sidebar').getByRole('link', { name: '总览', exact: true }).click();
         await page.locator('.lw-sidebar').getByRole('link', { name: '工作流编排', exact: true }).click();
+        await page.locator('[data-workflow-list]:not([hidden])').waitFor();
+        assert.ok((await page.locator('[data-workflow-row="workflow-1"]').textContent()).includes('有未保存修改'));
+        await page.getByRole('link',{name:'编辑 未保存草稿',exact:true}).click();
         assert.equal(await page.getByRole('textbox', { name: '工作流名称', exact: true }).inputValue(), '未保存草稿');
         await page.getByRole('button', { name: '保存草稿', exact: true }).click();
         await page.waitForFunction(() => document.querySelector('[data-version]').textContent.includes('草稿已保存'));
@@ -619,6 +655,10 @@ const server = http.createServer(async (req, res) => {
         await page.screenshot({ path: '/private/tmp/leon-workflow-runs-mobile.png', fullPage: true });
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 2), false, '移动端出现页面横向溢出');
         await page.locator('.lw-sidebar').getByRole('link',{name:'工作流编排',exact:true}).click();
+        await page.locator('[data-workflow-list]:not([hidden])').waitFor();
+        await page.screenshot({path:'/private/tmp/leon-workflow-list-mobile.png',fullPage:false});
+        assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+2),false,'手机工作流列表横向溢出');
+        await page.getByRole('link',{name:'编辑 未保存草稿',exact:true}).click();
         await page.getByRole('button',{name:'全屏编辑',exact:true}).click();
         assert.ok(await page.locator('.wf-canvas-scroll').evaluate(e=>e.clientHeight)>250,'手机全屏画布不可用');
         await page.getByRole('button',{name:'展开节点配置',exact:true}).click();
@@ -644,7 +684,15 @@ const server = http.createServer(async (req, res) => {
         await page.locator('[data-close="credentials"]').click();
         await page.waitForFunction(()=>document.querySelector('[name="smtpPassword"]').value==='');
         assert.equal(credentialValues.get('credential-2').password,'browser-mail-authorization','关闭凭据编辑不应保存密码输入');
+        await page.getByRole('button',{name:'← 返回列表',exact:true}).click();
+        await page.locator('[data-workflow-row="workflow-1"]').waitFor();
+        await page.getByRole('button',{name:'删除 未保存草稿',exact:true}).click();
+        await page.locator('.wf-list-empty').waitFor();
+        assert.equal(workflow,null,'删除最后一个工作流应回到空列表');
+        assert.equal(await page.locator('[data-editor]').isVisible(),false);
+        assert.equal(await page.getByRole('button',{name:'＋ 新建工作流',exact:true}).isEnabled(),true);
+        assert.equal(credentials.length,3,'删除工作流不应删除已有凭据');
         assert.deepEqual(errors, []);
-        console.log('Workflow browser checks passed: library drag/drop, credential editing and secret retention, Feishu/email configuration, node dialogs, canvas, scheduling, instances, navigation and mobile.');
+        console.log('Workflow browser checks passed: workflow list/editor routing, creation/deletion, history and draft retention, library drag/drop, credential editing and secret retention, Feishu/email configuration, node dialogs, canvas, scheduling, instances, navigation and mobile.');
     } finally { await browser.close(); server.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; server.close(); });

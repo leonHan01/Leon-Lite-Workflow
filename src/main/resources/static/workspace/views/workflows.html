@@ -1,9 +1,10 @@
 <div class="wf-page">
     <div class="wf-page-header">
-        <div class="wf-heading"><h1>工作流编排<span>.</span></h1></div>
-        <div class="wf-toolbar"><label class="wf-picker">工作流<select aria-label="选择工作流" data-workflows><option value="">正在加载…</option></select></label><button type="button" data-action="create">＋ 新建工作流</button><button type="button" data-action="reload">重新加载</button><button class="wf-danger" type="button" data-action="delete-workflow">删除工作流</button><button class="wf-manage-credentials" type="button" data-action="credentials">管理凭据</button></div>
+        <div class="wf-heading"><h1 data-page-title>工作流列表</h1></div>
+        <div class="wf-toolbar"><button type="button" data-action="back-to-list" data-editor-only hidden>← 返回列表</button><button type="button" class="wf-primary" data-action="create" data-list-only>＋ 新建工作流</button><button type="button" data-action="reload">重新加载</button><button class="wf-danger" type="button" data-action="delete-workflow" data-editor-only hidden>删除工作流</button><button class="wf-manage-credentials" type="button" data-action="credentials">管理凭据</button></div>
     </div>
     <div class="wf-notice" role="status" aria-live="polite" data-notice>正在读取工作流…</div>
+    <section class="wf-workflow-list" data-workflow-list aria-label="工作流列表"><div class="wf-list-heading"><h2>全部工作流</h2><span data-workflow-count></span></div><div data-workflow-rows></div></section>
     <div data-editor hidden>
         <div class="wf-editor-toolbar"><div class="wf-title"><input aria-label="工作流名称" data-name maxlength="100"><span data-version></span></div><div class="wf-actions"><button type="button" class="wf-focus-exit" data-view="focus">退出全屏</button><button type="button" data-action="schedule">定时执行</button><button type="button" data-action="save">保存草稿</button><button type="button" data-action="publish">发布版本</button><button type="button" class="wf-primary" data-action="run">▶ 运行已发布版本</button></div></div>
         <div class="wf-schedule-summary" data-schedule-summary hidden></div>
@@ -12,7 +13,7 @@
                 <div class="wf-library-heading"><div><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><path d="M14 17.5h7m-3.5-3.5v7"/></svg><h2>节点库</h2></div><span class="wf-library-count" aria-label="7 个组件">7</span></div>
                 <p class="wf-library-intro">按住组件，拖到画布</p>
                 <div class="wf-library-caption"><span>可用组件</span><span>拖动添加</span></div>
-                <button type="button" data-add="http"><b class="wf-icon wf-http"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M7 7h10v10"/></svg></b><span class="wf-library-node-copy"><strong>HTTP 请求</strong><small>连接外部服务</small></span><i class="wf-library-grip" aria-hidden="true"></i></button>
+                <button type="button" data-add="http"><b class="wf-icon wf-http"><img src="/workspace/icons/http.png" alt="" aria-hidden="true"></b><span class="wf-library-node-copy"><strong>HTTP 请求</strong><small>连接外部服务</small></span><i class="wf-library-grip" aria-hidden="true"></i></button>
                 <button type="button" data-add="javascript"><b class="wf-icon wf-script"><img src="/workspace/icons/javascript.png" alt="" aria-hidden="true"></b><span class="wf-library-node-copy"><strong>JavaScript</strong><small>转换与整理数据</small></span><i class="wf-library-grip" aria-hidden="true"></i></button>
                 <button type="button" data-add="groovy"><b class="wf-icon wf-groovy"><img src="/workspace/icons/groovy.png" alt="" aria-hidden="true"></b><span class="wf-library-node-copy"><strong>Groovy</strong><small>编写动态逻辑</small></span><i class="wf-library-grip" aria-hidden="true"></i></button>
                 <button type="button" data-add="github-trending"><b class="wf-icon wf-github-trending"><img src="/workspace/icons/github.png" alt="" aria-hidden="true"></b><span class="wf-library-node-copy"><strong>GitHub Trending</strong><small>DeepSeek 项目分析</small></span><i class="wf-library-grip" aria-hidden="true"></i></button>

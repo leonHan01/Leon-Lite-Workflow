@@ -9,6 +9,7 @@ const githubIcon = '<img src="/workspace/icons/github.png" alt="" aria-hidden="t
 const javascriptIcon = '<img src="/workspace/icons/javascript.png" alt="" aria-hidden="true">';
 const groovyIcon = '<img src="/workspace/icons/groovy.png" alt="" aria-hidden="true">';
 const emailIcon = '<img src="/workspace/icons/email.png" alt="" aria-hidden="true">';
+const httpIcon = '<img src="/workspace/icons/http.png" alt="" aria-hidden="true">';
 const trendingSources = [['https://github.com/trending', '日榜'], ['https://github.com/trending?since=weekly', '周榜'], ['https://github.com/trending?since=monthly', '月榜']];
 const statuses = { QUEUED: '排队中', PENDING: '等待', RUNNING: '运行中', SUCCEEDED: '成功', FAILED: '失败', CANCELLED: '已取消', SKIPPED: '已跳过' };
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -29,6 +30,7 @@ export function mount(pane, workspace) {
     const inspectorContent = $('[data-inspector]');
     const inspectorPanel = $('.wf-layout > .wf-inspector');
     let workflows = [], workflow = null, graph = null, selected = null, selectedEdge = null, connecting = null;
+    let editorVisible = false;
     const MAX_POSITION = 50000;
     let zoom = 1, world = { width: 2400, height: 1600 }, focused = false, focusPanels = null;
     let dirty = false, busy = false, active = false, initialized = false, timer = null, currentRun = null, capabilities = {}, credentials = [], schedule = null;
@@ -65,27 +67,55 @@ export function mount(pane, workspace) {
         finally { busy = false; controls(); }
     }
     function controls() {
-        pane.querySelectorAll('[data-action="save"],[data-action="save-node"],[data-action="publish"],[data-action="create"],[data-action="reload"],[data-action="delete-workflow"],[data-action="test"]').forEach(b => b.disabled = busy || (!workflow && b.dataset.action !== 'create'));
+        pane.querySelectorAll('[data-action="save"],[data-action="save-node"],[data-action="publish"],[data-action="create"],[data-action="reload"],[data-action="delete-workflow"],[data-action="test"]').forEach(b => b.disabled = busy || (!workflow && !['create', 'reload'].includes(b.dataset.action)));
+        pane.querySelectorAll('[data-delete-workflow]').forEach(b => b.disabled = busy);
         const run = $('[data-action="run"]');
         run.disabled = busy || !workflow?.publishedVersion;
         run.textContent = workflow?.publishedVersion ? `▶ 运行 v${workflow.publishedVersion}` : '先发布后运行';
         if (workflow) $('[data-version]').textContent = `${dirty ? '有未保存修改 · ' : '草稿已保存 · '}${workflow.publishedVersion ? '已发布 v' + workflow.publishedVersion : '尚未发布'}`;
     }
     function markDirty() { dirty = true; controls(); }
-    function picker() {
-        $('[data-workflows]').innerHTML = workflows.length ? workflows.map(w => `<option value="${esc(w.id)}" ${w.id === workflow?.id ? 'selected' : ''}>${esc(w.name)}</option>`).join('') : '<option value="">还没有工作流，先新建一个</option>';
+    function renderWorkflowList() {
+        $('[data-workflow-count]').textContent = `共 ${workflows.length} 个`;
+        $('[data-workflow-rows]').innerHTML = workflows.length ? `<table class="wf-list-table"><thead><tr><th>工作流名称</th><th>发布状态</th><th>更新时间</th><th>操作</th></tr></thead><tbody>${workflows.map(w => {
+            const unsaved = w.id === workflow?.id && dirty;
+            const name = unsaved ? $('[data-name]').value : w.name;
+            const href = '/workflows.html?id=' + encodeURIComponent(w.id);
+            return `<tr data-workflow-row="${esc(w.id)}"><td><a class="wf-list-name" href="${esc(href)}">${esc(name)}</a>${unsaved ? '<small class="wf-list-unsaved">有未保存修改</small>' : ''}</td><td><span class="wf-list-state ${w.publishedVersion ? 'is-published' : ''}">${w.publishedVersion ? '已发布 v' + esc(w.publishedVersion) : '未发布'}</span></td><td class="wf-list-date">${esc(date(w.updatedAt))}</td><td><div class="wf-list-actions"><a href="${esc(href)}" aria-label="编辑 ${esc(name)}">编辑</a><button type="button" class="wf-danger" data-delete-workflow="${esc(w.id)}" ${busy ? 'disabled' : ''} aria-label="删除 ${esc(name)}">删除</button></div></td></tr>`;
+        }).join('')}</tbody></table>` : '<div class="wf-list-empty"><strong>还没有工作流</strong><p>点击上方“新建工作流”，开始编排你的第一个流程。</p></div>';
     }
-    async function loadList() { workflows = await api(); picker(); }
-    async function load(id) {
+    function setEditorVisible(visible) {
+        editorVisible = visible;
+        $('[data-editor]').hidden = !visible;
+        $('[data-workflow-list]').hidden = visible;
+        pane.querySelectorAll('[data-editor-only]').forEach(el => el.hidden = !visible);
+        pane.querySelectorAll('[data-list-only]').forEach(el => el.hidden = visible);
+        $('[data-page-title]').textContent = visible ? '工作流编排' : '工作流列表';
+        if (!visible) { closeNodeDialog(false); cancelLibraryDrag?.(); clearTimeout(timer); focus(false); renderWorkflowList(); }
+        else requestAnimationFrame(syncWorld);
+    }
+    async function deleteWorkflow(id) {
+        const item = workflows.find(w => w.id === id);
+        if (!item || !confirm(`删除“${item.name}”？历史运行记录会保留。`)) return;
+        await api('/' + encodeURIComponent(id), { method: 'DELETE' });
+        if (workflow?.id === id) {
+            closeNodeDialog(false); workflow = null; graph = null; dirty = false; currentRun = null; clearTimeout(timer);
+        }
+        await loadList(); setEditorVisible(false);
+        workspace.navigate('/workflows.html'); notice('工作流已删除。');
+    }
+    async function loadList() { workflows = await api(); renderWorkflowList(); }
+    async function load(id, push = false) {
         closeNodeDialog(false);
         clearTimeout(timer); currentRun = null; zoom = 1; world = { width: 2400, height: 1600 };
         $('.wf-canvas-scroll').scrollTo(0, 0);
         workflow = await api('/' + encodeURIComponent(id)); graph = structuredClone(workflow.definition);
         graph.nodes ??= []; graph.edges ??= []; selected = graph.nodes[0]?.id || null; selectedEdge = null; dirty = false; connecting = null;
-        $('[data-editor]').hidden = false; $('[data-name]').value = workflow.name;
+        setEditorVisible(true); $('[data-name]').value = workflow.name;
         $('[data-run-detail]').innerHTML = '<div class="wf-empty">运行一次工作流，看看数据如何流转。</div>';
-        picker(); renderCanvas(); inspector(); controls();
-        workspace.replace('/workflows.html?id=' + encodeURIComponent(id));
+        renderWorkflowList(); renderCanvas(); inspector(); controls();
+        if (push) workspace.navigate('/workflows.html?id=' + encodeURIComponent(id));
+        else workspace.replace('/workflows.html?id=' + encodeURIComponent(id));
         await refreshRuns(); await refreshSchedule(); notice('草稿已载入。保存、发布后即可运行。');
     }
     function commitInspector() {
@@ -127,7 +157,7 @@ export function mount(pane, workspace) {
         commitInspector();
         const result = await send('/' + workflow.id, { name: $('[data-name]').value, definition: graph, revision: workflow.revision }, 'PUT');
         workflow = result; graph = structuredClone(result.definition); dirty = false;
-        workflows = workflows.map(w => w.id === result.id ? result : w); picker(); controls(); renderCanvas(); inspector();
+        workflows = workflows.map(w => w.id === result.id ? result : w); renderWorkflowList(); controls(); renderCanvas(); inspector();
         notice('草稿已保存。');
     }
     function selectNode(id) {
@@ -169,7 +199,7 @@ export function mount(pane, workspace) {
     function nodeStyle(node) {
         const requested = node.type === 'script' ? (node.config?.language === 'groovy' ? 'groovy' : 'script') : node.type;
         const kind = ['start', 'end', 'http', 'script', 'groovy', 'if', 'feishu', 'email', 'github-trending'].includes(requested) ? requested : 'script';
-        return { kind, icon: ({ start: '▶', end: '■', http: '↗', script: javascriptIcon, groovy: groovyIcon, if: '⑂', feishu: feishuIcon, email: emailIcon, 'github-trending': githubIcon })[kind], label: node.type === 'script' ? (node.config.language === 'groovy' ? 'Groovy' : 'JavaScript') : labels[node.type] };
+        return { kind, icon: ({ start: '▶', end: '■', http: httpIcon, script: javascriptIcon, groovy: groovyIcon, if: '⑂', feishu: feishuIcon, email: emailIcon, 'github-trending': githubIcon })[kind], label: node.type === 'script' ? (node.config.language === 'groovy' ? 'Groovy' : 'JavaScript') : labels[node.type] };
     }
     function renderCanvas() {
         if (!graph) return;
@@ -484,7 +514,7 @@ export function mount(pane, workspace) {
     }
     function schedulePoll() {
         clearTimeout(timer);
-        if (active && currentRun && ['RUNNING', 'QUEUED'].includes(currentRun.status)) {
+        if (active && editorVisible && currentRun && ['RUNNING', 'QUEUED'].includes(currentRun.status)) {
             timer = setTimeout(async () => { const id = currentRun.id; try { await viewRun(id); } catch (e) { notice(e.message, true); schedulePoll(); } }, 1200);
         }
     }
@@ -586,8 +616,9 @@ export function mount(pane, workspace) {
             $('[data-schedule-dialog]').showModal();
         },
         'schedule-preview': previewSchedule,
+        'back-to-list': async () => { setEditorVisible(false); await loadList(); workspace.navigate('/workflows.html'); notice('选择工作流进行编辑，或新建工作流。'); },
         create: () => { $('[data-create-dialog]').showModal(); $('[data-create-form] input').focus(); },
-        reload: async () => { if (!dirty || confirm('重新加载会丢弃未保存的草稿，是否继续？')) { await loadList(); if (workflow) await load(workflow.id); } },
+        reload: async () => { if (!editorVisible || !dirty || confirm('重新加载会丢弃未保存的草稿，是否继续？')) { await loadList(); if (editorVisible && workflow) await load(workflow.id); else notice('工作流列表已刷新。'); } },
         save,
         'save-node': async () => { await save(); closeNodeDialog(); },
         publish: async () => { await save(); workflow = await send('/' + workflow.id + '/publish', { revision: workflow.revision }); controls(); notice(`版本 v${workflow.publishedVersion} 已发布。后续编辑不会影响该版本。`); },
@@ -619,7 +650,7 @@ export function mount(pane, workspace) {
             }
         },
         'delete-node': () => { const node = graph.nodes.find(n => n.id === selected); if (['start', 'end'].includes(node?.type)) return; closeNodeDialog(false); graph.nodes = graph.nodes.filter(n => n.id !== selected); graph.edges = graph.edges.filter(e => e.source !== selected && e.target !== selected); selected = graph.nodes[0]?.id; markDirty(); renderCanvas(); inspector(); },
-        'delete-workflow': async () => { if (!workflow || !confirm(`删除“${workflow.name}”？历史运行记录会保留。`)) return; await api('/' + workflow.id, { method: 'DELETE' }); workflow = null; graph = null; dirty = false; currentRun = null; clearTimeout(timer); $('[data-editor]').hidden = true; workspace.replace('/workflows.html'); await loadList(); if (workflows.length) await load(workflows[0].id); else notice('工作流已删除。'); },
+        'delete-workflow': () => deleteWorkflow(workflow?.id),
         'refresh-runs': refreshRuns,
         'cancel-run': async () => { if (currentRun) { showRun(await send('/runs/' + currentRun.id + '/cancel', {})); await refreshRuns(); notice('运行已停止。已经发送的请求或邮件可能已在对端生效。'); } },
         versions: async () => { const versions = await api('/' + workflow.id + '/versions'); $('[data-run-detail]').innerHTML = '<h3>发布版本记录</h3>' + versions.map(v => `<details><summary>v${v.version}<small>${esc(date(v.createdAt))}</small></summary><pre>${esc(pretty(v.runtimes))}</pre></details>`).join(''); },
@@ -650,6 +681,7 @@ export function mount(pane, workspace) {
             } else pane.querySelector(`[data-${target.dataset.close}-dialog]`).close();
             return;
         }
+        if (target.dataset.deleteWorkflow) { perform(() => deleteWorkflow(target.dataset.deleteWorkflow)); return; }
         if (target.dataset.action) { perform(actions[target.dataset.action]); return; }
         try {
             if (target.dataset.edge || target.dataset.selectEdge) selectEdge(target.dataset.edge || target.dataset.selectEdge);
@@ -688,7 +720,6 @@ export function mount(pane, workspace) {
             if (!custom) $('[data-schedule-form]').elements.cron.value = target.value;
             $('[data-schedule-preview]').textContent = '';
         }
-        if (target.matches('[data-workflows]')) { const id = target.value; if (dirty && !confirm('切换将丢弃未保存的草稿，是否继续？')) { picker(); return; } perform(() => load(id)); }
         if (target.matches('[data-credential-form] [name="kind"]')) credentialFields();
         if (target.matches('[data-credential-form] [name="smtpSecurity"]')) $('[data-credential-form]').elements.smtpPort.value = target.value === 'ssl' ? '465' : '587';
         if (target.matches('[data-field="credentialId"]')) $('[data-action="edit-node-credential"]').disabled = !target.value;
@@ -870,7 +901,7 @@ export function mount(pane, workspace) {
     });
     $('[data-create-form]').addEventListener('submit', event => {
         event.preventDefault(); const form = event.currentTarget;
-        perform(async () => { if (dirty && !confirm('新建将离开当前未保存的草稿，是否继续？')) return; const result = await send('', { name: form.elements.name.value }); $('[data-create-dialog]').close(); form.reset(); await loadList(); await load(result.id); });
+        perform(async () => { if (dirty && !confirm('新建将离开当前未保存的草稿，是否继续？')) return; const result = await send('', { name: form.elements.name.value }); $('[data-create-dialog]').close(); form.reset(); await loadList(); await load(result.id, true); });
     });
     $('[data-credential-form]').addEventListener('submit', event => {
         event.preventDefault(); const form = event.currentTarget, data = new FormData(form), kind = form.elements.kind.value, secret = data.get('secret'), editingId = editingCredential?.id;
@@ -890,20 +921,26 @@ export function mount(pane, workspace) {
     return {
         async activate(url) {
             active = true;
+            const requested = new URL(url).searchParams.get('id');
             if (!initialized) {
-                initialized = true;
                 await perform(async () => {
                     [capabilities, credentials] = await Promise.all([api('/capabilities'), api('/credentials')]); await loadList();
-                    const id = new URL(url).searchParams.get('id') || workflows[0]?.id;
-                    if (id) await load(id); else notice('从新建工作流开始，或创建后载入双语言示例。');
+                    initialized = true;
+                    if (requested) await load(requested);
+                    else { setEditorVisible(false); notice('选择工作流进行编辑，或新建工作流。'); }
                     if (capabilities.sandbox === 'unavailable') notice('脚本运行环境尚未安装；HTTP 和条件节点可以正常使用。', true);
                 });
+            } else if (!requested) {
+                setEditorVisible(false);
+                await perform(async () => { await loadList(); notice('选择工作流进行编辑，或新建工作流。'); });
+            } else if (requested !== workflow?.id) {
+                if (dirty && !confirm('打开其他工作流会丢弃当前未保存的草稿，是否继续？')) {
+                    workspace.replace(editorVisible ? '/workflows.html?id=' + encodeURIComponent(workflow.id) : '/workflows.html'); return;
+                }
+                await perform(() => load(requested));
             } else {
-                const requested = new URL(url).searchParams.get('id');
-                if (requested && requested !== workflow?.id) {
-                    if (dirty && !confirm('打开其他工作流会丢弃当前未保存的草稿，是否继续？')) { workspace.replace('/workflows.html?id=' + workflow.id); return; }
-                    await perform(() => load(requested));
-                } else { schedulePoll(); if (workflow) refreshSchedule().catch(e => notice(e.message, true)); }
+                setEditorVisible(true); schedulePoll();
+                if (!busy) refreshSchedule().catch(e => notice(e.message, true));
             }
         },
         deactivate() { closeNodeDialog(false); cancelLibraryDrag?.(); active = false; clearTimeout(timer); focus(false); },
