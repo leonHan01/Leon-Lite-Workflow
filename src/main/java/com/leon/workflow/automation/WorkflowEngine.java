@@ -66,7 +66,7 @@ public class WorkflowEngine {
             NodeResult result = runNode(id, end, terminalInput(outputs), privacy);
             store.finish(id, "SUCCEEDED", privacy.mask(result.output()), null);
         } catch (InterruptedException error) {
-            Thread.currentThread().interrupt(); store.finish(id, "CANCELLED", null, "执行已取消；已发送的 HTTP 请求可能已在对端生效");
+            Thread.currentThread().interrupt(); store.finish(id, "CANCELLED", null, "执行已取消；已发送的请求或邮件可能已在对端生效");
         } catch (Exception error) { store.finish(id, "FAILED", null, error(error, privacy)); }
     }
     private void checkRun(String id, long deadline) throws InterruptedException {
@@ -130,7 +130,7 @@ public class WorkflowEngine {
     }
     public Map<String, Object> cancel(String id) {
         store.run(id);
-        store.finish(id, "CANCELLED", null, "执行已取消；已发送的 HTTP 请求可能已在对端生效");
+        store.finish(id, "CANCELLED", null, "执行已取消；已发送的请求或邮件可能已在对端生效");
         FutureTask<Void> task = tasks.remove(id); if (task != null) { task.cancel(true); workers.remove(task); }
         return store.run(id);
     }

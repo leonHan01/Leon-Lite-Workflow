@@ -20,6 +20,41 @@ let active = null;
 let sequence = 0;
 let lastViewedPage = null;
 
+const sidebarPreferenceKey = 'leon-workspace-sidebar-collapsed';
+const compactSidebar = window.matchMedia('(max-width: 900px)');
+let sidebarPreference = null;
+try {
+    const stored = localStorage.getItem(sidebarPreferenceKey);
+    if (stored === 'true' || stored === 'false') sidebarPreference = stored === 'true';
+} catch { /* Navigation remains usable when browser storage is unavailable. */ }
+
+const sidebar = document.querySelector('.lw-sidebar');
+const sidebarHeader = document.createElement('div');
+sidebarHeader.className = 'lw-sidebar-header';
+sidebar.prepend(sidebarHeader);
+sidebarHeader.append(sidebar.querySelector('.lw-brand'));
+const sidebarToggle = document.createElement('button');
+sidebarToggle.type = 'button';
+sidebarToggle.className = 'lw-sidebar-toggle';
+sidebarToggle.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16m7-11-3 3 3 3"/></svg>';
+sidebarHeader.append(sidebarToggle);
+
+function updateSidebar() {
+    const collapsed = sidebarPreference ?? compactSidebar.matches;
+    document.body.classList.toggle('is-sidebar-collapsed', collapsed);
+    sidebarToggle.setAttribute('aria-expanded', String(!collapsed));
+    sidebarToggle.setAttribute('aria-label', collapsed ? '展开侧边栏' : '折叠侧边栏');
+    sidebarToggle.title = collapsed ? '展开侧边栏' : '折叠侧边栏';
+}
+sidebarToggle.addEventListener('click', () => {
+    sidebarPreference = !document.body.classList.contains('is-sidebar-collapsed');
+    try { localStorage.setItem(sidebarPreferenceKey, String(sidebarPreference)); } catch { /* Keep the current choice in memory. */ }
+    updateSidebar();
+    window.dispatchEvent(new Event('resize'));
+});
+compactSidebar.addEventListener('change', updateSidebar);
+updateSidebar();
+
 async function getView(definition, url) {
     const [key, , className] = definition;
     if (views.has(key)) return views.get(key);

@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE_PATH || 'playwright');
 const root = path.resolve(__dirname, '../../main/resources/static');
-let workflow = null, versions = [], runs = [], credentials = [];
+let workflow = null, versions = [], runs = [], credentials = [], lastCredential = null, lastTest = null;
 let schedule = { enabled: false, cron: '0 0 9 * * *', timeZone: 'Asia/Shanghai', input: { items: [{ json: {} }] }, revision: 0, nextRunAt: null };
 const initial = () => ({ nodes: [{ id: 'start', name: '开始', type: 'start', config: {}, position: { x: 80, y: 140 } }, { id: 'end', name: '结束', type: 'end', config: {}, position: { x: 420, y: 140 } }], edges: [{ id: 'start_end', source: 'start', target: 'end', branch: '' }] });
 const server = http.createServer(async (req, res) => {
@@ -28,10 +28,10 @@ const server = http.createServer(async (req, res) => {
         }
         if (route === '/capabilities') return reply({ runtimes: { javascript: 'GraalJS', groovy: 'Groovy' }, sandbox: 'macOS Sandbox', credentialsEnabled: true });
         if (route === '/credentials') {
-            if (req.method === 'POST') { const value = { id: 'credential-' + (credentials.length + 1), name: data.name, kind: data.kind }; credentials.push(value); return reply(value); }
+            if (req.method === 'POST') { lastCredential = data; const value = { id: 'credential-' + (credentials.length + 1), name: data.name, kind: data.kind }; credentials.push(value); return reply(value); }
             return reply(credentials);
         }
-        if (route === '/test-node') return reply({ output: data.node.type === 'feishu' ? data.input : { items: [{ json: { name: 'LEON' } }] }, logs: data.node.type === 'feishu' ? '飞书消息已发送' : '调试完成', durationMs: 22, branch: '' });
+        if (route === '/test-node') { lastTest = data; return reply({ output: ['feishu', 'email'].includes(data.node.type) ? data.input : { items: [{ json: { name: 'LEON' } }] }, logs: data.node.type === 'feishu' ? '飞书消息已发送' : data.node.type === 'email' ? '邮件已提交至 SMTP 服务器' : '调试完成', durationMs: 22, branch: '' }); }
         if (!route) {
             if (req.method === 'POST') workflow = { id: 'workflow-1', name: data.name, definition: initial(), revision: 1, publishedVersion: 0 };
             return reply(req.method === 'POST' ? workflow : workflow ? [workflow] : []);
@@ -86,7 +86,7 @@ const server = http.createServer(async (req, res) => {
             await page.getByRole('button', {name:'保存草稿',exact:true}).click();
             await page.waitForFunction(() => document.querySelector('[data-version]').textContent.includes('草稿已保存'));
         };
-        for (const [kind, scale] of [['http',1],['javascript',.5],['groovy',2],['feishu',1],['if',1]]) {
+        for (const [kind, scale] of [['http',1],['javascript',.5],['groovy',2],['feishu',1],['email',1],['if',1]]) {
             await page.locator('[data-node="end"]').click();
             await page.getByRole('button',{name:'重置画布缩放',exact:true}).click();
             for (let i=0; i<(scale===.5?5:scale===2?10:0); i++) await page.getByRole('button',{name:scale===.5?'缩小画布':'放大画布',exact:true}).click();
@@ -168,6 +168,57 @@ const server = http.createServer(async (req, res) => {
         await page.waitForFunction(() => document.querySelector('[data-run-detail]').textContent.includes('飞书消息已发送'));
         await page.evaluate(() => { window.scrollTo(0,0); document.querySelector('.wf-inspector').scrollTop = 0; });
         await page.screenshot({path:'/private/tmp/leon-workflow-feishu-node.png',fullPage:false});
+        await page.getByRole('button', {name:'删除节点',exact:true}).click();
+        assert.equal(await page.locator('[data-node]').count(), 2);
+        await page.locator('[data-node="start"]').click();
+        await page.locator('[data-add="email"]').click();
+        await page.locator('[data-action="smtp-credentials"]').click();
+        await page.waitForSelector('[data-credentials-dialog][open]');
+        assert.equal(await credentialForm.locator('[name="kind"]').inputValue(), 'smtp');
+        assert.equal(await credentialForm.locator('[name="secret"]').isDisabled(), true);
+        assert.equal(await credentialForm.locator('[name="smtpHost"]').isVisible(), true);
+        await credentialForm.locator('[name="name"]').fill('通知邮箱');
+        await credentialForm.locator('[name="smtpHost"]').fill('smtp.example.com');
+        await credentialForm.locator('[name="smtpSecurity"]').selectOption('starttls');
+        assert.equal(await credentialForm.locator('[name="smtpPort"]').inputValue(), '587');
+        await credentialForm.locator('[name="smtpUsername"]').fill('sender@example.com');
+        await credentialForm.locator('[name="smtpPassword"]').fill('browser-mail-authorization');
+        await credentialForm.locator('[name="smtpFrom"]').fill('sender@example.com');
+        await page.getByRole('button', {name:'保存凭据',exact:true}).click();
+        await page.waitForFunction(() => document.querySelectorAll('.wf-credential-row').length === 2);
+        assert.deepEqual(lastCredential.value, {host:'smtp.example.com',port:587,security:'starttls',username:'sender@example.com',password:'browser-mail-authorization',from:'sender@example.com'});
+        assert.equal(await credentialForm.locator('[name="smtpPassword"]').inputValue(), '');
+        await page.locator('[data-close="credentials"]').click();
+        assert.equal(await page.locator('[data-field="credentialId"]').inputValue(), 'credential-2');
+        await page.locator('[data-field="to"]').fill('{{ input.items[0].json.email }}');
+        await page.locator('[data-field="cc"]').fill('copy@example.com');
+        await page.locator('[data-field="bcc"]').fill('hidden@example.com');
+        await page.locator('[data-field="subject"]').fill('通知：{{ input.items[0].json.name }}');
+        await page.locator('[data-field="format"]').selectOption('html');
+        await page.getByRole('textbox', {name:'邮件正文',exact:true}).fill('<p>你好，{{ input.items[0].json.name }}</p>');
+        // An unselected node must remain in the DOM across the two clicks.
+        const mailId = await page.locator('.wf-node.is-selected').getAttribute('data-node');
+        await page.locator('[data-node="start"]').click();
+        await page.getByRole('button', {name:'关闭节点配置',exact:true}).click();
+        await page.locator(`[data-node="${mailId}"] .wf-node-head`).dblclick();
+        await page.waitForFunction(() => document.activeElement?.dataset.field === 'name');
+        assert.equal(await page.locator('.wf-inspector').isVisible(), true);
+        assert.equal(await page.locator('[data-field="subject"]').inputValue(), '通知：{{ input.items[0].json.name }}');
+        await page.getByRole('button', {name:'保存草稿',exact:true}).click();
+        await page.waitForFunction(() => document.querySelector('[data-version]').textContent.includes('草稿已保存'));
+        const mail = workflow.definition.nodes.find(n => n.type === 'email');
+        assert.deepEqual(mail.config, {credentialId:'credential-2',to:'{{ input.items[0].json.email }}',cc:'copy@example.com',bcc:'hidden@example.com',subject:'通知：{{ input.items[0].json.name }}',body:'<p>你好，{{ input.items[0].json.name }}</p>',format:'html',timeoutMs:10000});
+        assert.ok(!JSON.stringify(workflow).includes('browser-mail-authorization'));
+        await page.getByRole('button', {name:'发送测试邮件',exact:true}).click();
+        await page.waitForFunction(() => document.querySelector('[data-run-detail]').textContent.includes('邮件已提交至 SMTP 服务器'));
+        assert.deepEqual(lastTest.node.config, mail.config);
+        await page.getByRole('button', {name:'全屏编辑',exact:true}).click();
+        await page.getByRole('button', {name:'适应视图',exact:true}).click();
+        await page.locator(`[data-node="${mailId}"] .wf-node-head`).dblclick();
+        await page.waitForFunction(() => document.activeElement?.dataset.field === 'name');
+        assert.equal(await page.locator('.wf-inspector').isVisible(), true);
+        await page.getByRole('button', {name:'退出全屏',exact:true}).click();
+        await page.screenshot({path:'/private/tmp/leon-workflow-email-node.png',fullPage:false});
         await page.getByRole('button', {name:'删除节点',exact:true}).click();
         assert.equal(await page.locator('[data-node]').count(), 2);
         await page.locator('[data-add="javascript"]').click();
@@ -368,7 +419,7 @@ const server = http.createServer(async (req, res) => {
         await page.locator('[data-credential-form] [name="name"]').fill('演示凭据');
         await page.locator('[data-credential-form] [name="secret"]').fill('example-only');
         await page.getByRole('button', { name: '保存凭据', exact: true }).click();
-        await page.waitForFunction(() => document.querySelectorAll('.wf-credential-row').length === 2);
+        await page.waitForFunction(() => document.querySelectorAll('.wf-credential-row').length === 3);
         await page.locator('[data-close="credentials"]').click();
         await page.getByRole('textbox', { name: '工作流名称', exact: true }).fill('未保存草稿');
         await page.locator('.lw-sidebar').getByRole('link', { name: '总览', exact: true }).click();
@@ -415,6 +466,6 @@ const server = http.createServer(async (req, res) => {
         assert.equal(await page.locator('body').evaluate(e=>e.classList.contains('wf-focus-open')),false);
         assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+2),false,'移动端编排界面横向溢出');
         assert.deepEqual(errors, []);
-        console.log('Workflow browser checks passed: library drag/drop for all nodes, zoom/scroll positions, cancellation, Feishu configuration, canvas, scheduling, instances, navigation and mobile.');
+        console.log('Workflow browser checks passed: library drag/drop for all nodes, zoom/scroll positions, cancellation, Feishu/email configuration, double-click editing, canvas, scheduling, instances, navigation and mobile.');
     } finally { await browser.close(); server.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; server.close(); });

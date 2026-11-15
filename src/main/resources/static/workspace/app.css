@@ -19,9 +19,6 @@
     .workspace-app .lw-nav-children { margin:3px 0 0; padding:0; border:0; }
     .workspace-app .lw-nav-children .lw-nav-link { padding:0; }
 }
-.workspace-app.is-music-page .lw-nav-toggle { justify-content:center; padding:0; }
-.workspace-app.is-music-page .lw-nav-toggle span,.workspace-app.is-music-page .lw-nav-toggle .lw-nav-chevron { display:none; }
-.workspace-app.is-music-page .lw-nav-children { margin:3px 0 0; padding:0; border:0; }
 @media (max-width:680px) {
     .workspace-app .lw-nav-group { display:flex; align-items:center; gap:4px; flex:none; }
     .workspace-app .lw-nav-toggle { flex:none; width:34px; min-height:38px; }
@@ -35,6 +32,46 @@
     .workspace-app .lw-nav-link { flex:0 0 34px; width:34px; }
 }
 @media (max-width:500px) { .workspace-app .lw-brand-text { display:none; } }
+.workspace-app .lw-sidebar-header { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.workspace-app .lw-sidebar-toggle { display:grid; place-items:center; flex:none; width:30px; height:30px; padding:5px; border:1px solid #e5e9f0 !important; border-radius:8px; background:#fff !important; box-shadow:none !important; color:#7a8388 !important; cursor:pointer; }
+.workspace-app .lw-sidebar-toggle:hover { color:#4669e8 !important; background:#f4f6fc !important; }
+.workspace-app .lw-sidebar-toggle:focus-visible { outline:2px solid #4669e8; outline-offset:3px; }
+.workspace-app .lw-sidebar-toggle svg { width:18px; height:18px; }
+.workspace-app.is-sidebar-collapsed .lw-sidebar-toggle svg { transform:rotate(180deg); }
+@media (min-width:681px) {
+    .workspace-app .lw-sidebar { flex-basis:224px; width:224px; align-items:stretch; padding:30px 18px 24px; overflow-y:auto; }
+    .workspace-app .lw-brand { padding:0 9px; }
+    .workspace-app .lw-brand-mark { flex:none; }
+    .workspace-app .lw-brand-text { display:flex; }
+    .workspace-app .lw-nav-label { display:block; }
+    .workspace-app .lw-sidebar-foot { display:flex; }
+    .workspace-app .lw-nav { width:100%; margin-top:0; flex:none; overflow-x:visible; }
+    .workspace-app .lw-nav-link { width:auto; justify-content:flex-start; padding:0 13px; }
+    .workspace-app .lw-nav-link span,.workspace-app .lw-nav-toggle span { display:inline; }
+    .workspace-app .lw-nav-link.is-active::after { display:block; }
+    .workspace-app .lw-nav-toggle { justify-content:flex-start; padding:0 13px; }
+    .workspace-app .lw-nav-toggle .lw-nav-chevron { display:block; }
+    .workspace-app .lw-nav-children { margin:3px 0 2px 21px; padding-left:8px; border-left:1px solid #e5e9f0; }
+    .workspace-app .lw-nav-children .lw-nav-link { padding:0 10px; }
+    .workspace-app.is-sidebar-collapsed .lw-sidebar { flex-basis:76px; width:76px; align-items:center; padding:25px 10px; }
+    .workspace-app.is-sidebar-collapsed .lw-sidebar-header { flex-direction:column; gap:16px; }
+    .workspace-app.is-sidebar-collapsed .lw-brand { padding:0; }
+    .workspace-app.is-sidebar-collapsed .lw-brand-text,
+    .workspace-app.is-sidebar-collapsed .lw-nav-label,
+    .workspace-app.is-sidebar-collapsed .lw-nav-link span,
+    .workspace-app.is-sidebar-collapsed .lw-nav-toggle span,
+    .workspace-app.is-sidebar-collapsed .lw-nav-chevron,
+    .workspace-app.is-sidebar-collapsed .lw-nav-link.is-active::after,
+    .workspace-app.is-sidebar-collapsed .lw-sidebar-foot { display:none; }
+    .workspace-app.is-sidebar-collapsed .lw-nav { margin-top:24px; }
+    .workspace-app.is-sidebar-collapsed .lw-nav-link,
+    .workspace-app.is-sidebar-collapsed .lw-nav-toggle { justify-content:center; padding:0; }
+    .workspace-app.is-sidebar-collapsed .lw-nav-children { margin:3px 0 0; padding:0; border:0; }
+}
+@media (max-width:680px) {
+    .workspace-app .lw-sidebar-toggle { display:none; }
+    .workspace-app .lw-sidebar-header { flex:none; }
+}
 .workspace-app .ws-shell-note { color:#9aa5a0; font:600 10px var(--lw-mono); letter-spacing:.12em; }
 .workspace-app .ws-pane[hidden], .workspace-app .ws-load-status[hidden] { display:none !important; }
 .workspace-app .ws-pane { min-width:0; }
@@ -156,12 +193,6 @@
 @media (max-width:1100px) { .workspace-app .monitor-cards { grid-template-columns:repeat(2,minmax(0,1fr)); } .workspace-app .monitor-charts { grid-template-columns:1fr; } }
 @media (max-width:650px) { .workspace-app .monitor-page { padding:26px 20px; } .workspace-app .monitor-heading { align-items:flex-start; } .workspace-app .monitor-stat { padding:15px; } .workspace-app .monitor-stat div span { display:none; } }
 .music-content { max-width: none; margin: 0; padding: 20px 22px; }
-.workspace-app.is-music-page .lw-sidebar { flex-basis: 72px; width: 72px; align-items: center; padding: 22px 8px; }
-.workspace-app.is-music-page .lw-brand { padding: 0; }
-.workspace-app.is-music-page .lw-brand-text,.workspace-app.is-music-page .lw-nav-label,.workspace-app.is-music-page .lw-nav-link span,.workspace-app.is-music-page .lw-sidebar-foot { display: none; }
-.workspace-app.is-music-page .lw-nav { width: 100%; margin-top: 30px; }
-.workspace-app.is-music-page .lw-nav-link { justify-content: center; padding: 0; }
-.workspace-app.is-music-page .lw-nav-link.is-active::after { display: none; }
 .workspace-app.is-music-page .lw-topbar { height: 58px; padding: 0 22px; }
 .music-toolbar,.music-fields { display: flex; align-items: center; gap: 20px; justify-content: space-between; }
 .music-content p,.music-table small { color: #67746d; }
@@ -270,7 +301,6 @@
 }
 @media (max-height: 600px) { .music-playlists { position: static; } .music-playlist-cards { max-height: 200px; } }
 @media (max-width: 800px) { .music-content { padding: 14px; } .music-fields,.music-toolbar { align-items: stretch; flex-direction: column; } .music-toolbar-tools { width: 100%; } .music-collection .music-toolbar input { flex: 1; width: 0; } .music-selection-bar select { flex: 1; } }
-@media (max-width: 700px) { .workspace-app.is-music-page .lw-sidebar { width: 100%; height: auto; padding: 10px 14px; align-items: stretch; } .workspace-app.is-music-page .lw-nav { width: auto; margin: 0; } }
 
 .music-file-drop { display: none; position: fixed; inset: 14px; z-index: 100; align-items: center; justify-content: center; padding: 24px; box-sizing: border-box; border: 2px dashed #4669e8; border-radius: 18px; background: #eff4ffee; pointer-events: none; }
 .music-file-drop > div { max-width: min(100%, 560px); box-sizing: border-box; overflow-wrap: anywhere; padding: 28px 38px; border-radius: 16px; background: white; box-shadow: 0 12px 42px #203c6d22; text-align: center; }
