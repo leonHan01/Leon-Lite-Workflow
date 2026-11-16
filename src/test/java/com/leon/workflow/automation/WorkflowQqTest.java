@@ -64,6 +64,16 @@ class WorkflowQqTest {
         assertFalse(write(run).contains(SECRET)); assertFalse(write(run).contains(TOKEN));
         assertTrue((int)sent.get("timeoutMs") <= (int)requests.getFirst().get("timeoutMs"));
     }
+    @Test void trendingSummaryCanBeSentAsOneMessageThroughThePublishedQqNode() throws Exception {
+        var analysis = Map.<String, Object>of("summary", "开发工具概览", "projects", List.of(Map.of("repo", "sample/tool", "purpose", "提升效率", "useCases", "开发工作流")));
+        var report = WorkflowGithubTrending.report(analysis, new WorkflowGithubTrending.Page(1, List.of(Map.of("repo", "sample/tool", "url", "https://github.com/sample/tool"))));
+        var config = config(); config.put("text", "{{ input.items[0].json.qqText }}");
+        var run = run(config, report);
+        assertEquals("SUCCEEDED", run.get("status"), text(run.get("error"))); assertEquals(report, run.get("output"));
+        var json = object(object(((List<?>)report.get("items")).getFirst()).get("json"));
+        assertEquals(json.get("qqText"), object(requests.getLast().get("body")).get("content"));
+        assertEquals(2, requests.size());
+    }
     @Test void groupMarkdownAndTargetTemplatesResolveOnce() throws Exception {
         var config = config(); config.put("targetType", "group"); config.put("messageType", "markdown");
         config.put("targetId", "{{ input.items[0].json.group }}"); config.put("text", "{{ input.items[0].json.literal }}");

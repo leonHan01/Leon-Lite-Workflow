@@ -111,6 +111,9 @@ public class WorkflowGithubTrending {
             json.put("dataSource", "GitStock 快照"); json.put("snapshotCapturedAt", snapshotTime.toString());
             for (String key : List.of("feishuText", "feishuMarkdown", "emailBody")) json.put(key, label + "\n\n" + text(json.get(key)));
             json.put("emailHtml", "<p>" + html(label) + "</p>" + text(json.get("emailHtml")));
+            var projects = new ArrayList<Map<String, Object>>();
+            for (Object project : (List<?>)json.get("projects")) projects.add(object(project));
+            json.put("qqText", qqText(text(json.get("title")), source, text(json.get("summary")), projects, page.total(), label));
         }
         trace.accept("DeepSeek 分析与项目对应校验完成；" + WorkflowDiagnostics.lengths(output));
         return output;
@@ -285,7 +288,46 @@ public class WorkflowGithubTrending {
         output.put("totalProjects", total); output.put("count", projects.size()); output.put("projects", projects); output.put("summary", summary); output.put("title", title);
         output.put("feishuText", feishu.toString()); output.put("emailSubject", title); output.put("emailBody", email.toString()); output.put("emailHtml", html.toString());
         output.put("feishuMarkdown", feishuMarkdown(source, summary, projects, total));
+        output.put("qqText", qqText(title, source, summary, projects, total, ""));
         return envelope(Map.of("items", List.of(Map.of("json", output))));
+    }
+    /** A single plain QQ notification; complete repo names, links and provenance survive shortening. */
+    private static String qqText(String title, String source, String summary, List<Map<String, Object>> projects, int total, String sourceNote) {
+        String intro = title + "\n已分析 " + projects.size() + " / " + total + " 个项目"
+                + (sourceNote.isBlank() ? "" : "\n" + sourceNote) + "\n\n榜单概览：" + qqShorten(summary, 360);
+        for (int shown = Math.min(5, projects.size()); shown > 0; shown--) {
+            String heading = "\n\n项目速览（榜单前 " + shown + " 项）：";
+            String tail = (shown < projects.size() ? "\n\n其余 " + (projects.size() - shown) + " 项完整解读见工作流运行详情。" : "") + "\n\n榜单来源：" + source;
+            StringBuilder skeleton = new StringBuilder(intro + heading + tail);
+            for (int i = 0; i < shown; i++) {
+                var project = projects.get(i);
+                skeleton.append("\n\n").append(i + 1).append(". ").append(project.get("repo")).append("\n\n").append(project.get("url"));
+            }
+            int available = WorkflowQq.MAX_MESSAGE_BYTES - skeleton.toString().getBytes(StandardCharsets.UTF_8).length;
+            if (available < shown * 60 && shown > 1) continue;
+            if (available < 0) continue;
+            int perProject = available / shown;
+            StringBuilder message = new StringBuilder(intro + heading);
+            for (int i = 0; i < shown; i++) {
+                var project = projects.get(i);
+                message.append("\n\n").append(i + 1).append(". ").append(project.get("repo"))
+                        .append("\n").append(qqShorten("用途：" + project.get("purpose"), perProject)).append("\n").append(project.get("url"));
+            }
+            return message.append(tail).toString();
+        }
+        throw new IllegalArgumentException("QQ 摘要无法在消息长度限制内保留项目链接，请减少项目数量");
+    }
+    private static String qqShorten(String value, int maxBytes) {
+        String safe = feishuSafe(value).replaceAll("[\\r\\n\\t ]+", " ").trim();
+        if (safe.getBytes(StandardCharsets.UTF_8).length <= maxBytes) return safe;
+        if (maxBytes < 3) return "";
+        int end = 0, used = 0;
+        while (end < safe.length()) {
+            int cp = safe.codePointAt(end), size = new String(Character.toChars(cp)).getBytes(StandardCharsets.UTF_8).length;
+            if (used + size > maxBytes - 3) break;
+            used += size; end += Character.charCount(cp);
+        }
+        return safe.substring(0, end) + "…";
     }
     private static String feishuMarkdown(String source, String summary, List<Map<String, Object>> projects, int total) {
         StringBuilder card = new StringBuilder("<text_tag color='blue'>" + periodLabel(source) + "</text_tag>  <text_tag color='green'>分析 "

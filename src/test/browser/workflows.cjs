@@ -67,7 +67,7 @@ const server = http.createServer(async (req, res) => {
                 const sourceUrl=data.node.config.sourceUrl||'https://github.com/trending?since=weekly';
                 const period=sourceUrl.includes('weekly')?'weekly':sourceUrl.includes('monthly')?'monthly':'daily';
                 const periodLabel={daily:'日榜',weekly:'周榜',monthly:'月榜'}[period];
-                return reply({output:{items:[{json:{count:2,sourceUrl,period,periodLabel,title:'GitHub Trending '+periodLabel+'项目解读',feishuText:periodLabel+' sample/one：开发工具。\nsample/two：资料不足。',emailSubject:'GitHub Trending '+periodLabel+'项目解读',emailBody:'项目用途：sample/one 提供开发工具。\nsample/two 资料不足。',emailHtml:'<p>项目用途：开发工具</p>'}}]},logs:'已抓取 GitHub Trending 并生成消息正文',durationMs:22,branch:''});
+                return reply({output:{items:[{json:{count:2,sourceUrl,period,periodLabel,title:'GitHub Trending '+periodLabel+'项目解读',qqText:'GitHub Trending '+periodLabel+'\n项目摘要：sample/one 提供开发工具。\n'+sourceUrl,feishuText:periodLabel+' sample/one：开发工具。\nsample/two：资料不足。',emailSubject:'GitHub Trending '+periodLabel+'项目解读',emailBody:'项目用途：sample/one 提供开发工具。\nsample/two 资料不足。',emailHtml:'<p>项目用途：开发工具</p>'}}]},logs:'已抓取 GitHub Trending 并生成消息正文',durationMs:22,branch:''});
             } return reply({ output: ['feishu', 'qq', 'email'].includes(data.node.type) ? data.input : { items: [{ json: { name: 'LEON' } }] }, logs: data.node.type === 'qq' ? 'QQ 平台已接受消息' : data.node.type === 'feishu' ? '飞书消息已发送' : data.node.type === 'email' ? '邮件已提交至 SMTP 服务器' : '调试完成', durationMs: 22, branch: '' }); }
         if (!route) {
             if (req.method === 'POST') workflow = { id: 'workflow-1', name: data.name, definition: initial(), revision: 1, publishedVersion: 0 };
@@ -280,6 +280,8 @@ const server = http.createServer(async (req, res) => {
         await page.getByRole('button',{name:'生成 Trending 分析',exact:true}).click();
         await page.locator('[data-node-dialog] [data-node-debug]').getByRole('heading',{name:'飞书消息预览',exact:true}).waitFor();
         assert.equal(lastTest.node.config.sourceUrl,'https://github.com/trending?since=monthly');
+        assert.equal(await page.getByRole('textbox',{name:'QQ 消息摘要（单条）引用',exact:true}).inputValue(),'{{ input.items[0].json.qqText }}');
+        assert.ok((await page.locator('[data-node-dialog] [data-qq-preview]').textContent()).includes('GitHub Trending 月榜'));
         assert.ok((await page.locator('[data-node-dialog] [data-node-debug]').textContent()).includes('月榜'));
         await page.waitForFunction(()=>{
             const preview=document.querySelector('[data-node-dialog] [data-node-debug] h3')?.getBoundingClientRect();
@@ -833,9 +835,13 @@ const server = http.createServer(async (req, res) => {
         await page.locator('[data-action="use-summary-qq"]').click();
         assert.equal(await page.locator('[data-field="text"]').inputValue(),'{{ input.items[0].json.summary }}');
         await page.locator('[data-field="messageType"]').selectOption('markdown');
+        await page.getByRole('button',{name:'使用 Trending 分析结果',exact:true}).click();
+        assert.equal(await page.locator('[data-field="messageType"]').inputValue(),'text');
+        assert.equal(await page.locator('[data-field="text"]').inputValue(),'{{ input.items[0].json.qqText }}');
         await page.locator('[data-action="test"]').click();
         await page.waitForFunction(()=>document.querySelector('[data-node-debug]')?.textContent.includes('QQ 平台已接受消息'));
-        assert.equal(lastTest.node.type,'qq'); assert.equal(lastTest.node.config.messageType,'markdown');
+        assert.equal(lastTest.node.type,'qq'); assert.equal(lastTest.node.config.messageType,'text');
+        assert.equal(lastTest.node.config.text,'{{ input.items[0].json.qqText }}');
         assert.equal(lastTest.node.config.targetId,boundQqId);
         await page.locator('[data-action="edit-node-credential"]').click();
         await page.waitForSelector('[data-credentials-dialog][open]');

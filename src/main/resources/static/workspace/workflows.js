@@ -4,7 +4,9 @@ const templates = {
     groovy: `def main(Map input, Map ctx) {\n    return [items: input.items.collect { item ->\n        [json: item.json + [name: (item.json.name ?: '').toUpperCase()]]\n    }]\n}`,
 };
 const labels = { start: '开始', end: '结束', http: 'HTTP 请求', script: '脚本', if: '条件判断', feishu: '飞书消息', qq: 'QQ 消息', email: '发送邮件', 'github-trending': 'GitHub Trending 分析', 'tech-weekly': '科技爱好者周刊分析', rss: 'RSS 订阅', 'ai-summary': 'AI 总结' };
-const qqIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M5 4h14v12h-6l-5 4v-4H5z"/><circle cx="9" cy="10" r=".6"/><circle cx="15" cy="10" r=".6"/></svg>';
+const endIcon = '<img src="/workspace/icons/end.png" alt="" aria-hidden="true">';
+const startIcon = '<img src="/workspace/icons/start.png" alt="" aria-hidden="true">';
+const qqIcon = '<img src="/workspace/icons/qq.png" alt="" aria-hidden="true">';
 const feishuIcon = '<img src="/workspace/icons/feishu.png" alt="" aria-hidden="true">';
 const githubIcon = '<img src="/workspace/icons/github.png" alt="" aria-hidden="true">';
 const javascriptIcon = '<img src="/workspace/icons/javascript.png" alt="" aria-hidden="true">';
@@ -258,7 +260,7 @@ export function mount(pane, workspace) {
     function nodeStyle(node) {
         const requested = node.type === 'script' ? (node.config?.language === 'groovy' ? 'groovy' : 'script') : node.type;
         const kind = ['start', 'end', 'http', 'script', 'groovy', 'if', 'feishu', 'qq', 'email', 'github-trending', 'tech-weekly', 'rss', 'ai-summary'].includes(requested) ? requested : 'script';
-        return { kind, icon: ({ start: '▶', end: '■', http: httpIcon, script: javascriptIcon, groovy: groovyIcon, if: '⑂', feishu: feishuIcon, qq: qqIcon, email: emailIcon, 'github-trending': githubIcon, 'tech-weekly': githubIcon, rss: rssIcon, 'ai-summary': aiIcon })[kind], label: node.type === 'script' ? (node.config.language === 'groovy' ? 'Groovy' : 'JavaScript') : labels[node.type] };
+        return { kind, icon: ({ start: startIcon, end: endIcon, http: httpIcon, script: javascriptIcon, groovy: groovyIcon, if: '⑂', feishu: feishuIcon, qq: qqIcon, email: emailIcon, 'github-trending': githubIcon, 'tech-weekly': githubIcon, rss: rssIcon, 'ai-summary': aiIcon })[kind], label: node.type === 'script' ? (node.config.language === 'groovy' ? 'Groovy' : 'JavaScript') : labels[node.type] };
     }
     function renderCanvas() {
         if (!graph) return;
@@ -438,8 +440,8 @@ export function mount(pane, workspace) {
             content += '<p class="wf-help">服务器抓取榜单，再由 DeepSeek 逐个分析项目用途和使用场景。复用高级设置中的 DeepSeek API Key；此节点只生成内容。</p>';
             if (capabilities.githubTrendingReady === false) content += '<p class="wf-run-error">请先到高级设置填写 DeepSeek API Key。</p>';
             content += '<div class="wf-trending-output"><h3>后续节点可引用</h3>' + [
-                ['飞书正文（Markdown 卡片）', 'feishuMarkdown'], ['飞书正文（纯文本）', 'feishuText'], ['邮件主题', 'emailSubject'], ['邮件正文（纯文本）', 'emailBody'], ['邮件正文（HTML）', 'emailHtml'],
-            ].map(([title, key]) => field(title, `<input readonly value="{{ input.items[0].json.${key} }}" aria-label="${title}引用">`)).join('') + '<p class="wf-help">将出口连接到飞书或邮件节点，在后续节点点击“使用 Trending 分析结果”即可填入引用。</p></div>';
+                ['QQ 消息摘要（单条）', 'qqText'], ['飞书正文（Markdown 卡片）', 'feishuMarkdown'], ['飞书正文（纯文本）', 'feishuText'], ['邮件主题', 'emailSubject'], ['邮件正文（纯文本）', 'emailBody'], ['邮件正文（HTML）', 'emailHtml'],
+            ].map(([title, key]) => field(title, `<input readonly value="{{ input.items[0].json.${key} }}" aria-label="${title}引用">`)).join('') + '<p class="wf-help">将出口连接到 QQ、飞书或邮件节点，在后续节点点击“使用 Trending 分析结果”即可填入引用。QQ 摘要控制在单条消息内。</p></div>';
         }
         if (node.type === 'tech-weekly') {
             content += field('总超时（毫秒，1000–240000）', inputField('timeoutMs', c.timeoutMs || 180000, 'type="number" min="1000" max="240000" step="1000"'));
@@ -469,6 +471,7 @@ export function mount(pane, workspace) {
             content += field('消息类型', select('messageType', c.messageType || 'text', [['text', '文本'], ['markdown', 'Markdown']]));
             content += field('消息内容', `<textarea aria-label="QQ 消息内容" data-field="text" rows="6" maxlength="65536" spellcheck="false">${esc(c.text)}</textarea>`);
             content += '<button type="button" data-action="use-summary-qq">使用上游摘要</button>';
+            content += '<button type="button" data-action="use-trending-qq">使用 Trending 分析结果</button>';
             content += '<p class="wf-help">可引用 {{ input.items[0].json.summary }} 等上游字段。正文限 2000 UTF-8 字节，超长明确报错，不拆分或截断。请开启机器人主动消息权限及 QQ 接收设置；Markdown 还需相应权限。每次发送一条，成功后传递原输入，无新增 items 时跳过；测试也会真实发送，失败不自动重发。</p>';
         }
         if (node.type === 'email') {
@@ -817,7 +820,7 @@ export function mount(pane, workspace) {
                 if (node.type === 'github-trending') notice('正在抓取 GitHub Trending，并由 DeepSeek 分析项目，请稍候…');
                 const result = await send('/test-node', { node, input: runInput() });
                 const report = ['github-trending','tech-weekly'].includes(node.type) ? result.output?.items?.[0]?.json : null;
-                const preview = report ? `<h3>飞书消息预览</h3><pre>${esc(report.feishuMarkdown || report.feishuText)}</pre><h3>邮件主题</h3><p>${esc(report.emailSubject)}</p><h3>邮件正文预览</h3><pre>${esc(report.emailBody)}</pre>` : '';
+                const preview = report ? `${report.qqText ? `<h3>QQ 消息预览</h3><pre data-qq-preview>${esc(report.qqText)}</pre>` : ''}<h3>飞书消息预览</h3><pre>${esc(report.feishuMarkdown || report.feishuText)}</pre><h3>邮件主题</h3><p>${esc(report.emailSubject)}</p><h3>邮件正文预览</h3><pre>${esc(report.emailBody)}</pre>` : '';
                 const content = heading + `<p>${result.durationMs} ms</p>${result.branch ? `<p>分支 ${esc(result.branch)}</p>` : ''}${preview}<h3>输出</h3><pre>${esc(pretty(result.output))}</pre><h3>日志</h3><pre>${esc(result.logs || '无日志')}</pre>`;
                 $('[data-run-detail]').innerHTML = content;
                 if (node.id === selected && $('[data-node-debug]')) {
@@ -850,6 +853,10 @@ export function mount(pane, workspace) {
             const field = $('[data-qq-binding-code]'); if (!field) return;
             try { await navigator.clipboard.writeText(field.value); notice('绑定码已复制，请在 QQ 中发送给机器人。'); }
             catch { field.focus(); field.select(); notice('请复制已选中的绑定码，在 QQ 中发送给机器人。'); }
+        },
+        'use-trending-qq': () => {
+            commitInspector(); const node = graph.nodes.find(n => n.id === selected); if (node?.type !== 'qq') return;
+            Object.assign(node.config, {messageType:'text', text:'{{ input.items[0].json.qqText }}'}); markDirty(); inspector();
         },
         'use-summary-qq': () => {
             commitInspector(); const node = graph.nodes.find(n => n.id === selected); if (node?.type !== 'qq') return;

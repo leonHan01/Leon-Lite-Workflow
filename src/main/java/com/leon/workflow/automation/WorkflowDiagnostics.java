@@ -41,7 +41,7 @@ final class WorkflowDiagnostics {
         if (!(output instanceof Map<?, ?> map) || !(map.get("items") instanceof List<?> rows) || rows.isEmpty()
                 || !(rows.getFirst() instanceof Map<?, ?> item) || !(item.get("json") instanceof Map<?, ?> json)) return "";
         List<String> lengths = new ArrayList<>();
-        for (String key : List.of("feishuText", "feishuMarkdown", "emailSubject", "emailBody", "emailHtml"))
+        for (String key : List.of("feishuText", "feishuMarkdown", "qqText", "emailSubject", "emailBody", "emailHtml"))
             if (json.get(key) instanceof String content) lengths.add(key + "=" + content.length() + " 字符");
         return String.join("，", lengths);
     }
