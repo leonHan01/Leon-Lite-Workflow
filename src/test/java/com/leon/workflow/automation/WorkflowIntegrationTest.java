@@ -117,6 +117,19 @@ class WorkflowIntegrationTest {
             assertEquals(3, steps.size()); assertTrue(steps.stream().allMatch(n -> "SUCCEEDED".equals(n.get("status"))));
         }
     }
+    @Test void draftReadsIncludeTheLastPublishedDefinitionWithoutChangingItsSnapshot() throws Exception {
+        var initial = WorkflowGraph.initial(); var workflow = createPublished(initial); String id = text(workflow.get("id"));
+        assertEquals(store.get(id).get("definition"), store.get(id).get("publishedDefinition"));
+        var nodes = new ArrayList<>(initial.nodes()); var start = nodes.getFirst();
+        nodes.set(0, new WorkflowGraph.Node(start.id(), start.type(), "修改后的开始", start.config(), start.position()));
+        var changed = new WorkflowGraph(nodes, initial.edges());
+        var draft = store.save(id, "改名", changed, ((Number)workflow.get("revision")).longValue());
+        assertNotEquals(draft.get("definition"), draft.get("publishedDefinition"));
+        assertEquals(read(write(initial)), draft.get("publishedDefinition"));
+        var published = store.publish(id, ((Number)draft.get("revision")).longValue(), "{}");
+        assertEquals(published.get("definition"), published.get("publishedDefinition"));
+        assertEquals(read(write(initial)), read(write(store.version(id,1))));
+    }
     @Test void fanOutExecutesEverySuccessorWithIndependentInputsAndFinishesTheEndOnce() throws Exception {
         var graph = new WorkflowGraph(List.of(node("start", "start", Map.of()),
                 script("left", "javascript", "function main(i,c){i.items[0].json.value=7;return i;}"),
@@ -151,16 +164,16 @@ class WorkflowIntegrationTest {
         assertEquals(5, steps.stream().filter(n -> "SUCCEEDED".equals(n.get("status"))).count());
         assertEquals(requests, skippedRequests.get());
     }
-    @Test void fanOutFailureStopsPendingSuccessorsAndAggregateOutputsKeepTheItemLimit() throws Exception {
+    @Test void fanOutFailureAllowsIndependentSuccessorsAndAggregateOutputsKeepTheItemLimit() throws Exception {
         int requests = skippedRequests.get();
         var failing = new WorkflowGraph(List.of(node("start", "start", Map.of()), script("bad", "javascript", "function main(i,c){throw Error('branch failed');}"),
                 node("later", "http", Map.of("url", base + "/skipped")), node("end", "end", Map.of())),
                 List.of(edge("start", "bad", ""), edge("start", "later", ""), edge("bad", "end", ""), edge("later", "end", "")));
         var workflow = createPublished(failing);
         var run = await(text(engine.start(text(workflow.get("id")), empty()).get("id")));
-        assertEquals("FAILED", run.get("status")); assertEquals(requests, skippedRequests.get());
+        assertEquals("FAILED", run.get("status")); assertEquals(requests + 1, skippedRequests.get());
         @SuppressWarnings("unchecked") var steps = (List<Map<String, Object>>)run.get("nodes");
-        assertEquals("SKIPPED", steps.stream().filter(n -> "later".equals(n.get("nodeId"))).findFirst().orElseThrow().get("status"));
+        assertEquals("SUCCEEDED", steps.stream().filter(n -> "later".equals(n.get("nodeId"))).findFirst().orElseThrow().get("status"));
         var limited = new WorkflowGraph(List.of(node("start", "start", Map.of()), node("left", "if", Map.of("operator", "truthy", "left", true)),
                 node("right", "if", Map.of("operator", "truthy", "left", true)), node("end", "end", Map.of())),
                 List.of(edge("start", "left", ""), edge("start", "right", ""), new WorkflowGraph.Edge("lt", "left", "end", "true"), new WorkflowGraph.Edge("lf", "left", "end", "false"),

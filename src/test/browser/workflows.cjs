@@ -84,7 +84,7 @@ const server = http.createServer(async (req, res) => {
             if (req.method === 'DELETE') { workflow = null; return reply({ deleted: true }); }
             return reply(workflow);
         }
-        if (route === '/workflow-1/publish') { workflow.publishedVersion++; versions.unshift({ version: workflow.publishedVersion, definition: structuredClone(workflow.definition), runtimes: { javascript: 'GraalJS', groovy: 'Groovy' }, createdAt: new Date().toISOString() }); return reply(workflow); }
+        if (route === '/workflow-1/publish') { workflow.publishedVersion++; workflow.publishedDefinition=structuredClone(workflow.definition); versions.unshift({ version: workflow.publishedVersion, definition: structuredClone(workflow.definition), runtimes: { javascript: 'GraalJS', groovy: 'Groovy' }, createdAt: new Date().toISOString() }); return reply(workflow); }
         if (route === '/workflow-1/versions') return reply(versions);
         if (route === '/workflow-1/runs') {
             if (req.method === 'POST') {
@@ -153,6 +153,29 @@ const server = http.createServer(async (req, res) => {
         await page.locator('[data-editor]:not([hidden])').waitFor();
         assert.equal(await page.getByRole('textbox',{name:'工作流名称',exact:true}).inputValue(),'双语言演示 <安全>','带 ID 的旧链接应直接打开编辑页');
         assert.equal(await page.locator('[data-node]').count(), 2);
+        assert.equal(await page.getByRole('button',{name:'保存草稿',exact:true}).isDisabled(),true,'新建后已保存的初始草稿无需重复保存');
+        assert.equal(await page.getByRole('button',{name:'发布版本',exact:true}).isEnabled(),true,'首次发布仍应可用');
+        const library=page.locator('.wf-library'), groups=library.locator('[data-library-group]');
+        assert.equal(await groups.count(),4);
+        assert.deepEqual(await groups.locator('summary>span').allTextContents(),['数据获取','AI 与分析','脚本与控制','消息通知']);
+        for(const [group,kinds] of Object.entries({sources:['http','rss'],ai:['github-trending','tech-weekly','ai-summary'],logic:['javascript','groovy','if'],notifications:['qq','feishu','email']})) {
+            assert.deepEqual(await library.locator(`[data-library-group="${group}"] [data-add]`).evaluateAll(nodes=>nodes.map(n=>n.dataset.add)),kinds);
+        }
+        assert.equal(await library.locator('[data-add]').count(),11);
+        const sourceSummary=library.locator('[data-library-group="sources"]>summary');
+        await sourceSummary.focus(); await page.keyboard.press('Enter');
+        assert.equal(await library.locator('[data-add="http"]').isVisible(),false,'键盘应能折叠分类');
+        assert.equal(await library.locator('[data-add="qq"]').isVisible(),true,'其他分类不受影响');
+        await page.keyboard.press('Space');
+        assert.equal(await library.locator('[data-add="http"]').isVisible(),true);
+        await page.getByRole('button',{name:'全部收起',exact:true}).click();
+        assert.equal(await library.locator('[data-library-group][open]').count(),0);
+        await page.screenshot({path:'/private/tmp/leon-workflow-library-collapsed.png',fullPage:false});
+        await page.getByRole('button',{name:'全部展开',exact:true}).click();
+        assert.equal(await library.locator('[data-library-group][open]').count(),4);
+        assert.ok(await library.locator('[data-add="http"]').evaluate(node=>node.offsetHeight<70),'节点卡片应比原来的70px更紧凑');
+        assert.equal(await page.getByRole('button',{name:'保存草稿',exact:true}).isDisabled(),true,'折叠节点库不能产生工作流修改');
+        await library.screenshot({path:'/private/tmp/leon-workflow-library-grouped.png'});
         assert.equal(await page.locator('[data-node="start"] .wf-port-in').count(), 0);
         assert.equal(await page.locator('[data-node="end"] .wf-port-out').count(), 0);
         assert.equal(await page.locator('[data-action="delete-node"]').count(), 0);
@@ -171,7 +194,7 @@ const server = http.createServer(async (req, res) => {
         await page.locator('[data-inspector] [data-field="name"]').fill('开始');
         assert.equal(await page.locator('[data-node="start"]').evaluate(e => e.offsetWidth), initialWidth, '缩短名称后节点应收窄');
         const savePaletteGraph = async () => {
-            await page.getByRole('button', {name:'保存草稿',exact:true}).click();
+            const button=page.getByRole('button', {name:'保存草稿',exact:true}); if(await button.isEnabled()) await button.click();
             await page.waitForFunction(() => document.querySelector('[data-version]').textContent.includes('草稿已保存'));
         };
         for (const [kind, scale] of [['http',1],['javascript',.5],['groovy',2],['github-trending',1],['feishu',1],['qq',1],['email',1],['rss',1],['ai-summary',1],['if',1]]) {
@@ -481,7 +504,7 @@ const server = http.createServer(async (req, res) => {
         const scriptId = workflow.definition.nodes.find(n => n.type === 'script').id;
         const originalEdge = workflow.definition.edges.find(e => e.source === scriptId && e.target === condition.id);
         const saveGraph = async () => {
-            await page.getByRole('button', {name:'保存草稿',exact:true}).click();
+            const button=page.getByRole('button', {name:'保存草稿',exact:true}); if(await button.isEnabled()) await button.click();
             await page.waitForFunction(() => document.querySelector('[data-version]').textContent.includes('草稿已保存'));
         };
         const clickEdge = async id => {
@@ -642,6 +665,43 @@ const server = http.createServer(async (req, res) => {
         await page.getByRole('button',{name:'重置画布缩放',exact:true}).click();
         await page.getByRole('button', { name: '发布版本', exact: true }).click();
         await page.waitForFunction(() => document.querySelector('[data-action="run"]').textContent.includes('v1'));
+        const saveButton=page.getByRole('button',{name:'保存草稿',exact:true}), publishButton=page.getByRole('button',{name:'发布版本',exact:true});
+        assert.equal(await saveButton.isDisabled(),true); assert.equal(await publishButton.isDisabled(),true);
+        const publishedName=workflow.name;
+        await page.getByRole('textbox',{name:'工作流名称',exact:true}).fill(publishedName+' 修改');
+        assert.equal(await saveButton.isEnabled(),true); assert.equal(await publishButton.isDisabled(),true,'仅修改流程名无需重发节点定义');
+        await page.getByRole('textbox',{name:'工作流名称',exact:true}).fill(publishedName);
+        assert.equal(await saveButton.isDisabled(),true); assert.equal(await publishButton.isDisabled(),true,'改回原值应恢复置灰');
+        await page.locator('[data-node="start"]').click();
+        await page.locator('[data-node="clean"]').click();
+        assert.equal(await saveButton.isDisabled(),true,'只查看配置不能产生变更');
+        assert.equal(await publishButton.isDisabled(),true);
+        await page.locator('[data-node="start"]').click();
+        const originalNodeName=workflow.definition.nodes.find(n=>n.id==='start').name;
+        await page.locator('[data-field="name"]').fill(originalNodeName+' 修改');
+        assert.equal(await saveButton.isEnabled(),true); assert.equal(await publishButton.isEnabled(),true);
+        await page.locator('[data-field="name"]').fill(originalNodeName);
+        assert.equal(await saveButton.isDisabled(),true); assert.equal(await publishButton.isDisabled(),true);
+        await page.locator('[data-field="name"]').fill(originalNodeName+' 草稿');
+        await saveButton.click();
+        await page.waitForFunction(()=>!document.querySelector('[data-action="reload"]').disabled);
+        assert.equal(await publishButton.isEnabled(),true,'已保存且尚未发布的草稿仍可发布');
+        await page.reload({waitUntil:'networkidle'});
+        await page.locator('[data-editor]:not([hidden])').waitFor();
+        assert.equal(await saveButton.isDisabled(),true); assert.equal(await publishButton.isEnabled(),true,'重新加载后仍应识别未发布草稿');
+        await page.locator('[data-node="start"]').click();
+        await page.locator('[data-field="name"]').fill(originalNodeName);
+        assert.equal(await saveButton.isEnabled(),true); assert.equal(await publishButton.isDisabled(),true,'还原成已发布内容无需再发版本');
+        await saveButton.click();
+        await page.waitForFunction(()=>!document.querySelector('[data-action="reload"]').disabled);
+        assert.equal(await publishButton.isDisabled(),true); assert.equal(workflow.publishedVersion,1);
+        await page.waitForFunction(()=>['save','publish'].every(action=>{
+            const style=getComputedStyle(document.querySelector(`[data-action="${action}"]`));
+            const channels=value=>value.match(/\d+/g).slice(0,3).map(Number);
+            const grey=value=>Math.max(...value)-Math.min(...value)<25;
+            return style.cursor==='not-allowed' && grey(channels(style.backgroundColor)) && grey(channels(style.color)) && Math.min(...channels(style.color))>120;
+        }));
+        await page.screenshot({path:'/private/tmp/leon-workflow-disabled-actions.png',fullPage:false});
         await page.getByRole('button', {name:'定时执行',exact:true}).click();
         await page.locator('[data-schedule-form] [name="enabled"]').check();
         await page.locator('[data-schedule-form] [name="preset"]').selectOption('custom');
@@ -767,6 +827,12 @@ const server = http.createServer(async (req, res) => {
         assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+2),false,'手机工作流列表横向溢出');
         await page.getByRole('link',{name:'编辑 未保存草稿',exact:true}).click();
         await page.getByRole('button',{name:'全屏编辑',exact:true}).click();
+        if(await page.getByRole('button',{name:'展开节点库',exact:true}).count()) await page.getByRole('button',{name:'展开节点库',exact:true}).click();
+        await page.getByRole('button',{name:'全部收起',exact:true}).click();
+        assert.equal(await page.locator('.wf-library [data-library-group][open]').count(),0);
+        assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+2),false,'手机节点分类不能导致页面横向溢出');
+        await page.screenshot({path:'/private/tmp/leon-workflow-library-mobile.png',fullPage:false});
+        await page.getByRole('button',{name:'全部展开',exact:true}).click();
         assert.ok(await page.locator('.wf-canvas-scroll').evaluate(e=>e.clientHeight)>250,'手机全屏画布不可用');
         await page.getByRole('button',{name:'展开节点配置',exact:true}).click();
         assert.equal(await page.locator('.wf-inspector').isVisible(),true);

@@ -2,12 +2,13 @@ package com.leon.workflow.automation;
 
 import java.util.*;
 import java.util.regex.Pattern;
+import java.util.concurrent.ConcurrentHashMap;
 import static com.leon.workflow.automation.WorkflowJson.*;
 
 /** Per-run redaction, including secrets echoed into otherwise innocuous fields or log messages. */
 public final class WorkflowPrivacy {
     private static final Pattern PRIVATE = Pattern.compile("(?i).*(authorization|cookie|password|secret|token|api[-_]?key|credential|webhook|signature).*");
-    private final Set<String> secrets = new HashSet<>();
+    private final Set<String> secrets = ConcurrentHashMap.newKeySet();
     public void secret(String value) { if (value != null && value.length() >= 3) secrets.add(value); }
     public void collect(Object value) {
         if (value instanceof Map<?, ?> map) map.forEach((k, v) -> {

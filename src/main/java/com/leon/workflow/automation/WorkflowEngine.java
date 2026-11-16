@@ -11,6 +11,7 @@ import static com.leon.workflow.automation.WorkflowJson.*;
 
 @Service
 public class WorkflowEngine {
+    static final int MAX_PARALLEL_NODES = 4;
     private final WorkflowStore store;
     private final ScriptProcessRunner scripts;
     private final WorkflowHttp http;
@@ -29,10 +30,10 @@ public class WorkflowEngine {
         public DebugFailure(String message, String logs) { super(message); this.logs = logs; }
         public String logs() { return logs; }
     }
-    private record PendingNode(WorkflowGraph.Node node, Map<String, Object> input) {}
+    private record CompletedNode(WorkflowGraph.Node node, NodeResult result, Exception failure) {}
     public WorkflowEngine(WorkflowStore store, ScriptProcessRunner scripts, WorkflowHttp http, WorkflowFeishu feishu, WorkflowEmail email, WorkflowGithubTrending trending, WorkflowRss rss, WorkflowAiSummary aiSummary, WorkflowQq qq) { this.store = store; this.scripts = scripts; this.http = http; this.feishu = feishu; this.email = email; this.trending = trending; this.rss = rss; this.aiSummary = aiSummary; this.qq = qq; }
     public Map<String, String> runtimes() { return Map.of("javascript", "GraalJS 25.0.2", "groovy", "Groovy " + groovy.lang.GroovySystem.getVersion()); }
-    public Map<String, Object> capabilities() { return Map.of("runtimes", runtimes(), "sandbox", scripts.sandbox(), "maxNodes", WorkflowGraph.MAX_NODES, "maxConcurrentRuns", 2, "scheduledExecution", true, "githubTrendingReady", trending.configured()); }
+    public Map<String, Object> capabilities() { return Map.of("runtimes", runtimes(), "sandbox", scripts.sandbox(), "maxNodes", WorkflowGraph.MAX_NODES, "maxConcurrentRuns", 2, "maxParallelNodes", MAX_PARALLEL_NODES, "scheduledExecution", true, "githubTrendingReady", trending.configured()); }
     public Map<String, Object> start(String workflowId, Map<String, Object> input) {
         envelope(input);
         var workflow = store.get(workflowId);
@@ -53,31 +54,71 @@ public class WorkflowEngine {
     private void run(String id, WorkflowGraph graph, Map<String, Object> input) {
         if (!store.start(id)) return;
         WorkflowPrivacy privacy = new WorkflowPrivacy(); privacy.collect(input);
+        graph.nodes().forEach(node -> privacy.collect(node.settings()));
         WorkflowGraph.Node start = graph.nodes().stream().filter(n -> "start".equals(n.type())).findFirst().orElseThrow();
         WorkflowGraph.Node end = graph.nodes().stream().filter(n -> "end".equals(n.type())).findFirst().orElseThrow();
         Map<String, WorkflowGraph.Node> nodes = new HashMap<>(); graph.nodes().forEach(n -> nodes.put(n.id(), n));
-        Deque<PendingNode> pending = new ArrayDeque<>(); pending.add(new PendingNode(start, input));
-        List<Map<String, Object>> outputs = new ArrayList<>();
+        var executor = new ThreadPoolExecutor(MAX_PARALLEL_NODES, MAX_PARALLEL_NODES, 0, TimeUnit.SECONDS,
+                new ArrayBlockingQueue<>(WorkflowGraph.MAX_NODES), Thread.ofPlatform().daemon().name("workflow-node-", 0).factory());
+        var completed = new ExecutorCompletionService<CompletedNode>(executor);
+        Set<Future<CompletedNode>> inFlight = new HashSet<>();
+        Map<String, Map<String, Object>> outputs = new HashMap<>();
+        List<Exception> failures = new ArrayList<>();
         long deadline = System.nanoTime() + TimeUnit.MINUTES.toNanos(5);
         try {
-            while (!pending.isEmpty()) {
+            inFlight.add(submitNode(completed, id, start, input, privacy, deadline));
+            while (!inFlight.isEmpty()) {
                 checkRun(id, deadline);
-                PendingNode current = pending.removeFirst();
-                NodeResult result = runNode(id, current.node(), current.input(), privacy);
+                Future<CompletedNode> finished = completed.poll(100, TimeUnit.MILLISECONDS);
+                if (finished == null) continue;
+                inFlight.remove(finished);
+                CompletedNode current = finished.get();
+                if (current.failure() instanceof InterruptedException interrupted) throw interrupted;
+                if (current.failure() != null) { failures.add(current.failure()); continue; }
+                NodeResult result = current.result();
                 var next = graph.edges().stream().filter(e -> e.source().equals(current.node().id()) && Objects.equals(Objects.requireNonNullElse(e.branch(), ""), result.branch())).toList();
                 if (next.isEmpty()) throw new IllegalArgumentException("执行路径未连接到结束节点");
                 for (var edge : next) {
                     Map<String, Object> data = read(write(result.output()));
-                    if (edge.target().equals(end.id())) outputs.add(data);
-                    else pending.addLast(new PendingNode(nodes.get(edge.target()), data));
+                    if (edge.target().equals(end.id())) outputs.put(edge.id(), data);
+                    else inFlight.add(submitNode(completed, id, nodes.get(edge.target()), data, privacy, deadline));
                 }
             }
             checkRun(id, deadline);
-            NodeResult result = runNode(id, end, terminalInput(outputs), privacy);
+            if (failures.size() == 1) throw failures.getFirst();
+            if (failures.size() > 1) throw new IllegalArgumentException("分支执行失败（" + failures.size() + " 个节点）；" + error(failures.getFirst(), privacy));
+            NodeResult result = runNode(id, end, terminalInput(terminalOrder(graph, start).stream().filter(outputs::containsKey).map(outputs::get).toList()), privacy);
             store.finish(id, "SUCCEEDED", privacy.mask(result.output()), null);
         } catch (InterruptedException error) {
             Thread.currentThread().interrupt(); store.finish(id, "CANCELLED", null, "执行已取消；已发送的请求或邮件可能已在对端生效");
         } catch (Exception error) { store.finish(id, "FAILED", null, error(error, privacy)); }
+        finally { stopNodes(executor, inFlight); }
+    }
+    private Future<CompletedNode> submitNode(CompletionService<CompletedNode> completed, String id, WorkflowGraph.Node node,
+                                              Map<String, Object> input, WorkflowPrivacy privacy, long deadline) {
+        return completed.submit(() -> {
+            try { checkRun(id, deadline); return new CompletedNode(node, runNode(id, node, input, privacy), null); }
+            catch (Exception failure) { return new CompletedNode(node, null, failure); }
+        });
+    }
+    /** Preserve the former breadth-first connection order, regardless of branch completion order. */
+    private List<String> terminalOrder(WorkflowGraph graph, WorkflowGraph.Node start) {
+        List<String> result = new ArrayList<>(); Deque<String> pending = new ArrayDeque<>(); pending.add(start.id());
+        Set<String> ends = new HashSet<>(); graph.nodes().stream().filter(n -> "end".equals(n.type())).forEach(n -> ends.add(n.id()));
+        while (!pending.isEmpty()) {
+            String node = pending.removeFirst();
+            for (var edge : graph.edges()) if (edge.source().equals(node)) {
+                if (ends.contains(edge.target())) result.add(edge.id()); else pending.addLast(edge.target());
+            }
+        }
+        return result;
+    }
+    private void stopNodes(ExecutorService executor, Set<? extends Future<?>> inFlight) {
+        boolean interrupted = Thread.interrupted();
+        inFlight.forEach(task -> task.cancel(true)); executor.shutdownNow();
+        try { executor.awaitTermination(3, TimeUnit.SECONDS); }
+        catch (InterruptedException ignored) { interrupted = true; }
+        finally { if (interrupted) Thread.currentThread().interrupt(); }
     }
     private void checkRun(String id, long deadline) throws InterruptedException {
         if (Thread.currentThread().isInterrupted() || store.cancelled(id)) throw new InterruptedException();
@@ -94,7 +135,7 @@ public class WorkflowEngine {
         return envelope(Map.of("items", items));
     }
     private NodeResult runNode(String id, WorkflowGraph.Node node, Map<String, Object> input, WorkflowPrivacy privacy) throws Exception {
-        store.startNode(id, node, privacy.mask(input));
+        if (Thread.currentThread().isInterrupted() || !store.startNode(id, node, privacy.mask(input))) throw new InterruptedException();
         StringBuilder debug = new StringBuilder();
         Consumer<String> trace = WorkflowDiagnostics.trace(debug, privacy, logs -> store.updateNodeLogs(id, node.id(), logs));
         trace.accept("开始节点，类型=" + node.type() + "；输入 " + WorkflowDiagnostics.summary(input));

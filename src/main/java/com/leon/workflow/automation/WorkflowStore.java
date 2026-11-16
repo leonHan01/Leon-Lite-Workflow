@@ -95,7 +95,10 @@ public class WorkflowStore {
             Map<String, Object> result = summary(rs); result.put("definition", read(write(WorkflowGraph.stored(read(rs.getString("draft")))))); return result;
         }, id);
         if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "工作流不存在");
-        return rows.getFirst();
+        var result = rows.getFirst();
+        var published = jdbc.queryForList("SELECT definition FROM automation_version WHERE workflow_id=? AND version=?", String.class, id, result.get("publishedVersion"));
+        result.put("publishedDefinition", published.isEmpty() ? null : read(write(WorkflowGraph.stored(read(published.getFirst())))));
+        return result;
     }
     public Map<String, Object> create(String name) {
         String id = UUID.randomUUID().toString(); long now = System.currentTimeMillis();
@@ -223,9 +226,9 @@ public class WorkflowStore {
     }
     public boolean start(String id) { return jdbc.update("UPDATE automation_run SET status='RUNNING',started_at=? WHERE id=? AND status='QUEUED'", System.currentTimeMillis(), id) == 1; }
     public boolean cancelled(String id) { return "CANCELLED".equals(jdbc.queryForObject("SELECT status FROM automation_run WHERE id=?", String.class, id)); }
-    public void startNode(String run, WorkflowGraph.Node node, Object input) {
-        jdbc.update("UPDATE automation_node_run SET status='RUNNING',started_at=?,input_json=? WHERE run_id=? AND node_id=? AND status='PENDING'",
-                System.currentTimeMillis(), write(redact(input)), run, node.id());
+    public boolean startNode(String run, WorkflowGraph.Node node, Object input) {
+        return jdbc.update("UPDATE automation_node_run SET status='RUNNING',started_at=?,input_json=? WHERE run_id=? AND node_id=? AND status='PENDING' AND EXISTS (SELECT 1 FROM automation_run WHERE id=? AND status='RUNNING')",
+                System.currentTimeMillis(), write(redact(input)), run, node.id(), run) == 1;
     }
     public void finishNode(String run, String node, String status, Object output, String logs, String error) {
         jdbc.update("UPDATE automation_node_run SET status=?,output_json=?,logs=?,error=?,finished_at=? WHERE run_id=? AND node_id=? AND status='RUNNING'",

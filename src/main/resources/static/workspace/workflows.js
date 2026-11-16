@@ -30,6 +30,7 @@ const summaryPrompt = '请用简体中文汇总这些资讯，突出技术要点
 const statuses = { QUEUED: '排队中', PENDING: '等待', RUNNING: '运行中', SUCCEEDED: '成功', FAILED: '失败', CANCELLED: '已取消', SKIPPED: '已跳过' };
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const pretty = value => JSON.stringify(value, null, 2);
+const canonical = value => JSON.stringify(value, (_, item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item);
 const date = value => value ? new Date(value).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false }) : '—';
 const badge = value => `<span class="wf-badge ${esc(value)}">${esc(statuses[value] || value)}</span>`;
 const select = (name, value, choices) => `<select data-field="${name}">${choices.map(([id, label]) => `<option value="${esc(id)}" ${String(value) === id ? 'selected' : ''}>${esc(label)}</option>`).join('')}</select>`;
@@ -51,6 +52,7 @@ export function mount(pane, workspace) {
     const MAX_POSITION = 50000;
     let zoom = 1, world = { width: 2400, height: 1600 }, focused = false, focusPanels = null;
     let dirty = false, busy = false, active = false, initialized = false, timer = null, currentRun = null, capabilities = {}, credentials = [], schedule = null;
+    let inspectorOriginal = null, inspectorInitial = '', inspectorLast = '', invalidInspector = false;
     let cancelLibraryDrag = null;
     let editingCredential = null;
     let qqBinding = null, qqBindingTimer = null;
@@ -85,7 +87,10 @@ export function mount(pane, workspace) {
         finally { busy = false; controls(); }
     }
     function controls() {
+        dirty = !!workflow && (invalidInspector || canonical({name:$('[data-name]').value, definition:graph}) !== canonical({name:workflow.name, definition:workflow.definition}));
         pane.querySelectorAll('[data-action="save"],[data-action="save-node"],[data-action="publish"],[data-action="create"],[data-action="reload"],[data-action="delete-workflow"],[data-action="test"]').forEach(b => b.disabled = busy || (!workflow && !['create', 'reload'].includes(b.dataset.action)));
+        pane.querySelectorAll('[data-action="save"],[data-action="save-node"]').forEach(button => button.disabled = busy || !workflow || !dirty);
+        $('[data-action="publish"]').disabled = busy || !workflow || !needsPublish();
         pane.querySelectorAll('[data-delete-workflow]').forEach(b => b.disabled = busy);
         pane.querySelectorAll('[data-list-run]').forEach(b => { const item = workflows.find(w => w.id === b.dataset.listRun), run = listRuns.get(b.dataset.listRun); b.disabled = busy || !item?.publishedVersion || ['QUEUED','RUNNING'].includes(run?.status); });
         const run = $('[data-action="run"]');
@@ -93,7 +98,9 @@ export function mount(pane, workspace) {
         run.textContent = workflow?.publishedVersion ? `▶ 运行 v${workflow.publishedVersion}` : '先发布后运行';
         if (workflow) $('[data-version]').textContent = `${dirty ? '有未保存修改 · ' : '草稿已保存 · '}${workflow.publishedVersion ? '已发布 v' + workflow.publishedVersion : '尚未发布'}`;
     }
-    function markDirty() { dirty = true; controls(); }
+    function needsPublish() { return !!workflow && (!workflow.publishedVersion || (workflow.publishedDefinition ? canonical(graph) !== canonical(workflow.publishedDefinition) : dirty)); }
+    function markDirty() { controls(); }
+    function inspectorValues() { return JSON.stringify([...pane.querySelectorAll('[data-inspector] [data-field],[data-inspector] [data-feed-field]')].map((field, index) => [field.dataset.field || field.dataset.feedField, index, field.value])); }
     function renderWorkflowList() {
         const query = $('[data-workflow-search]').value.trim().toLocaleLowerCase();
         const visible = workflows.filter(w => (w.id === workflow?.id && dirty ? $('[data-name]').value : w.name).toLocaleLowerCase().includes(query));
@@ -170,6 +177,11 @@ export function mount(pane, workspace) {
     function commitInspector() {
         const node = graph?.nodes.find(n => n.id === selected);
         if (!node || !$('[data-inspector] [data-field]')) return;
+        const snapshot = inspectorValues();
+        if (inspectorOriginal?.id === node.id && snapshot === inspectorLast) return;
+        if (inspectorOriginal?.id === node.id && snapshot === inspectorInitial) {
+            node.name = inspectorOriginal.name; node.config = structuredClone(inspectorOriginal.config); inspectorLast = snapshot; invalidInspector = false; return;
+        }
         const get = key => $(`[data-inspector] [data-field="${key}"]`)?.value;
         node.name = get('name') ?? node.name;
         const json = (key, fallback) => {
@@ -179,6 +191,8 @@ export function mount(pane, workspace) {
         };
         if (node.type === 'script') {
             node.config.params = json('params', {}); node.config.timeoutMs = Number(get('timeoutMs'));
+            const source = get('source');
+            if (source !== undefined && source !== node.config.source) { node.config.source = source; node.config.sources ||= {}; node.config.sources[node.config.language] = source; }
         } else if (node.type === 'http') {
             node.config.method = get('method'); node.config.url = get('url'); node.config.headers = json('headers', {});
             node.config.timeoutMs = Number(get('timeoutMs')); node.config.credentialId = get('credentialId');
@@ -208,6 +222,7 @@ export function mount(pane, workspace) {
             node.config.sourceUrl = get('sourceUrl');
             node.config.maxProjects = Number(get('maxProjects')); node.config.timeoutMs = Number(get('timeoutMs'));
         }
+        inspectorLast = snapshot; invalidInspector = false;
     }
     function parseValue(value) {
         if (value == null || !value.trim()) return null;
@@ -216,6 +231,7 @@ export function mount(pane, workspace) {
     function displayValue(value) { return value == null ? '' : typeof value === 'string' ? value : pretty(value); }
     async function save() {
         commitInspector();
+        controls(); if (!dirty) return;
         const result = await send('/' + workflow.id, { name: $('[data-name]').value, definition: graph, revision: workflow.revision }, 'PUT');
         workflow = result; graph = structuredClone(result.definition); dirty = false;
         workflows = workflows.map(w => w.id === result.id ? result : w); renderWorkflowList(); controls(); renderCanvas(); inspector();
@@ -382,13 +398,13 @@ export function mount(pane, workspace) {
     function inspector() {
         if (qqBinding && !sameQqBinding(qqBinding)) stopQqBinding();
         const edge = graph?.edges.find(e => e.id === selectedEdge);
-        if (edge) { edgeInspector(edge); return; }
+        if (edge) { inspectorOriginal = null; edgeInspector(edge); return; }
         const node = graph?.nodes.find(n => n.id === selected);
-        if (!node) { $('[data-inspector]').innerHTML = '<div class="wf-empty">选择节点或连线进行配置。</div>'; return; }
+        if (!node) { inspectorOriginal = null; $('[data-inspector]').innerHTML = '<div class="wf-empty">选择节点或连线进行配置。</div>'; return; }
         const c = node.config ||= {}, style = nodeStyle(node);
         let content = field('节点名称', inputField('name', node.name, 'maxlength="80"'));
         if (node.type === 'start') content += '<p class="wf-help">流程唯一的开始节点，不能删除。手动运行或定时触发时，将运行输入传入后续节点。</p>';
-        if (node.type === 'end') content += '<p class="wf-help">流程唯一的结束节点，不能删除。所有执行分支必须连接到这里；多条执行路径的 items 按到达顺序汇总为最终输出。</p>';
+        if (node.type === 'end') content += '<p class="wf-help">流程唯一的结束节点，不能删除。等待所有执行分支完成后汇总；多个下游节点并行执行，输出按连线顺序保持稳定。</p>';
         if (node.type === 'script') {
             content += field('脚本语言', select('language', c.language, [['javascript', 'JavaScript'], ['groovy', 'Groovy']]));
             content += '<p class="wf-help">入口 main(input, ctx)，返回 { items: [{ json: … }] }。网络请求请使用 HTTP 节点。</p>';
@@ -495,6 +511,8 @@ export function mount(pane, workspace) {
         if (node.type !== 'end') content += `<h3 class="wf-section-label">连接出口</h3>${connectionFields(node)}`;
         content += `<div class="wf-node-actions"><button type="button" data-action="test">${['feishu', 'qq'].includes(node.type) ? '发送测试消息' : node.type === 'email' ? '发送测试邮件' : node.type === 'rss' ? '预览订阅文章' : node.type === 'ai-summary' ? '测试 AI 总结' : node.type === 'tech-weekly' ? '生成周刊分析' : node.type === 'github-trending' ? '生成 Trending 分析' : '调试此节点'}</button>${!['start', 'end'].includes(node.type) ? '<button type="button" class="wf-danger" data-action="delete-node">删除节点</button>' : ''}</div>`;
         $('[data-inspector]').innerHTML = `<h2>${esc(style.label)}</h2><div data-node-error></div>${content}<div data-node-debug></div>`;
+        inspectorOriginal = {id:node.id, name:node.name, config:structuredClone(node.config)};
+        inspectorInitial = inspectorLast = inspectorValues(); invalidInspector = false;
         nodeError(); highlight(); renderQqBinding(); controls();
     }
     function sameQqBinding(binding) {
@@ -780,6 +798,10 @@ export function mount(pane, workspace) {
         $('[data-schedule-preview]').innerHTML = '<strong>接下来 5 次执行（' + esc(value.timeZone) + '）</strong><ol>' + value.nextRuns.map(v => '<li>' + esc(new Date(v).toLocaleString('zh-CN', { timeZone: value.timeZone, hour12: false })) + '</li>').join('') + '</ol>';
     }
     const actions = {
+        'toggle-library-groups': () => {
+            const groups = [...pane.querySelectorAll('[data-library-group]')];
+            const open = !groups.some(group => group.open); groups.forEach(group => group.open = open); syncLibraryGroups();
+        },
         'add-rss-source': () => { commitInspector(); const node = graph.nodes.find(n => n.id === selected); if (node.config.sources.length >= 20) throw new Error('最多 20 个订阅源'); node.config.sources.push({name:'',url:'',titleContains:''}); markDirty(); inspector(); },
         'rss-presets': () => { commitInspector(); graph.nodes.find(n => n.id === selected).config.sources = structuredClone(rssSources); markDirty(); inspector(); },
         'use-trending-feishu': () => {
@@ -818,7 +840,7 @@ export function mount(pane, workspace) {
         reload: async () => { if (!editorVisible || !dirty || confirm('重新加载会丢弃未保存的草稿，是否继续？')) { await loadList(); if (editorVisible && workflow) await load(workflow.id); else notice('工作流列表已刷新。'); } },
         save,
         'save-node': async () => { await save(); closeNodeDialog(); },
-        publish: async () => { await save(); workflow = await send('/' + workflow.id + '/publish', { revision: workflow.revision }); controls(); notice(`版本 v${workflow.publishedVersion} 已发布。后续编辑不会影响该版本。`); },
+        publish: async () => { commitInspector(); controls(); if (!needsPublish()) return; await save(); workflow = await send('/' + workflow.id + '/publish', { revision: workflow.revision }); controls(); notice(`版本 v${workflow.publishedVersion} 已发布。后续编辑不会影响该版本。`); },
         run: async () => { const run = await send('/' + workflow.id + '/runs', { input: runInput() }); showRun(run); await refreshRuns(); schedulePoll(); notice(`正在运行已发布版本 v${run.version}${dirty ? '；当前草稿修改不参与本次运行' : ''}。`); },
         test: async () => {
             const node = graph.nodes.find(n => n.id === selected);
@@ -940,10 +962,9 @@ export function mount(pane, workspace) {
         if (!target.matches('[data-inspector] input,[data-inspector] textarea,[data-inspector] select')) return;
         const node = graph?.nodes.find(n => n.id === selected); if (!node) return;
         if (node.type === 'qq' && target.matches('[data-field="targetId"]')) { stopQqBinding(); renderQqBinding(); }
-        if (target.dataset.field === 'source') {
-            node.config.source = target.value; node.config.sources ||= {}; node.config.sources[node.config.language] = target.value; highlight();
-        }
         if (target.dataset.field === 'name') { node.name = target.value; const name = pane.querySelector(`[data-node="${CSS.escape(node.id)}"] .wf-node-name`); if (name) { name.textContent = target.value; syncWorld(); lines(); } }
+        try { commitInspector(); } catch { invalidInspector = true; }
+        if (target.dataset.field === 'source') highlight();
         markDirty();
     });
     pane.addEventListener('scroll', event => { if (event.target.matches?.('[data-field="source"]')) highlight(); }, true);
@@ -985,6 +1006,8 @@ export function mount(pane, workspace) {
         if ((event.key === 'Enter' || event.key === ' ') && event.target.matches('[data-node]')) { event.preventDefault(); try { configureNode(event.target.dataset.node, true); } catch (e) { notice(e.message, true); } }
         if (event.key === 'Tab' && event.target.matches('[data-field="source"]')) { event.preventDefault(); const t = event.target; t.setRangeText('  ', t.selectionStart, t.selectionEnd, 'end'); t.dispatchEvent(new Event('input', { bubbles: true })); }
     });
+    function syncLibraryGroups() { $('[data-action="toggle-library-groups"]').textContent = [...pane.querySelectorAll('[data-library-group]')].some(group => group.open) ? '全部收起' : '全部展开'; }
+    pane.addEventListener('toggle', event => { if (event.target.matches('[data-library-group]')) syncLibraryGroups(); }, true);
     pane.querySelectorAll('[data-add]').forEach(button => { button.title = '点击添加，或按住拖到画布指定位置'; });
     pane.addEventListener('dragstart', event => { if (event.target.closest('[data-add]')) event.preventDefault(); });
     pane.addEventListener('pointerdown', event => {
