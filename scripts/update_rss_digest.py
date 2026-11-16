@@ -1,12 +1,67 @@
 #!/usr/bin/env python3
-"""Preview and publish the existing RSS daily workflow as ten picks plus brief remaining articles."""
+"""Explicitly migrate and publish the RSS daily workflow to one AI digest node; requires the new server version."""
 import copy
 import http.cookiejar
 import json
 import pathlib
 import urllib.error
 import urllib.request
-from create_rss_workflow import BASE, NAME, DIGEST_PROMPT, digest_node
+from create_rss_workflow import BASE, NAME, digest_node
+
+
+def migrate_definition(definition):
+    """Replace the legacy summary + formatter with one AI digest, preserving delivery targets."""
+    graph = copy.deepcopy(definition)
+    by_id = {n['id']: n for n in graph['nodes']}
+    if by_id.get('rss', {}).get('type') != 'rss':
+        raise RuntimeError('Expected the RSS daily workflow; refusing unrelated changes')
+    node = digest_node()
+    old = by_id.get('digest')
+    summary = by_id.get('summary')
+    if old and not (old['type'] == 'script' and old.get('config', {}).get('language') == 'javascript'
+                    or old['type'] == 'ai-summary' and old.get('config', {}).get('mode') == 'top10'):
+        raise RuntimeError('Existing digest node differs; refusing unrelated changes')
+    if summary:
+        incoming = [e for e in graph['edges'] if e['target'] == 'summary']
+        outgoing = [e for e in graph['edges'] if e['source'] == 'summary']
+        if summary['type'] != 'ai-summary' or len(incoming) != 1 or incoming[0]['source'] != 'rss':
+            raise RuntimeError('Legacy summary shape differs; inspect before migration')
+        if old and (len(outgoing) != 1 or outgoing[0]['target'] != 'digest'):
+            raise RuntimeError('Legacy summary has other consumers; refusing to remove it')
+        for key in ['title', 'model', 'maxItems', 'maxInputChars', 'timeoutMs']:
+            if key in summary.get('config', {}): node['config'][key] = summary['config'][key]
+        graph['nodes'].remove(summary)
+        if old:
+            graph['edges'].remove(outgoing[0])
+        else:
+            for edge in outgoing: edge['source'] = 'digest'
+        incoming[0]['target'] = 'digest'
+    if old:
+        if not summary and old['type'] == 'ai-summary':
+            node['config'] = {**old['config'], 'mode': 'top10'}
+        old.update({'type': node['type'], 'name': node['name'], 'config': node['config']})
+    else:
+        graph['nodes'].append(node)
+    incoming = [e for e in graph['edges'] if e['target'] == 'digest']
+    if len(incoming) != 1 or incoming[0]['source'] != 'rss':
+        raise RuntimeError('AI digest must receive raw RSS articles directly')
+    # Notification nodes pass the original report through, so chained delivery is also supported.
+    pending = ['digest']; visited = set()
+    while pending:
+        current = pending.pop()
+        if current in visited: continue
+        visited.add(current)
+        pending.extend(e['target'] for e in graph['edges'] if e['source'] == current)
+    for current in graph['nodes']:
+        if current['id'] not in visited: continue
+        config = current.get('config', {})
+        if current['type'] == 'feishu':
+            config.update(messageType='card', title='{{ input.items[0].json.title }}', text='{{ input.items[0].json.feishuMarkdown }}')
+        elif current['type'] == 'email':
+            config.update(format='html', subject='{{ input.items[0].json.emailSubject }}', body='{{ input.items[0].json.emailHtml }}')
+        elif current['type'] == 'qq':
+            config.update(messageType='markdown', messageMode='list', text='{{ input.items[0].json.qqMessages }}', timeoutMs=30000)
+    return graph
 
 
 def main():
@@ -32,26 +87,8 @@ def main():
         identity = matches[0]['id']
         workflow = request('/api/workflows/' + identity)
         schedule_before = request('/api/workflows/' + identity + '/schedule')
-        graph = copy.deepcopy(workflow['definition'])
-        by_id = {n['id']: n for n in graph['nodes']}
-        if by_id.get('summary', {}).get('type') != 'ai-summary' or by_id.get('feishu', {}).get('type') != 'feishu':
-            raise RuntimeError('Existing workflow shape differs; refusing unrelated changes')
-        by_id['summary']['config']['prompt'] = DIGEST_PROMPT
-        node = digest_node()
-        if 'digest' in by_id:
-            if by_id['digest']['type'] != 'script' or by_id['digest'].get('config', {}).get('language') != 'javascript':
-                raise RuntimeError('Existing digest node is not the expected JavaScript formatter')
-            by_id['digest']['config'] = node['config']
-        else:
-            edges = [e for e in graph['edges'] if e['source'] == 'summary' and e['target'] == 'feishu']
-            if len(edges) != 1:
-                raise RuntimeError('Expected one direct summary-to-Feishu connection')
-            edge = edges[0]
-            edge['target'] = 'digest'
-            graph['edges'].append({'id': 'digest_to_feishu', 'source': 'digest', 'target': 'feishu', 'branch': ''})
-            graph['nodes'].insert(graph['nodes'].index(by_id['feishu']), node)
-            by_id['feishu']['position'] = {'x': 1600, 'y': 160}
-            by_id['end']['position'] = {'x': 1920, 'y': 160}
+        graph = migrate_definition(workflow['definition'])
+        node = next(n for n in graph['nodes'] if n['id'] == 'digest')
         # Reuse stored RSS output to verify the new format without sending or touching dedup state.
         sample = None
         for row in request('/api/workflows/' + identity + '/runs')[:10]:
@@ -67,11 +104,12 @@ def main():
                 break
         if not sample:
             raise RuntimeError('No stored RSS batch is available for the preview')
-        summary = request('/api/workflows/test-node', {'node': by_id['summary'], 'input': sample})
-        preview = request('/api/workflows/test-node', {'node': node, 'input': summary['output']})
+        preview = request('/api/workflows/test-node', {'node': node, 'input': sample})
         report = preview['output']['items'][0]['json']
         if report['selectedCount'] != min(10, len(sample['items'])) or report['articleCount'] != len(sample['items']):
             raise RuntimeError('Digest preview did not retain ten picks and all remaining articles')
+        if not report.get('qqMessages') or any(not isinstance(message, str) or len(message.encode()) > 2000 for message in report['qqMessages']):
+            raise RuntimeError('QQ digest messages exceed the per-message limit')
         print(json.dumps({'preview': 'passed', 'selected': report['selectedCount'], 'briefs': report['briefCount'], 'articles': report['articleCount'], 'feishuBytes': len(json.dumps(report['feishuMarkdown'], ensure_ascii=False).encode())}, ensure_ascii=False), flush=True)
         saved = request('/api/workflows/' + identity, {'name': workflow['name'], 'revision': workflow['revision'], 'definition': graph}, 'PUT')
         published = request('/api/workflows/' + identity + '/publish', {'revision': saved['revision']})
@@ -80,7 +118,7 @@ def main():
             raise RuntimeError('Published workflow readback did not match')
         if request('/api/workflows/' + identity + '/schedule') != schedule_before:
             raise RuntimeError('Schedule changed during the update; inspect before continuing')
-        print(json.dumps({'workflowId': identity, 'publishedVersion': published['publishedVersion'], 'url': BASE + '/workflows.html?id=' + identity, 'format': 'top10-and-briefs', 'schedulePreserved': True}, ensure_ascii=False), flush=True)
+        print(json.dumps({'workflowId': identity, 'publishedVersion': published['publishedVersion'], 'url': BASE + '/workflows.html?id=' + identity, 'format': 'ai-top10-and-briefs', 'schedulePreserved': True}, ensure_ascii=False), flush=True)
     finally:
         if logged_in:
             request('/auth/logout', {})

@@ -92,6 +92,9 @@ class WorkflowGithubTrendingTest {
         assertTrue(text(output.get("qqText")).contains("GitStock"));
         assertTrue(text(output.get("qqText")).contains(java.time.Instant.ofEpochSecond(captured).toString()));
         assertTrue(text(output.get("qqText")).getBytes(StandardCharsets.UTF_8).length <= WorkflowQq.MAX_MESSAGE_BYTES);
+        assertTrue(text(output.get("qqMarkdown")).contains("GitStock"));
+        assertTrue(text(output.get("qqMarkdown")).replace("\\", "").contains(java.time.Instant.ofEpochSecond(captured).toString()));
+        assertTrue(text(output.get("qqMarkdown")).getBytes(StandardCharsets.UTF_8).length <= WorkflowQq.MAX_MESSAGE_BYTES);
         assertTrue(String.join("\n", logs).contains("GitStock"));
     }
     @Test void fallbackRejectsOldOrWrongPeriodSnapshotsBeforeCallingDeepseek() throws Exception {
@@ -209,15 +212,17 @@ class WorkflowGithubTrendingTest {
         assertTrue(cardBytes < 20 * 1024, "带样式的签名卡片超过消息限制: " + cardBytes);
         for (var project : source) assertTrue(markdown.contains(text(project.get("url"))), "卡片应保留全部项目链接");
         assertFalse(markdown.contains("<at")); assertFalse(markdown.contains("<img"));
-        String qq = text(output.get("qqText"));
-        assertTrue(qq.getBytes(StandardCharsets.UTF_8).length <= WorkflowQq.MAX_MESSAGE_BYTES, "QQ 单条摘要超过限制");
-        assertFalse(qq.contains("<at")); assertFalse(qq.contains("<img")); assertFalse(qq.contains("\uFFFD"));
-        var urls = source.stream().map(project -> text(project.get("url"))).collect(java.util.stream.Collectors.toSet());
-        var included = qq.lines().filter(line -> line.startsWith("https://github.com/")).toList();
-        assertFalse(included.isEmpty()); assertTrue(included.size() <= 5);
-        assertTrue(urls.containsAll(included), "QQ 消息必须保留完整仓库链接");
-        assertTrue(qq.contains("其余 " + (25 - included.size()) + " 项"));
-        assertTrue(qq.contains(WorkflowGithubTrending.DEFAULT_SOURCE));
+        for (String field : List.of("qqText", "qqMarkdown")) {
+            String qq = text(output.get(field));
+            assertTrue(qq.getBytes(StandardCharsets.UTF_8).length <= WorkflowQq.MAX_MESSAGE_BYTES, "QQ 单条摘要超过限制");
+            assertFalse(qq.contains("<at")); assertFalse(qq.contains("<img")); assertFalse(qq.contains("\uFFFD"));
+            var urls = source.stream().map(project -> text(project.get("url"))).collect(java.util.stream.Collectors.toSet());
+            var included = qq.lines().filter(line -> line.startsWith("https://github.com/")).toList();
+            assertFalse(included.isEmpty()); assertTrue(included.size() <= 5);
+            assertTrue(urls.containsAll(included), "QQ 消息必须保留完整仓库链接");
+            assertTrue(qq.contains("其余 " + (25 - included.size()) + " 项"));
+            assertTrue(qq.contains(WorkflowGithubTrending.DEFAULT_SOURCE));
+        }
     }
     @Test void qqSummaryShowsAtMostFiveProjectsInOriginalOrderAndLeavesFullAnalysisIntact() {
         var source = new ArrayList<Map<String, Object>>(); var rows = new ArrayList<Map<String, Object>>();
@@ -227,12 +232,41 @@ class WorkflowGithubTrendingTest {
             rows.add(Map.of("repo", repo, "purpose", "开发者工具 " + i, "useCases", "开发工作流"));
         }
         var result = WorkflowGithubTrending.report(Map.of("summary", "本周主要关注开发者工具", "projects", rows), new WorkflowGithubTrending.Page(10, source));
-        var output = object(object(((List<?>)result.get("items")).getFirst()).get("json")); String qq = text(output.get("qqText"));
-        for (int i = 1; i <= 5; i++) assertTrue(qq.contains("https://github.com/sample/project-" + i));
-        assertFalse(qq.contains("sample/project-6")); assertTrue(qq.contains("其余 5 项"));
-        assertTrue(qq.indexOf("sample/project-1") < qq.indexOf("sample/project-2"));
-        assertEquals(10, ((List<?>)output.get("projects")).size()); assertTrue(text(output.get("emailBody")).contains("sample/project-10"));
-        assertTrue(qq.getBytes(StandardCharsets.UTF_8).length <= WorkflowQq.MAX_MESSAGE_BYTES);
+        var output = object(object(((List<?>)result.get("items")).getFirst()).get("json"));
+        for (String field : List.of("qqText", "qqMarkdown")) {
+            String qq = text(output.get(field));
+            for (int i = 1; i <= 5; i++) assertTrue(qq.contains("https://github.com/sample/project-" + i));
+            assertFalse(qq.contains("sample/project-6")); assertTrue(qq.contains("其余 5 项"));
+            assertTrue(qq.indexOf("sample/project-1") < qq.indexOf("sample/project-2"));
+            assertEquals(10, ((List<?>)output.get("projects")).size()); assertTrue(text(output.get("emailBody")).contains("sample/project-10"));
+            assertTrue(qq.getBytes(StandardCharsets.UTF_8).length <= WorkflowQq.MAX_MESSAGE_BYTES);
+        }
+    }
+    @Test void qqMarkdownBoldsHeadingsNamesAndOverviewAndEscapesUntrustedMarkup() {
+        var analysis = new LinkedHashMap<>(analysis());
+        analysis.put("summary", "概览 **伪造** [外链](https://example.invalid) <at id=all></at>");
+        var output = object(object(((List<?>)WorkflowGithubTrending.report(analysis, WorkflowGithubTrending.parsePage(HTML, 2)).get("items")).getFirst()).get("json"));
+        String markdown = text(output.get("qqMarkdown"));
+        assertTrue(markdown.startsWith("**GitHub Trending 周榜项目解读"));
+        assertTrue(markdown.contains("**榜单概览：概览 \\*\\*伪造\\*\\*"));
+        assertTrue(markdown.contains("**1. sample/one**"));
+        assertTrue(markdown.contains("**用途：** 为开发者提供工具和辅助功能"));
+        assertTrue(markdown.contains("https://github.com/sample/one"));
+        assertFalse(markdown.contains("[外链](https://example.invalid)"));
+        assertFalse(markdown.contains("<at"));
+        assertFalse(text(output.get("qqText")).startsWith("**"), "纯文本输出保持兼容");
+        long delimiters = java.util.regex.Pattern.compile("(?<!\\\\)\\*\\*").matcher(markdown).results().count();
+        assertEquals(0, delimiters % 2, "加粗标记必须成对闭合");
+        // Escaped units and emoji must stay intact even when shortened at the byte boundary.
+        var source = List.<Map<String, Object>>of(Map.of("repo", "sample/tool_name", "url", "https://github.com/sample/tool_name"));
+        var rows = List.of(Map.of("repo", "sample/tool_name", "purpose", "😀*\\".repeat(150), "useCases", "开发"));
+        output = object(object(((List<?>)WorkflowGithubTrending.report(Map.of("summary", "*\\😀".repeat(300), "projects", rows), new WorkflowGithubTrending.Page(1, source)).get("items")).getFirst()).get("json"));
+        markdown = text(output.get("qqMarkdown"));
+        assertTrue(markdown.getBytes(StandardCharsets.UTF_8).length <= WorkflowQq.MAX_MESSAGE_BYTES);
+        assertTrue(markdown.contains("**1. sample/tool\\_name**"));
+        assertFalse(markdown.contains("\uFFFD"));
+        assertFalse(java.util.regex.Pattern.compile("(?<!\\\\)(?:\\\\\\\\)*\\\\…").matcher(markdown).find(), "截断不能留下半个转义符");
+        assertEquals(0, java.util.regex.Pattern.compile("(?<!\\\\)\\*\\*").matcher(markdown).results().count() % 2);
     }
     @Test void cardMarkdownStylesTrustedLabelsAndEscapesModelFormatting() {
         var analysis = new LinkedHashMap<>(analysis());

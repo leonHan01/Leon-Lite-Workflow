@@ -17,6 +17,8 @@ public class WorkflowAiSummary {
     private final AppSettingService settings;
     public WorkflowAiSummary(WorkflowHttp http, AppSettingService settings) { this.http = http; this.settings = settings; }
     static void validateConfig(Map<String, Object> config) {
+        if (!Set.of("summary", "top10").contains(text(config.getOrDefault("mode", "summary"))))
+            throw new IllegalArgumentException("请选择普通汇总或精选 10 篇 · 其余速览");
         required(config.getOrDefault("prompt", DEFAULT_PROMPT), "请填写总结要求（最多 8000 字）", 8000);
         required(config.getOrDefault("title", "RSS 科技资讯汇总"), "请填写汇总标题（最多 100 字）", 100);
         String model = text(config.getOrDefault("model", WorkflowGithubTrending.MODEL));
@@ -48,11 +50,18 @@ public class WorkflowAiSummary {
                 仅输出一个 JSON 对象：{"summary":"整体概述，最多500字","entries":[{"index":1,"summary":"对应条目的总结，最多180字"}]}。
                 entries 的 index 必须与输入所有 index 一一对应且保持顺序，不得遗漏、重复或新增条目。不要返回任何链接，不输出代码围栏和内部思考。
                 """;
+        boolean digest = "top10".equals(config.get("mode"));
+        if (digest) system = WorkflowAiDigest.SYSTEM;
         var request = Map.of("model", text(config.getOrDefault("model", WorkflowGithubTrending.MODEL)), "stream", false, "thinking", Map.of("type", "disabled"),
                 "response_format", Map.of("type", "json_object"), "max_tokens", 16000,
                 "messages", List.of(Map.of("role", "system", "content", system), Map.of("role", "user", "content", "总结要求：" + config.getOrDefault("prompt", DEFAULT_PROMPT) + "\n以下为待总结资料 JSON：\n" + write(data))));
         trace.accept("请求 DeepSeek；输入 " + items.size() + " 条；" + (truncated ? "较长内容已按预算截断" : "输入未截断"));
         Map<String, Object> analysis = completion(config, request, key, privacy, trace);
+        if (digest) {
+            var output = WorkflowAiDigest.report(analysis, input, text(config.getOrDefault("title", "RSS 科技资讯汇总")), truncated);
+            trace.accept("DeepSeek 精选完成；已校验全部文章与排名；已生成飞书卡片、HTML 邮件和 QQ Markdown 消息列表");
+            return output;
+        }
         String summary = required(analysis.get("summary"), "DeepSeek 缺少整体总结", 3000);
         if (!(analysis.get("entries") instanceof List<?> entries) || entries.size() != items.size()) throw new IllegalArgumentException("DeepSeek 总结条目与输入不对应，未确认新增记录");
         String title = text(config.getOrDefault("title", "RSS 科技资讯汇总")) + " · " + LocalDate.now(ZoneId.of("Asia/Shanghai"));

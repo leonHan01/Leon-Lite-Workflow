@@ -190,7 +190,7 @@ export function mount(pane, workspace) {
             node.config.credentialId = get('credentialId'); node.config.messageType = get('messageType');
             node.config.title = get('title') ?? node.config.title; node.config.text = get('text'); node.config.timeoutMs = Number(get('timeoutMs'));
         } else if (node.type === 'qq') {
-            for (const key of ['credentialId', 'targetType', 'targetId', 'messageType', 'text']) node.config[key] = get(key);
+            for (const key of ['credentialId', 'targetType', 'targetId', 'messageType', 'messageMode', 'text']) node.config[key] = get(key);
             node.config.timeoutMs = Number(get('timeoutMs'));
         } else if (node.type === 'email') {
             for (const key of ['credentialId', 'to', 'cc', 'bcc', 'subject', 'body', 'format']) node.config[key] = get(key);
@@ -200,7 +200,7 @@ export function mount(pane, workspace) {
             for (const key of ['maxItems', 'perSource', 'lookbackHours', 'timeoutMs']) node.config[key] = Number(get(key));
             node.config.onlyNew = get('onlyNew') !== 'false';
         } else if (node.type === 'ai-summary') {
-            for (const key of ['title', 'prompt', 'model']) node.config[key] = get(key);
+            for (const key of ['title', 'prompt', 'model', 'mode']) node.config[key] = get(key);
             for (const key of ['maxItems', 'maxInputChars', 'timeoutMs']) node.config[key] = Number(get(key));
         } else if (node.type === 'tech-weekly') {
             node.config.timeoutMs = Number(get('timeoutMs'));
@@ -423,14 +423,15 @@ export function mount(pane, workspace) {
             content += '<p class="wf-help">单个来源失败时其他来源继续，异常保留在运行日志与 AI 汇总；全部失败则停止。只读取订阅源提供的内容，不自动抓取文章全文。</p>';
         }
         if (node.type === 'ai-summary') {
+            content += field('整理方式', select('mode', c.mode || 'summary', [['summary', '普通汇总'], ['top10', 'AI 精选 10 篇 · 其余速览']]));
             content += field('汇总标题', inputField('title', c.title || 'RSS 科技资讯汇总', 'maxlength="100"'));
             content += field('总结要求', `<textarea aria-label="AI 总结要求" data-field="prompt" rows="5" maxlength="8000">${esc(c.prompt || summaryPrompt)}</textarea>`);
             content += field('DeepSeek 模型', inputField('model', c.model || 'deepseek-flash', 'maxlength="100"'));
             content += field('最多总结条数（须覆盖上游输出）', inputField('maxItems', c.maxItems ?? 50, 'type="number" min="1" max="100"'));
             content += field('输入文本预算（字符，长内容均分截断）', inputField('maxInputChars', c.maxInputChars ?? 60000, 'type="number" min="1000" max="120000"'));
             content += field('总超时（毫秒）', inputField('timeoutMs', c.timeoutMs ?? 180000, 'type="number" min="1000" max="240000"'));
-            content += '<p class="wf-help">总结任意上游 items 数据；复用高级设置中的 DeepSeek API Key。无新增内容时跳过 AI 与邮件/飞书发送。原文链接来自输入，AI 不得替换来源。</p>';
-            content += '<div class="wf-trending-output"><h3>后续节点可引用</h3>' + [['整体总结', 'summary'], ['飞书卡片正文', 'feishuMarkdown'], ['飞书纯文本', 'feishuText'], ['邮件主题', 'emailSubject'], ['邮件正文', 'emailBody'], ['邮件 HTML 正文', 'emailHtml']].map(([title, key]) => field(title, `<input readonly value="{{ input.items[0].json.${key} }}" aria-label="${title}引用">`)).join('') + '</div>';
+            content += '<p class="wf-help">总结任意上游 items 数据；复用高级设置中的 DeepSeek API Key。精选模式会直接调用 AI 评选最多 10 篇，给出核心看点和阅读价值，其余每篇一句速览；无需上游先总结。标题、精选文章名和看点支持加粗。无新增内容时跳过 AI 与发送；原文链接来自输入。</p>';
+            content += '<div class="wf-trending-output"><h3>后续节点可引用</h3>' + [['整体总结', 'summary'], ['飞书卡片正文', 'feishuMarkdown'], ['飞书纯文本', 'feishuText'], ['邮件主题', 'emailSubject'], ['邮件正文', 'emailBody'], ['邮件 HTML 正文', 'emailHtml'], ...(c.mode === 'top10' ? [['QQ Markdown 消息列表', 'qqMessages']] : [])].map(([title, key]) => field(title, `<input readonly value="{{ input.items[0].json.${key} }}" aria-label="${title}引用">`)).join('') + '</div>';
         }
         if (node.type === 'github-trending') {
             content += field('榜单周期', select('sourceUrl', trendingSource(c.sourceUrl), trendingSources));
@@ -440,8 +441,8 @@ export function mount(pane, workspace) {
             content += '<p class="wf-help">服务器抓取榜单，再由 DeepSeek 逐个分析项目用途和使用场景。复用高级设置中的 DeepSeek API Key；此节点只生成内容。</p>';
             if (capabilities.githubTrendingReady === false) content += '<p class="wf-run-error">请先到高级设置填写 DeepSeek API Key。</p>';
             content += '<div class="wf-trending-output"><h3>后续节点可引用</h3>' + [
-                ['QQ 消息摘要（单条）', 'qqText'], ['飞书正文（Markdown 卡片）', 'feishuMarkdown'], ['飞书正文（纯文本）', 'feishuText'], ['邮件主题', 'emailSubject'], ['邮件正文（纯文本）', 'emailBody'], ['邮件正文（HTML）', 'emailHtml'],
-            ].map(([title, key]) => field(title, `<input readonly value="{{ input.items[0].json.${key} }}" aria-label="${title}引用">`)).join('') + '<p class="wf-help">将出口连接到 QQ、飞书或邮件节点，在后续节点点击“使用 Trending 分析结果”即可填入引用。QQ 摘要控制在单条消息内。</p></div>';
+                ['QQ 消息摘要（Markdown）', 'qqMarkdown'], ['QQ 消息摘要（纯文本）', 'qqText'], ['飞书正文（Markdown 卡片）', 'feishuMarkdown'], ['飞书正文（纯文本）', 'feishuText'], ['邮件主题', 'emailSubject'], ['邮件正文（纯文本）', 'emailBody'], ['邮件正文（HTML）', 'emailHtml'],
+            ].map(([title, key]) => field(title, `<input readonly value="{{ input.items[0].json.${key} }}" aria-label="${title}引用">`)).join('') + '<p class="wf-help">将出口连接到 QQ、飞书或邮件节点，在后续节点点击“使用 Trending 分析结果”即可填入引用。QQ Markdown 摘要加粗标题、项目名称和重点内容，控制在单条消息内。</p></div>';
         }
         if (node.type === 'tech-weekly') {
             content += field('总超时（毫秒，1000–240000）', inputField('timeoutMs', c.timeoutMs || 180000, 'type="number" min="1000" max="240000" step="1000"'));
@@ -469,13 +470,15 @@ export function mount(pane, workspace) {
             content += '<p class="wf-help">点击上方绑定即可自动填入。也可手动填写此机器人对应的用户或群 OpenID，不能使用 QQ 号或群号。</p>';
             content += '<details><summary>从 QQ 消息事件提取接收目标</summary><label>QQ 消息事件 JSON<textarea data-qq-event rows="4" spellcheck="false" placeholder="粘贴 C2C_MESSAGE_CREATE 或 GROUP_AT_MESSAGE_CREATE 事件"></textarea></label><button type="button" data-action="qq-event-target">提取 OpenID</button><p class="wf-help">只在本页解析，原始事件不会保存。通常直接使用上方绑定即可，无需粘贴事件。</p></details>';
             content += field('消息类型', select('messageType', c.messageType || 'text', [['text', '文本'], ['markdown', 'Markdown']]));
+            content += field('发送方式', select('messageMode', c.messageMode || 'single', [['single', '单条消息'], ['list', '消息列表（按顺序发送）']]));
             content += field('消息内容', `<textarea aria-label="QQ 消息内容" data-field="text" rows="6" maxlength="65536" spellcheck="false">${esc(c.text)}</textarea>`);
             content += '<button type="button" data-action="use-summary-qq">使用上游摘要</button>';
+            content += '<button type="button" data-action="use-digest-qq">使用 AI 精选结果</button>';
             content += '<button type="button" data-action="use-trending-qq">使用 Trending 分析结果</button>';
-            content += '<p class="wf-help">可引用 {{ input.items[0].json.summary }} 等上游字段。正文限 2000 UTF-8 字节，超长明确报错，不拆分或截断。请开启机器人主动消息权限及 QQ 接收设置；Markdown 还需相应权限。每次发送一条，成功后传递原输入，无新增 items 时跳过；测试也会真实发送，失败不自动重发。</p>';
+            content += '<p class="wf-help">可引用 {{ input.items[0].json.summary }} 等上游字段。正文限 2000 UTF-8 字节，超长明确报错，不拆分或截断。请开启机器人主动消息权限及 QQ 接收设置；Trending 快捷填入会选择 Markdown 并使用加粗摘要。消息列表引用 qqMessages 数组，每条限 2000 字节，发送前全部校验；按序发送，中途失败停止且不自动重试，重跑可能重复已发送消息。成功后传递原输入，无新增 items 时跳过；测试也会真实发送。</p>';
         }
         if (node.type === 'email') {
-            content += '<button type="button" data-action="use-trending-email">使用 AI 总结结果</button>';
+            content += '<button type="button" data-action="use-ai-email">使用 AI 总结结果</button>';
             content += '<button type="button" data-action="use-trending-email">使用 Trending 分析结果</button>';
             content += field('SMTP 邮箱', select('credentialId', c.credentialId || '', [['', '请选择邮箱凭据'], ...credentials.filter(v => v.kind === 'smtp').map(v => [v.id, v.name])]));
             content += '<button type="button" data-action="smtp-credentials">添加 SMTP 邮箱</button>';
@@ -784,6 +787,11 @@ export function mount(pane, workspace) {
             Object.assign(node.config, {messageType:'card', title:'{{ input.items[0].json.title }}', text:'{{ input.items[0].json.feishuMarkdown }}'});
             markDirty(); inspector(); notice('已设置分析结果的 Markdown 卡片；请连接到分析节点之后。');
         },
+        'use-ai-email': () => {
+            commitInspector(); const node = graph.nodes.find(n => n.id === selected); if (node?.type !== 'email') return;
+            Object.assign(node.config, {subject:'{{ input.items[0].json.emailSubject }}', body:'{{ input.items[0].json.emailHtml }}', format:'html'});
+            markDirty(); inspector(); notice('已填入带加粗排版的 HTML 邮件正文，请填写收件人并连接 AI 节点。');
+        },
         'use-trending-email': () => {
             commitInspector(); const node = graph.nodes.find(n => n.id === selected); if (node?.type !== 'email') return;
             Object.assign(node.config, {subject:'{{ input.items[0].json.emailSubject }}', body:'{{ input.items[0].json.emailBody }}', format:'text'});
@@ -819,8 +827,8 @@ export function mount(pane, workspace) {
                 commitInspector();
                 if (node.type === 'github-trending') notice('正在抓取 GitHub Trending，并由 DeepSeek 分析项目，请稍候…');
                 const result = await send('/test-node', { node, input: runInput() });
-                const report = ['github-trending','tech-weekly'].includes(node.type) ? result.output?.items?.[0]?.json : null;
-                const preview = report ? `${report.qqText ? `<h3>QQ 消息预览</h3><pre data-qq-preview>${esc(report.qqText)}</pre>` : ''}<h3>飞书消息预览</h3><pre>${esc(report.feishuMarkdown || report.feishuText)}</pre><h3>邮件主题</h3><p>${esc(report.emailSubject)}</p><h3>邮件正文预览</h3><pre>${esc(report.emailBody)}</pre>` : '';
+                const report = ['github-trending','tech-weekly','ai-summary'].includes(node.type) ? result.output?.items?.[0]?.json : null;
+                const preview = report ? `${Array.isArray(report.qqMessages) ? `<h3>QQ Markdown 分条预览（${report.qqMessages.length} 条）</h3>${report.qqMessages.map((text, i) => `<h4>第 ${i + 1} 条</h4><pre data-qq-preview>${esc(text)}</pre>`).join('')}` : ''}${(report.qqMarkdown || report.qqText) ? `<h3>QQ Markdown 源码预览</h3><pre data-qq-preview>${esc(report.qqMarkdown || report.qqText)}</pre>` : ''}<h3>飞书消息预览</h3><pre>${esc(report.feishuMarkdown || report.feishuText)}</pre><h3>邮件主题</h3><p>${esc(report.emailSubject)}</p><h3>邮件正文预览</h3><pre>${esc(report.emailBody)}</pre>` : '';
                 const content = heading + `<p>${result.durationMs} ms</p>${result.branch ? `<p>分支 ${esc(result.branch)}</p>` : ''}${preview}<h3>输出</h3><pre>${esc(pretty(result.output))}</pre><h3>日志</h3><pre>${esc(result.logs || '无日志')}</pre>`;
                 $('[data-run-detail]').innerHTML = content;
                 if (node.id === selected && $('[data-node-debug]')) {
@@ -856,11 +864,15 @@ export function mount(pane, workspace) {
         },
         'use-trending-qq': () => {
             commitInspector(); const node = graph.nodes.find(n => n.id === selected); if (node?.type !== 'qq') return;
-            Object.assign(node.config, {messageType:'text', text:'{{ input.items[0].json.qqText }}'}); markDirty(); inspector();
+            Object.assign(node.config, {messageType:'markdown', messageMode:'single', text:'{{ input.items[0].json.qqMarkdown }}'}); markDirty(); inspector();
+        },
+        'use-digest-qq': () => {
+            commitInspector(); const node = graph.nodes.find(n => n.id === selected); if (node?.type !== 'qq') return;
+            Object.assign(node.config, {messageType:'markdown', messageMode:'list', text:'{{ input.items[0].json.qqMessages }}', timeoutMs:30000}); markDirty(); inspector();
         },
         'use-summary-qq': () => {
             commitInspector(); const node = graph.nodes.find(n => n.id === selected); if (node?.type !== 'qq') return;
-            node.config.text = '{{ input.items[0].json.summary }}'; markDirty(); inspector();
+            Object.assign(node.config, {messageMode:'single', text:'{{ input.items[0].json.summary }}'}); markDirty(); inspector();
         },
         'qq-event-target': () => {
             stopQqBinding();
@@ -947,6 +959,7 @@ export function mount(pane, workspace) {
         if (target.matches('[data-field="credentialId"]')) $('[data-action="edit-node-credential"]').disabled = !target.value;
         if (target.matches('[data-field="sourceUrl"]')) $('[data-trending-url]').value = target.value;
         try {
+            if (target.matches('[data-field="mode"]')) { commitInspector(); inspector(); }
             if (target.matches('[data-field="messageType"]')) { commitInspector(); const title = $('[data-feishu-title]'); if (title) title.hidden = target.value !== 'card'; }
             if (graph?.nodes.find(n => n.id === selected)?.type === 'qq' && target.matches('[data-field="credentialId"],[data-field="targetType"]')) { stopQqBinding(); commitInspector(); renderQqBinding(); }
             if (target.matches('[data-edge-field="source"]')) {

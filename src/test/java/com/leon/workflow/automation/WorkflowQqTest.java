@@ -82,6 +82,43 @@ class WorkflowQqTest {
         assertEquals(WorkflowQq.API + "/v2/groups/" + TARGET + "/messages", requests.getLast().get("url"));
         assertEquals(Map.of("msg_type", 2, "markdown", Map.of("content", "{{ input.items[0].json.noExpansion }}")), requests.getLast().get("body"));
     }
+    @Test void digestMessagesAreSentSequentiallyWithOneTokenAndOriginalInputPassedThrough() throws Exception {
+        var c = config(); c.put("messageMode", "list"); c.put("messageType", "markdown"); c.put("text", "{{ input.items[0].json.qqMessages }}");
+        var messages = List.of("**精选 10 篇**\n**核心看点**", "**其余速览**\n一条简介 {{ input.items[0].json.noExpansion }}");
+        var input = Map.<String, Object>of("items", List.of(Map.of("json", Map.of("qqMessages", messages))));
+        var run = run(c, input); assertEquals("SUCCEEDED", run.get("status"), text(run.get("error"))); assertEquals(input, run.get("output"));
+        assertEquals(3, requests.size());
+        for (int i = 0; i < messages.size(); i++) assertEquals(Map.of("msg_type", 2, "markdown", Map.of("content", messages.get(i))), requests.get(i + 1).get("body"));
+        assertTrue(write(run.get("nodes")).contains("已确认 2 / 2"));
+    }
+    @Test void validatesWholeListBeforeSendingAndStopsWithoutRetryingAfterPartialFailure() throws Exception {
+        var c = config(); c.put("messageMode", "list"); c.put("text", "{{ input.items[0].json.qqMessages }}");
+        for (Object messages : List.of(List.of("正常", "中".repeat(1000)), List.of("正常", 7), List.of(), "不是数组")) {
+            var input = Map.<String, Object>of("items", List.of(Map.of("json", Map.of("qqMessages", messages))));
+            assertThrows(IllegalArgumentException.class, () -> qq.execute(c, input, Map.of(), new WorkflowPrivacy())); assertTrue(requests.isEmpty());
+        }
+        doAnswer(call -> {
+            Map<String, Object> request = call.getArgument(0); requests.add(request);
+            if (text(request.get("url")).endsWith("/getAppAccessToken")) return response(200, authBody);
+            if (requests.size() == 2) return response(200, sendBody);
+            return response(429, Map.of("code", 22009, "message", SECRET));
+        }).when(http).executeResolved(anyMap(), any());
+        var input = Map.<String, Object>of("items", List.of(Map.of("json", Map.of("qqMessages", List.of("第一条", "第二条", "第三条")))));
+        var error = assertThrows(IllegalArgumentException.class, () -> qq.execute(c, input, Map.of(), new WorkflowPrivacy()));
+        assertEquals(3, requests.size()); assertTrue(error.getMessage().contains("已确认 1 / 3"));
+        assertTrue(error.getMessage().contains("重跑可能重复")); assertFalse(error.getMessage().contains(SECRET));
+    }
+    @Test void trendingMarkdownIsSentWithFormattingInOneMessage() throws Exception {
+        var analysis = Map.<String, Object>of("summary", "开发工具概览", "projects", List.of(Map.of("repo", "sample/tool", "purpose", "提升效率", "useCases", "开发工作流")));
+        var report = WorkflowGithubTrending.report(analysis, new WorkflowGithubTrending.Page(1, List.of(Map.of("repo", "sample/tool", "url", "https://github.com/sample/tool"))));
+        var config = config(); config.put("messageType", "markdown"); config.put("text", "{{ input.items[0].json.qqMarkdown }}");
+        var run = run(config, report);
+        assertEquals("SUCCEEDED", run.get("status"), text(run.get("error"))); assertEquals(report, run.get("output"));
+        var json = object(object(((List<?>)report.get("items")).getFirst()).get("json"));
+        assertEquals(Map.of("msg_type", 2, "markdown", Map.of("content", json.get("qqMarkdown"))), requests.getLast().get("body"));
+        assertTrue(text(json.get("qqMarkdown")).contains("**1. sample/tool**"));
+        assertEquals(2, requests.size());
+    }
     @Test void bindingDiscoversOfficialGatewayWithAuthenticationAndRejectsOtherDestinations() throws Exception {
         authBody = Map.of("access_token", TOKEN, "expires_in", "7200");
         assertEquals(TOKEN, qq.bindingAccessToken(credentialId));

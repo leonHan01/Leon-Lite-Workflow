@@ -113,7 +113,8 @@ public class WorkflowGithubTrending {
             json.put("emailHtml", "<p>" + html(label) + "</p>" + text(json.get("emailHtml")));
             var projects = new ArrayList<Map<String, Object>>();
             for (Object project : (List<?>)json.get("projects")) projects.add(object(project));
-            json.put("qqText", qqText(text(json.get("title")), source, text(json.get("summary")), projects, page.total(), label));
+            for (boolean markdown : List.of(false, true)) json.put(markdown ? "qqMarkdown" : "qqText",
+                    qqMessage(text(json.get("title")), source, text(json.get("summary")), projects, page.total(), label, markdown));
         }
         trace.accept("DeepSeek 分析与项目对应校验完成；" + WorkflowDiagnostics.lengths(output));
         return output;
@@ -288,20 +289,25 @@ public class WorkflowGithubTrending {
         output.put("totalProjects", total); output.put("count", projects.size()); output.put("projects", projects); output.put("summary", summary); output.put("title", title);
         output.put("feishuText", feishu.toString()); output.put("emailSubject", title); output.put("emailBody", email.toString()); output.put("emailHtml", html.toString());
         output.put("feishuMarkdown", feishuMarkdown(source, summary, projects, total));
-        output.put("qqText", qqText(title, source, summary, projects, total, ""));
+        output.put("qqText", qqMessage(title, source, summary, projects, total, "", false));
+        output.put("qqMarkdown", qqMessage(title, source, summary, projects, total, "", true));
         return envelope(Map.of("items", List.of(Map.of("json", output))));
     }
-    /** A single plain QQ notification; complete repo names, links and provenance survive shortening. */
-    private static String qqText(String title, String source, String summary, List<Map<String, Object>> projects, int total, String sourceNote) {
-        String intro = title + "\n已分析 " + projects.size() + " / " + total + " 个项目"
-                + (sourceNote.isBlank() ? "" : "\n" + sourceNote) + "\n\n榜单概览：" + qqShorten(summary, 360);
+    /** Single QQ notification; budget formatting too, preserving complete repo names, links and provenance. */
+    private static String qqMessage(String title, String source, String summary, List<Map<String, Object>> projects, int total, String sourceNote, boolean markdown) {
+        String bold = markdown ? "**" : "";
+        String intro = bold + qqContent(title, 1000, markdown) + bold + "\n已分析 " + projects.size() + " / " + total + " 个项目"
+                + (sourceNote.isBlank() ? "" : "\n" + qqContent(sourceNote, 1000, markdown))
+                + "\n\n" + bold + "榜单概览：" + qqContent(summary, 360, markdown) + bold;
         for (int shown = Math.min(5, projects.size()); shown > 0; shown--) {
-            String heading = "\n\n项目速览（榜单前 " + shown + " 项）：";
-            String tail = (shown < projects.size() ? "\n\n其余 " + (projects.size() - shown) + " 项完整解读见工作流运行详情。" : "") + "\n\n榜单来源：" + source;
+            String heading = "\n\n" + bold + "项目速览（榜单前 " + shown + " 项）：" + bold;
+            String purposeLabel = bold + "用途：" + bold + (markdown ? " " : "");
+            String tail = (shown < projects.size() ? "\n\n其余 " + (projects.size() - shown) + " 项完整解读见工作流运行详情。" : "") + "\n\n" + bold + "榜单来源：" + bold + source;
             StringBuilder skeleton = new StringBuilder(intro + heading + tail);
             for (int i = 0; i < shown; i++) {
                 var project = projects.get(i);
-                skeleton.append("\n\n").append(i + 1).append(". ").append(project.get("repo")).append("\n\n").append(project.get("url"));
+                skeleton.append("\n\n").append(bold).append(i + 1).append(". ").append(qqContent(text(project.get("repo")), 1000, markdown)).append(bold)
+                        .append("\n").append(purposeLabel).append("\n").append(project.get("url"));
             }
             int available = WorkflowQq.MAX_MESSAGE_BYTES - skeleton.toString().getBytes(StandardCharsets.UTF_8).length;
             if (available < shown * 60 && shown > 1) continue;
@@ -310,24 +316,30 @@ public class WorkflowGithubTrending {
             StringBuilder message = new StringBuilder(intro + heading);
             for (int i = 0; i < shown; i++) {
                 var project = projects.get(i);
-                message.append("\n\n").append(i + 1).append(". ").append(project.get("repo"))
-                        .append("\n").append(qqShorten("用途：" + project.get("purpose"), perProject)).append("\n").append(project.get("url"));
+                message.append("\n\n").append(bold).append(i + 1).append(". ").append(qqContent(text(project.get("repo")), 1000, markdown)).append(bold)
+                        .append("\n").append(purposeLabel).append(qqContent(text(project.get("purpose")), perProject, markdown)).append("\n").append(project.get("url"));
             }
             return message.append(tail).toString();
         }
         throw new IllegalArgumentException("QQ 摘要无法在消息长度限制内保留项目链接，请减少项目数量");
     }
-    private static String qqShorten(String value, int maxBytes) {
+    private static String qqContent(String value, int maxBytes, boolean markdown) {
         String safe = feishuSafe(value).replaceAll("[\\r\\n\\t ]+", " ").trim();
-        if (safe.getBytes(StandardCharsets.UTF_8).length <= maxBytes) return safe;
-        if (maxBytes < 3) return "";
-        int end = 0, used = 0;
-        while (end < safe.length()) {
-            int cp = safe.codePointAt(end), size = new String(Character.toChars(cp)).getBytes(StandardCharsets.UTF_8).length;
-            if (used + size > maxBytes - 3) break;
-            used += size; end += Character.charCount(cp);
+        var units = new ArrayList<String>(); int total = 0;
+        for (int offset = 0; offset < safe.length();) {
+            int cp = safe.codePointAt(offset); String unit = new String(Character.toChars(cp));
+            if (markdown && "\\`*_{}[]()#+-.!|~".contains(unit)) unit = "\\" + unit;
+            units.add(unit); total += unit.getBytes(StandardCharsets.UTF_8).length; offset += Character.charCount(cp);
         }
-        return safe.substring(0, end) + "…";
+        if (total <= maxBytes) return String.join("", units);
+        if (maxBytes < 3) return "";
+        StringBuilder result = new StringBuilder(); int used = 0;
+        for (String unit : units) {
+            int size = unit.getBytes(StandardCharsets.UTF_8).length;
+            if (used + size > maxBytes - 3) break;
+            result.append(unit); used += size;
+        }
+        return result.append("…").toString();
     }
     private static String feishuMarkdown(String source, String summary, List<Map<String, Object>> projects, int total) {
         StringBuilder card = new StringBuilder("<text_tag color='blue'>" + periodLabel(source) + "</text_tag>  <text_tag color='green'>分析 "

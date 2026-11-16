@@ -5,9 +5,10 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import static com.leon.workflow.automation.WorkflowJson.*;
 
-/** One official QQ Bot API message per execution. Credentials and tokens stay server-side. */
+/** Official QQ Bot API delivery. Credentials and tokens stay server-side; sends are never retried. */
 @Component
 public class WorkflowQq {
     /** Only locally constructed messages; never contains provider reply text or secret values. */
@@ -43,7 +44,9 @@ public class WorkflowQq {
             throw new IllegalArgumentException("请选择 QQ 文本或 Markdown 消息");
         String target = required(config.get("targetId"), "请填写接收目标 OpenID（不是 QQ 号或群号）", 1000);
         if (WorkflowExpressions.references(target).isEmpty()) targetId(target);
-        required(config.get("text"), "请填写 QQ 消息内容，最多 64 KB 模板", 65_536);
+        if (!Set.of("single", "list").contains(text(config.getOrDefault("messageMode", "single"))))
+            throw new IllegalArgumentException("请选择单条消息或消息列表");
+        required(config.get("text"), "请填写 QQ 消息内容或消息列表引用，最多 64 KB 模板", 65_536);
         integer(config.get("timeoutMs"), 10_000, 100, 30_000);
         for (String key : List.of("url", "headers", "appId", "appSecret", "secret", "token", "accessToken", "access_token", "clientSecret"))
             if (config.containsKey(key)) throw new IllegalArgumentException("QQ 连接信息请保存在机器人凭据中，节点只引用凭据 ID");
@@ -55,25 +58,46 @@ public class WorkflowQq {
         return id;
     }
     public Map<String, Object> execute(Map<String, Object> config, Map<String, Object> input, Map<String, Object> ctx, WorkflowPrivacy privacy) throws Exception {
+        return execute(config, input, ctx, privacy, ignored -> {});
+    }
+    public Map<String, Object> execute(Map<String, Object> config, Map<String, Object> input, Map<String, Object> ctx, WorkflowPrivacy privacy, Consumer<String> trace) throws Exception {
         validateConfig(config);
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(integer(config.get("timeoutMs"), 10_000, 100, 30_000));
         String id = text(config.get("credentialId"));
         var credential = credentials.qq(id, privacy);
         String target = targetId(WorkflowExpressions.resolveRequired(config.get("targetId"), input, ctx, "QQ 接收目标"));
-        String content = required(WorkflowExpressions.resolveRequired(config.get("text"), input, ctx, "QQ 正文"), "QQ 消息内容解析后不能为空", 65_536);
-        if (content.getBytes(StandardCharsets.UTF_8).length > MAX_MESSAGE_BYTES)
-            throw new IllegalArgumentException("QQ 消息正文不能超过 2000 UTF-8 字节，请发送摘要；不会自动拆分或截断");
-        Map<String, Object> payload = "markdown".equals(config.get("messageType"))
-                ? Map.of("msg_type", 2, "markdown", Map.of("content", content)) : Map.of("msg_type", 0, "content", content);
+        Object resolved = WorkflowExpressions.resolveRequired(config.get("text"), input, ctx, "QQ 正文");
+        boolean batch = "list".equals(config.get("messageMode"));
+        List<?> contents;
+        if (batch) {
+            if (!(resolved instanceof List<?> list) || list.isEmpty() || list.size() > 120)
+                throw new IllegalArgumentException("QQ 消息列表必须为 1–120 条字符串，请引用上游 qqMessages");
+            contents = list;
+        } else contents = List.of(required(resolved, "QQ 消息内容解析后不能为空", 65_536));
+        // Validate the whole batch before acquiring a token or sending its first message.
+        for (Object content : contents) {
+            if (!(content instanceof String s) || s.isBlank()) throw new IllegalArgumentException("QQ 消息列表只能包含非空字符串");
+            if (s.getBytes(StandardCharsets.UTF_8).length > MAX_MESSAGE_BYTES)
+                throw new IllegalArgumentException("QQ 消息正文不能超过 2000 UTF-8 字节，请发送摘要；不会自动拆分或截断");
+        }
         String token = accessToken(id, credential, privacy, deadline);
         String path = "group".equals(config.get("targetType")) ? "/v2/groups/" : "/v2/users/";
+        int accepted = 0;
         try {
-            var result = request(path + target + "/messages", payload, Map.of("Authorization", "QQBot " + token), privacy, deadline, "发送消息");
-            if (!(result.get("id") instanceof String messageId) || messageId.isBlank())
-                throw new IllegalArgumentException("QQ 发送消息响应无消息 ID，无法确认结果；请确认接收情况后手动重跑");
+            for (Object content : contents) {
+                Map<String, Object> payload = "markdown".equals(config.get("messageType"))
+                        ? Map.of("msg_type", 2, "markdown", Map.of("content", content)) : Map.of("msg_type", 0, "content", content);
+                var result = request(path + target + "/messages", payload, Map.of("Authorization", "QQBot " + token), privacy, deadline, "发送消息");
+                if (!(result.get("id") instanceof String messageId) || messageId.isBlank())
+                    throw new IllegalArgumentException("QQ 发送消息响应无消息 ID，无法确认结果；请确认接收情况后手动重跑");
+                accepted++; trace.accept("QQ 平台已确认 " + accepted + " / " + contents.size() + " 条消息");
+            }
         } catch (Exception error) {
             // A rejected or indeterminate send is never retried. Refresh credentials only on a future execution.
             synchronized (tokens) { if (tokens.get(id) != null && tokens.get(id).token.equals(token)) tokens.remove(id); }
+            if (batch && !(error instanceof InterruptedException)) throw new SafeFailure("QQ 消息列表发送中断，平台已确认 " + accepted + " / " + contents.size()
+                    + " 条，第 " + (accepted + 1) + " 条失败或结果未确认；未继续发送，也不会自动重试。请核对接收情况，重跑可能重复发送已确认消息"
+                    + (error instanceof SafeFailure ? "；" + error.getMessage() : ""));
             throw error;
         }
         return input;

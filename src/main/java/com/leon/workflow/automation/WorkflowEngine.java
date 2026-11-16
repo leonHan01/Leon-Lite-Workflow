@@ -128,7 +128,7 @@ public class WorkflowEngine {
             }
             case "http" -> new NodeResult(envelope(http.execute(config, input, ctx, privacy)), "", "");
             case "feishu" -> new NodeResult(feishu.execute(config, input, ctx, privacy), "飞书消息已发送", "");
-            case "qq" -> new NodeResult(qq.execute(config, input, ctx, privacy), "QQ 平台已接受消息", "");
+            case "qq" -> new NodeResult(qq.execute(config, input, ctx, privacy, trace), "QQ 平台已接受消息", "");
             case "email" -> new NodeResult(email.execute(config, input, ctx, privacy), "邮件已提交至 SMTP 服务器", "");
             case "github-trending" -> new NodeResult(trending.execute(config, privacy, trace), "已抓取 GitHub Trending 并由 DeepSeek 生成项目解读、飞书消息和邮件正文", "");
             case "tech-weekly" -> new NodeResult(trending.executeWeekly(config, privacy, trace), "已分析最新科技爱好者周刊", "");
