@@ -14,7 +14,7 @@ import static com.leon.workflow.automation.WorkflowJson.*;
 public class WorkflowAiSummary {
     static final String DEFAULT_PROMPT = "请用简体中文汇总这些资讯，突出技术要点、实际影响和值得关注的变化。资料不足时明确说明；避免营销话术。";
     private final WorkflowAiModel models;
-    public WorkflowAiSummary(WorkflowHttp http, AppSettingService settings, WorkflowCredentials credentials) { models = new WorkflowAiModel(http, settings, credentials); }
+    public WorkflowAiSummary(WorkflowHttp http, AppSettingService settings, WorkflowCredentials credentials, WorkflowModels catalog) { models = new WorkflowAiModel(http, settings, credentials, catalog); }
     static void validateConfig(Map<String, Object> config) {
         if (!Set.of("summary", "top10").contains(text(config.getOrDefault("mode", "summary"))))
             throw new IllegalArgumentException("请选择普通汇总或精选 10 篇 · 其余速览");

@@ -34,6 +34,9 @@ const server = http.createServer((req, res) => {
   res.setHeader('Content-Disposition','attachment; filename=\"test-backup.sql\"');
   return res.end('-- database backup\n');
  }
+ if (url.pathname==='/api/workflows/models' || url.pathname==='/api/workflows/credentials') {
+  res.setHeader('Content-Type','application/json'); return res.end('[]');
+ }
  if (url.pathname.startsWith('/api/')) {
   if(req.method==='POST') {
    let body='';req.on('data',data=>body+=data);req.on('end',()=>{

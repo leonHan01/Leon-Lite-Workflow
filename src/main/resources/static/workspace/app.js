@@ -57,6 +57,10 @@ compactSidebar.addEventListener('change', updateSidebar);
 updateSidebar();
 
 const navigation = sidebar.querySelector('.lw-nav');
+const agentLink = document.createElement('a');
+agentLink.className = 'lw-nav-link'; agentLink.href = '/workspace/agents.html';
+agentLink.textContent = 'Agent 工作台'; agentLink.setAttribute('aria-label', 'Agent 工作台');
+navigation.append(agentLink);
 const navigationOrderKey = 'leon-workspace-navigation-order';
 const navigationItems = () => Array.from(navigation.children);
 const navigationId = item => item.dataset.navGroup ? 'group:' + item.dataset.navGroup : new URL(item.href).pathname;

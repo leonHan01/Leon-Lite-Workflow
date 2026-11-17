@@ -10,11 +10,12 @@ import static com.leon.workflow.automation.WorkflowJson.*;
 final class WorkflowAiModel {
     static final String OPENAI_API = "https://api.openai.com/v1/chat/completions";
     static final String OPENAI_MODEL = "gpt-6.1-sol";
+    private final WorkflowModels catalog;
     private final WorkflowHttp http;
     private final AppSettingService settings;
     private final WorkflowCredentials credentials;
-    WorkflowAiModel(WorkflowHttp http, AppSettingService settings, WorkflowCredentials credentials) {
-        this.http = http; this.settings = settings; this.credentials = credentials;
+    WorkflowAiModel(WorkflowHttp http, AppSettingService settings, WorkflowCredentials credentials, WorkflowModels catalog) {
+        this.catalog = catalog; this.http = http; this.settings = settings; this.credentials = credentials;
     }
     static String provider(Map<String,Object> config) {
         String value = text(config.getOrDefault("provider", "deepseek"));
@@ -27,14 +28,20 @@ final class WorkflowAiModel {
         return value;
     }
     static void validate(Map<String,Object> config) {
+        for (String field : List.of("apiKey", "api_key", "OPENAI_API_KEY", "token", "accessToken", "authorization", "apiUrl", "baseUrl", "url", "headers", "secret", "password", "key", "openaiApiKey"))
+            if (config.containsKey(field)) throw new IllegalArgumentException("节点不保存密钥或自定义 API 地址；请使用模型配置和加密凭据");
+        if (config.containsKey("modelId")) {
+            if (!required(config.get("modelId"), "请选择可用模型", 36).matches("[A-Za-z0-9_-]+")) throw new IllegalArgumentException("模型配置引用无效");
+            if (List.of("provider","model","credentialId").stream().anyMatch(config::containsKey)) throw new IllegalArgumentException("请选择统一模型配置，不能同时填写节点模型参数");
+            return;
+        }
         String provider = provider(config); model(config);
         if (provider.equals("openai")) required(config.get("credentialId"), "请选择 OpenAI API Key 凭据", 100);
         else if (config.containsKey("credentialId")) throw new IllegalArgumentException("DeepSeek 使用高级设置中的 API Key，不使用节点凭据");
-        for (String field : List.of("apiKey", "api_key", "OPENAI_API_KEY", "token", "accessToken", "authorization", "apiUrl", "baseUrl", "url", "headers", "secret", "password", "key", "openaiApiKey"))
-            if (config.containsKey(field)) throw new IllegalArgumentException("节点不保存密钥或自定义 API 地址；OpenAI 请选择加密凭据，DeepSeek 使用高级设置");
     }
+
     Client connect(Map<String,Object> config, WorkflowPrivacy privacy) {
-        validate(config); boolean openai = "openai".equals(provider(config));
+        validate(config); config = catalog.resolve(config); validate(config); boolean openai = "openai".equals(provider(config));
         String key = openai ? credentials.openai(text(config.get("credentialId")), privacy) : settings.getValue(AppSettingService.DEEPSEEK_API_KEY);
         if (key.isBlank()) throw new IllegalArgumentException("请先在高级设置配置 DeepSeek API Key");
         privacy.secret(key); privacy.secret("Bearer " + key);

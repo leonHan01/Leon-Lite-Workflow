@@ -83,6 +83,18 @@ class WorkflowIntegrationTest {
         mvc.perform(get("/api/workflows/qq-bindings/missing").cookie(cookie)).andExpect(status().isNotFound());
         mvc.perform(get("/api/workflows/qq-bindings/missing").header("Authorization", "Bearer integration-test-token")).andExpect(status().isForbidden());
     }
+    @Test void sharedModelConfigurationRequiresAdminCookieAndWriteOrigin() throws Exception {
+        mvc.perform(get("/api/workflows/models")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/api/workflows/models").header("Authorization","Bearer integration-test-token")).andExpect(status().isForbidden());
+        String body=write(Map.of("name","集成模型","provider","deepseek","model","deepseek-chat"));
+        mvc.perform(post("/api/workflows/models").cookie(cookie).header("Origin","https://evil.test").header("X-Requested-With","XMLHttpRequest").contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isForbidden());
+        var profile=request(post("/api/workflows/models").content(body)); String id=text(profile.get("id"));
+        assertEquals("deepseek-chat",profile.get("model"));
+        mvc.perform(get("/api/workflows/models").cookie(cookie)).andExpect(status().isOk()).andExpect(jsonPath("$[?(@.id == '"+id+"')].model").value("deepseek-chat"));
+        var updated=request(put("/api/workflows/models/"+id).content(write(Map.of("name","集成模型","provider","deepseek","model","deepseek-chat","enabled",false))));
+        assertEquals(false,updated.get("enabled"));
+        jdbc.update("DELETE FROM automation_model WHERE id=?",id);
+    }
     @Test void newWorkflowsContainProtectedTerminalsAndRejectMissingOrDuplicateTerminalsOnSave() throws Exception {
         var workflow = request(post("/api/workflows").content(write(Map.of("name", "起止节点"))));
         String id = text(workflow.get("id"));

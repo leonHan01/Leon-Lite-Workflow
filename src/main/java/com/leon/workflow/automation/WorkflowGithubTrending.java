@@ -39,7 +39,7 @@ public class WorkflowGithubTrending {
     private final WorkflowHttp http;
     private final AppSettingService settings;
     private final WorkflowAiModel models;
-    public WorkflowGithubTrending(WorkflowHttp http, AppSettingService settings, WorkflowCredentials credentials) { this.http = http; this.settings = settings; models = new WorkflowAiModel(http, settings, credentials); }
+    public WorkflowGithubTrending(WorkflowHttp http, AppSettingService settings, WorkflowCredentials credentials, WorkflowModels catalog) { this.http = http; this.settings = settings; models = new WorkflowAiModel(http, settings, credentials, catalog); }
     public boolean configured() { return !settings.getValue(AppSettingService.DEEPSEEK_API_KEY).isBlank(); }
     static String sourceUrl(Map<String, Object> config) {
         String source = text(config.getOrDefault("sourceUrl", DEFAULT_SOURCE));

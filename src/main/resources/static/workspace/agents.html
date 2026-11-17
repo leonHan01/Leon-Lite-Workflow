@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent 工作台 · Leon</title><script src="/admin-auth.js"></script>
+<link rel="stylesheet" href="/workspace/agents.css"><script src="/workspace/agents.js" defer></script>
+</head>
+<body>
+<header><a href="/index.html" class="brand">leon<span>.</span></a><span class="crumb">工作空间 / Agent 工作台</span><a href="/index.html">返回工作空间 ↗</a></header>
+<main>
+<div class="heading"><div><p class="eyebrow">YOUR AI TEAM</p><h1>让每个 Agent 各司其职。</h1><p>定义角色，连接模型，在私聊和群聊中与它们协作。</p></div><div class="tabs"><button id="configTab" class="active">Agent 配置</button><button id="chatTab">聊天测试</button></div></div>
+<p id="notice" role="status" hidden></p>
+<section id="configPanel" class="layout">
+<aside class="card"><div class="section-title"><h2>我的 Agents</h2><button id="newAgent">＋ 新建</button></div><div id="agentList"></div><p class="subtle">停用 Agent 会保留历史消息。<br>API Key 仅在服务端加密存储，不回显给客户端。</p></aside>
+<article class="card"><form id="agentForm">
+<div class="section-title"><div><p class="eyebrow">IDENTITY & MODEL</p><h2 id="formTitle">新建 Agent</h2></div><label class="toggle"><input id="enabled" type="checkbox" checked>启用</label></div>
+<div class="avatar-setting"><img id="avatarPreview" class="avatar avatar-preview" src="/api/agent-avatars/alfred" alt="当前 Agent 头像"><div><strong>Agent 头像</strong><p id="avatarName" class="subtle">Alfred</p><div class="avatar-actions"><button type="button" id="chooseAvatar">选择头像</button><button type="button" id="uploadAvatar">上传头像</button></div><small>PNG / JPG，最多 5 MB，宽高不超过 4096 像素</small></div></div>
+<input type="file" id="avatarFile" accept="image/png,image/jpeg" hidden>
+<div class="fields"><label>显示名称<input id="name" maxlength="60" required placeholder="例如：写作助手"></label><label>@标识<input id="handle" pattern="[a-z][a-z0-9_-]{1,31}" maxlength="32" required placeholder="例如：writer"><small>2–32 位小写字母、数字、_ 或 -，以字母开头</small></label></div>
+<div class="fields"><label>模型服务<select id="provider"><option value="openai">OpenAI</option><option value="deepseek">DeepSeek</option></select></label><label>模型名称<input id="model" maxlength="100" required placeholder="填写账户可用的模型 ID"></label></div>
+<label>API Key<input id="apiKey" type="password" autocomplete="new-password" maxlength="8192" placeholder="新建必填；编辑时留空保留"><small id="keyHint">请求仅发送至所选服务商的官方 HTTPS 接口。</small></label>
+<label>角色与系统提示词<textarea id="systemPrompt" rows="8" maxlength="16000" placeholder="例如：你是一位严谨的写作编辑，先梳理逻辑，再给出具体修改建议。"></textarea></label>
+<div class="form-footer"><p class="subtle">私聊直接回复；群聊仅响应 @标识。<br>每次回复仅使用当前会话的最近上下文。</p><button id="saveAgent" class="primary" type="submit">保存 Agent</button></div>
+</form></article>
+</section>
+<section id="chatPanel" class="layout" hidden>
+<aside class="card"><div class="section-title"><h2>会话</h2><button id="newGroup">＋ 群聊</button></div><div id="conversationList"></div><h3>与 Agent 私聊</h3><div id="directList"></div><p class="subtle">默认设备群聊可 @所有启用的 Agent。自建群聊可选择加入的 Agent。</p></aside>
+<article class="card chat"><div class="section-title"><div><h2 id="chatTitle">设备群聊</h2><p class="subtle" id="chatHint">群聊中 @指定 Agent 才会触发回复。</p></div><button id="refreshChat">同步</button></div>
+<div id="mentionBar" class="mentions"></div><button id="olderMessages" hidden>加载更早的消息</button><div id="messages" class="messages" aria-live="polite"></div><div id="jobs"></div>
+<form id="sendForm"><textarea id="composer" rows="3" maxlength="8000" required placeholder="写点什么，或点击上方 Agent 插入 @标识…"></textarea><div class="form-footer"><small id="chatStatus">正在连接…</small><button class="primary" type="submit" id="sendMessage">发送 ↑</button></div></form></article>
+</section>
+</main>
+<dialog id="avatarDialog" class="avatar-dialog"><div class="section-title"><div><p class="eyebrow">CHOOSE AN AVATAR</p><h2>选择 Agent 头像</h2></div><button type="button" id="closeAvatars" aria-label="关闭头像选择">关闭</button></div><p class="subtle">选择后，点击「保存 Agent」生效。</p><h3>预设头像 · 30 款</h3><div id="presetAvatars" class="avatar-grid"></div><h3 id="uploadedAvatarTitle" hidden>已上传的头像</h3><div id="uploadedAvatars" class="avatar-grid"></div></dialog>
+<dialog id="groupDialog"><form id="groupForm"><h2>创建群聊</h2><label>群名称<input id="groupName" required maxlength="60" placeholder="例如：产品讨论组"></label><p>选择加入此群聊的 Agent</p><div id="groupMembers"></div><div class="form-footer"><button type="button" id="cancelGroup">取消</button><button type="submit" class="primary">创建群聊</button></div></form></dialog>
+</body></html>

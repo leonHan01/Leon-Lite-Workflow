@@ -62,6 +62,13 @@ public class WorkflowStore {
               encrypted CLOB NOT NULL, created_at BIGINT NOT NULL)
             """);
         jdbc.execute("""
+            CREATE TABLE IF NOT EXISTS automation_model (
+              id VARCHAR(36) PRIMARY KEY, name VARCHAR(100) NOT NULL, provider VARCHAR(20) NOT NULL,
+              model VARCHAR(100) NOT NULL, credential_id VARCHAR(36), enabled BOOLEAN NOT NULL,
+              created_at BIGINT NOT NULL)
+            """);
+        jdbc.update("INSERT INTO automation_model(id,name,provider,model,enabled,created_at) SELECT 'default-deepseek','DeepSeek Flash','deepseek',?,TRUE,0 WHERE NOT EXISTS (SELECT 1 FROM automation_model WHERE id='default-deepseek')", WorkflowGithubTrending.MODEL);
+        jdbc.execute("""
             CREATE TABLE IF NOT EXISTS automation_rss_seen (
               workflow_id VARCHAR(36) NOT NULL, node_id VARCHAR(64) NOT NULL, article_key VARCHAR(64) NOT NULL,
               processed_at BIGINT NOT NULL, PRIMARY KEY(workflow_id,node_id,article_key),

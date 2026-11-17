@@ -71,7 +71,7 @@ export function mount(pane, workspace) {
     const listRuns = new Map();
     const MAX_POSITION = 50000;
     let zoom = 1, world = { width: 2400, height: 1600 }, focused = false, focusPanels = null;
-    let dirty = false, busy = false, active = false, initialized = false, timer = null, currentRun = null, capabilities = {}, credentials = [], schedule = null;
+    let dirty = false, busy = false, active = false, initialized = false, timer = null, currentRun = null, capabilities = {}, credentials = [], models = [], schedule = null;
     let inspectorOriginal = null, inspectorInitial = '', inspectorLast = '', invalidInspector = false;
     let cancelLibraryDrag = null;
     let editingCredential = null;
@@ -273,21 +273,25 @@ export function mount(pane, workspace) {
         inspectorLast = snapshot; invalidInspector = false;
     }
     function commitAiModel(node, get) {
-        node.config.provider = get('provider') || 'deepseek'; node.config.model = get('model');
-        if (node.config.provider === 'openai') node.config.credentialId = get('credentialId') || '';
-        else delete node.config.credentialId;
+        const id=get('modelId');
+        if (id === '__legacy__') {
+            delete node.config.modelId;
+            for (const key of ['provider','model','credentialId']) {
+                if (Object.hasOwn(inspectorOriginal.config,key)) node.config[key]=inspectorOriginal.config[key];
+                else delete node.config[key];
+            }
+            return;
+        }
+        node.config.modelId=id || '';
+        for (const key of ['provider','model','credentialId']) delete node.config[key];
     }
     function aiModelFields(config) {
-        const provider=config.provider || 'deepseek';
-        let content=field('模型服务',select('provider',provider,[['deepseek','DeepSeek'],['openai','OpenAI GPT']]));
-        content+=field('模型名称',inputField('model',config.model || aiModelDefaults[provider],'maxlength="100" spellcheck="false"'));
-        if(provider==='openai') {
-            content+=field('OpenAI API Key 凭据',select('credentialId',config.credentialId || '',[['','请选择 OpenAI 凭据'],...credentials.filter(c=>c.kind==='openai').map(c=>[c.id,c.name])]));
-            content+='<button type="button" data-action="openai-credentials">添加 OpenAI API Key</button>';
-            content+=`<button type="button" data-action="edit-node-credential" ${config.credentialId ? '' : 'disabled'}>编辑所选凭据</button>`;
-            content+='<p class="wf-help">API Key 加密保存在工作流凭据中，节点仅保存引用。可填写账户可用的 GPT 模型名称。</p>';
-        } else content+='<p class="wf-help">DeepSeek 沿用现有 API Key 配置。</p>';
-        return content;
+        const choices=models.filter(m=>m.enabled || m.id===config.modelId).map(m=>[m.id,`${m.name} · ${m.model}${m.enabled ? '' : '（已停用）'}`]);
+        if (!Object.hasOwn(config,'modelId')) choices.unshift(['__legacy__',`现有配置 · ${config.model || aiModelDefaults[config.provider || 'deepseek']}`]);
+        else if (!config.modelId) choices.unshift(['','请先配置并启用模型']);
+        else if (!models.some(m=>m.id===config.modelId)) choices.unshift([config.modelId,'模型配置已不存在，请重新选择']);
+        return field('可用模型',select('modelId',Object.hasOwn(config,'modelId') ? config.modelId : '__legacy__',choices))
+            + '<button type="button" data-action="models">模型配置 ↗</button><p class="wf-help">在高级设置集中管理可用模型。修改模型配置会用于所有引用它的节点。</p>';
     }
     function parseValue(value) {
         if (value == null || !value.trim()) return null;
@@ -735,11 +739,12 @@ export function mount(pane, workspace) {
             : type === 'email' ? { credentialId: credentials.find(v => v.kind === 'smtp')?.id || '', to: '', cc: '', bcc: '', subject: '工作流通知', body: '你好，{{ input.items[0].json.name }}', format: 'text', timeoutMs: 10000 }
             : type === 'rss' ? { sources: structuredClone(rssSources), maxItems: 35, perSource: 5, lookbackHours: 168, onlyNew: true, timeoutMs: 60000 }
             : type === 'ai-summary' ? { title: 'RSS 科技资讯汇总', prompt: summaryPrompt, model: 'deepseek-flash', maxItems: 50, maxInputChars: 60000, timeoutMs: 180000 }
-            : type === 'tech-weekly' ? { timeoutMs: 180000 }
+            : type === 'tech-weekly' ? { timeoutMs: 180000, modelId: models.find(m=>m.enabled)?.id || '' }
             : type === 'github-trending' ? { sourceUrl: trendingSources[0][0], maxProjects: 25, timeoutMs: 180000 }
             : { left: '{{ input.items[0].json.amount }}', operator: 'gte', right: 100 };
         const node = { id, type, name: kind === 'groovy' ? 'Groovy 脚本' : kind === 'javascript' ? 'JavaScript 脚本' : labels[type], config,
             position: position || { x: Math.min(MAX_POSITION - 300, (parent?.position?.x || 60) + 280), y: parent?.position?.y || 140 } };
+        if (['ai-summary','tech-weekly'].includes(node.type)) { node.config.modelId=models.find(m=>m.enabled)?.id || ''; for (const key of ['provider','model','credentialId']) delete node.config[key]; }
         graph.nodes.push(node);
         if (parent) {
             const branch = (parent.type === 'if' ? ['true', 'false'] : ['']).find(b => !graph.edges.some(e => e.source === parent.id && (e.branch || '') === b && e.target !== end?.id));
@@ -944,6 +949,7 @@ export function mount(pane, workspace) {
         credentials: () => openCredentials(),
         'feishu-credentials': () => openCredentials('feishu'),
         'qq-credentials': () => openCredentials('qq'),
+        'models': () => workspace.navigate('/advanced-settings.html#models'),
         'openai-credentials': () => openCredentials('openai'),
         'qq-bind': startQqBinding,
         'qq-cancel-binding': () => { stopQqBinding(); renderQqBinding(); },
@@ -1028,7 +1034,7 @@ export function mount(pane, workspace) {
         if (target.matches('[data-workflow-search]')) { renderWorkflowList(); return; }
         if (target.matches('[data-name]')) { markDirty(); return; }
         if (!target.matches('[data-inspector] input,[data-inspector] textarea,[data-inspector] select')) return;
-        if (target.matches('[data-field="provider"]')) return;
+
         const node = graph?.nodes.find(n => n.id === selected); if (!node) return;
         if (node.type === 'qq' && target.matches('[data-field="targetId"]')) { stopQqBinding(); renderQqBinding(); }
         if (target.dataset.field === 'name') { node.name = target.value; const name = pane.querySelector(`[data-node="${CSS.escape(node.id)}"] .wf-node-name`); if (name) { name.textContent = target.value; syncWorld(); lines(); } }
@@ -1049,12 +1055,6 @@ export function mount(pane, workspace) {
         if (target.matches('[data-field="credentialId"]')) $('[data-action="edit-node-credential"]').disabled = !target.value;
         if (target.matches('[data-field="sourceUrl"]')) $('[data-trending-url]').value = target.value;
         try {
-            if (target.matches('[data-field="provider"]')) {
-                commitInspector(); const node=graph.nodes.find(n=>n.id===selected);
-                node.config.model=aiModelDefaults[target.value];
-                if(target.value==='openai') node.config.credentialId ||= credentials.find(c=>c.kind==='openai')?.id || '';
-                markDirty(); inspector();
-            }
             if (target.matches('[data-field="mode"]')) { commitInspector(); inspector(); }
             if (target.matches('[data-field="messageType"]')) { commitInspector(); const title = $('[data-feishu-title]'); if (title) title.hidden = target.value !== 'card'; }
             if (graph?.nodes.find(n => n.id === selected)?.type === 'qq' && target.matches('[data-field="credentialId"],[data-field="targetType"]')) { stopQqBinding(); commitInspector(); renderQqBinding(); }
@@ -1269,9 +1269,10 @@ export function mount(pane, workspace) {
         async activate(url) {
             active = true;
             const requested = new URL(url).searchParams.get('id');
+            if (initialized) await perform(async()=>{ [models,credentials]=await Promise.all([api('/models'),api('/credentials')]); if (workflow) inspector(); });
             if (!initialized) {
                 await perform(async () => {
-                    [capabilities, credentials] = await Promise.all([api('/capabilities'), api('/credentials')]); await loadList();
+                    [capabilities, credentials, models] = await Promise.all([api('/capabilities'), api('/credentials'), api('/models')]); await loadList();
                     initialized = true;
                     if (requested) await load(requested);
                     else { setEditorVisible(false); notice(''); }

@@ -19,7 +19,7 @@ class WorkflowOpenAiTest {
         credentials=new WorkflowCredentials(jdbc,"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=");
         id=text(credentials.create(Map.of("kind","openai","name","OpenAI","value",Map.of("apiKey",KEY))).get("id"));
         http=mock(WorkflowHttp.class); settings=mock(AppSettingService.class); when(settings.getValue(AppSettingService.DEEPSEEK_API_KEY)).thenReturn("");
-        ai=new WorkflowAiSummary(http,settings,credentials); trending=new WorkflowGithubTrending(http,settings,credentials);
+        ai=new WorkflowAiSummary(http,settings,credentials,new WorkflowModels(jdbc,credentials)); trending=new WorkflowGithubTrending(http,settings,credentials,new WorkflowModels(jdbc,credentials));
     }
     @AfterEach void close() { jdbc.execute("SHUTDOWN"); }
     Map<String,Object> config() { return new LinkedHashMap<>(Map.of("provider","openai","credentialId",id)); }
@@ -45,6 +45,25 @@ class WorkflowOpenAiTest {
             assertEquals("developer",object(((List<?>)body.get("messages")).getFirst()).get("role")); assertEquals(Map.of("type","json_object"),body.get("response_format"));
         }
         verify(settings,never()).getValue(AppSettingService.DEEPSEEK_API_KEY);
+    }
+    @Test void bothAiNodesCallTheModelSelectedBySharedProfile() throws Exception {
+        var catalog=new WorkflowModels(jdbc,credentials);
+        var profile=catalog.save(null,Map.of("name","共享 GPT","provider","openai","model","gpt-6-sol","credentialId",id));
+        var config=Map.<String,Object>of("modelId",profile.get("id"));
+        when(http.executeResolved(anyMap(),any(),eq(240000))).thenReturn(completion(analysis(),"stop"));
+        ai.execute(config,input(),new WorkflowPrivacy(),log -> {});
+        var index=Map.of("encoding","base64","content",Base64.getEncoder().encodeToString("[最新一期](docs/issue-421.md)".getBytes(StandardCharsets.UTF_8)));
+        var issue=Map.of("encoding","base64","content",Base64.getEncoder().encodeToString("# 第421期 原文".getBytes(StandardCharsets.UTF_8)));
+        when(http.executeResolved(anyMap(),any())).thenReturn(response(200,index),response(200,issue));
+        when(http.executeResolved(anyMap(),any(),eq(240000))).thenReturn(completion(write(Map.of("summary","概览","highlights",List.of("重点"))),"stop"));
+        trending.executeWeekly(config,new WorkflowPrivacy(),log -> {});
+        var requests=ArgumentCaptor.forClass(Map.class); verify(http,times(2)).executeResolved(requests.capture(),any(),eq(240000));
+        for (var request:requests.getAllValues()) { assertEquals("gpt-6-sol",object(request.get("body")).get("model")); assertEquals(Map.of("Authorization","Bearer "+KEY),request.get("headers")); }
+        catalog.save(text(profile.get("id")),Map.of("name","共享 GPT","provider","openai","model","gpt-6-sol","credentialId",id,"enabled",false));
+        clearInvocations(http);
+        assertThrows(IllegalArgumentException.class,()->ai.execute(config,input(),new WorkflowPrivacy(),log -> {}));
+        assertThrows(IllegalArgumentException.class,()->trending.executeWeekly(config,new WorkflowPrivacy(),log -> {}));
+        verifyNoInteractions(http);
     }
     @Test void weeklyFetchesOriginalIssueAndCanAnalyzeItWithAnExplicitGptModel() throws Exception {
         var index=Map.of("encoding","base64","content",Base64.getEncoder().encodeToString("[最新一期](docs/issue-421.md)".getBytes(StandardCharsets.UTF_8)));

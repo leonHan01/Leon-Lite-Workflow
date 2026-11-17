@@ -268,7 +268,7 @@ QQ 摘要加粗标题、项目名称、榜单概览和用途标签，模型文�
 
 默认仅处理新增文章，链接（忽略追踪参数及片段）和来源条目 ID 共同去重。H2 的 `automation_rss_seen` 按工作流 / 节点保存已处理键，`automation_rss_pending` 暂存本次输出键；只有整个流程成功时才与实例成功状态在同一事务中确认，失败、取消和重启清理本次暂存键，历史去重状态保留。调试预览不读取或写入历史去重状态。含 RSS 的同一工作流禁止重叠运行；其他流程的并发规则保留。外部发送与 H2 无法跨系统原子提交，若对端已收到但本次最终失败，手动重试仍可能重复发送。
 
-「AI 总结」支持任意上游 `items` 数据，模型服务可选 DeepSeek 或 OpenAI GPT；可配置模型名称、标题、总结要求、条数上限、输入文本预算和超时。长输入均分预算截断并在输出标记 `inputTruncated`，不会静默丢弃超出条数上限的数据。空白或无效 JSON 响应在总超时内最多重试一次，不自动重试 HTTP 失败或发送操作；校验模型返回的条目与输入逐项对应，原文链接只来自输入；生成 HTML 时转义内容。输出 `summary`、`articles`、`emailSubject`、`emailBody`、`emailHtml`、`feishuText`、`feishuMarkdown`，邮件 / 飞书节点可用「使用 AI 总结结果」自动填入引用。飞书正文过长时按段落缩短，完整总结保留在运行详情和邮件字段。空输入不调用 AI，邮件和飞书节点也跳过发送。
+「AI 总结」支持任意上游 `items` 数据，模型从高级设置的「模型配置」中选择 DeepSeek 或 OpenAI GPT；可配置标题、总结要求、条数上限、输入文本预算和超时。长输入均分预算截断并在输出标记 `inputTruncated`，不会静默丢弃超出条数上限的数据。空白或无效 JSON 响应在总超时内最多重试一次，不自动重试 HTTP 失败或发送操作；校验模型返回的条目与输入逐项对应，原文链接只来自输入；生成 HTML 时转义内容。输出 `summary`、`articles`、`emailSubject`、`emailBody`、`emailHtml`、`feishuText`、`feishuMarkdown`，邮件 / 飞书节点可用「使用 AI 总结结果」自动填入引用。飞书正文过长时按段落缩短，完整总结保留在运行详情和邮件字段。空输入不调用 AI，邮件和飞书节点也跳过发送。
 
 `scripts/create_rss_workflow.py` 创建「RSS 科技资讯日报」：7 个来源 → AI 精选 10 篇 · 其余速览 → 已有飞书机器人，北京时间每天 09:00，默认最近 7 天、每源最多 5 篇、总计 35 篇。精选节点为 `ai-summary` 的 `mode: top10`，直接接收 RSS 原始文章，复用高级设置的 DeepSeek Key，一次调用评选阅读价值排名、核心看点、精选摘要与其余一句话速览；不足 10 篇全部精选。服务端校验全部文章 index、精选数量和排名范围；允许排名重复，并按排名、原输入顺序稳定排序，链接只来自原始输入，AI 不得替换。默认 `mode: summary` 保持普通汇总行为。
 
@@ -331,6 +331,32 @@ GitHub Trending 页面无法抓取时，节点会尝试使用 GitStock 的公开
 工作台的「Leon Tools Pro」复用插件页面，并通过当前工作台登录会话访问同一个后端的集合、工具箱、便签、待办及 LLM 会话数据。页面通过服务器调用 DeepSeek；回复完整返回后显示。新增便签、添加或完成待办时，沿用插件的飞书通知行为，使用服务端已有机器人设置；未配置时跳过。网页没有 Chrome 扩展的标签页权限，因此当前页面、标签管理和扩展图标缓存不可直接复用；收藏图标使用网站 favicon。工作台不读取插件的浏览器本地缓存，尚未同步到后端的数据需先在插件中同步。聊天和通知接口仅允许工作台会话及受信任来源写入，不将访问令牌保存到网页存储。
 
 
-「AI 总结」（含精选模式）与「科技爱好者周刊分析」的 `provider` 默认 `deepseek`，兼容未配置服务选项的已有流程。DeepSeek 沿用高级设置的 API Key；选择 `openai` 后，点击「添加 OpenAI API Key」创建 `openai` 类型的加密工作流凭据，节点仅保存 `credentialId`。密钥使用现有 AES-GCM 主密钥加密保存，列表和编辑接口均不返回原值，编辑留空保留原值；该凭据不能用于普通 HTTP、QQ、飞书或 SMTP 节点。
+「高级设置 → 模型配置」集中管理模型显示名称、服务、模型名称、OpenAI 凭据和启用状态，工作流页与 AI 节点均提供快捷入口。新增「AI 总结」（含精选模式）和「科技爱好者周刊分析」节点仅保存 `modelId`；运行时读取当前配置。可编辑或停用模型，修改对所有引用它的节点生效，停用或缺失时明确报错，不自动切换模型。模型元数据持久化在 H2 `automation_model`，默认添加 DeepSeek Flash，升级不会覆盖已编辑配置。DeepSeek 模型同样使用下拉选择，提供 `deepseek-flash`（V4.1 Flash）和 `deepseek-v4-pro`（V4 Pro），默认保留 Flash，沿用现有 API Key；OpenAI 可在同页添加加密凭据，多个模型可复用同一凭据。已有节点的 `provider/model/credentialId` 仍兼容，界面显示“现有配置”，手动选取后才迁移为 `modelId`。密钥使用现有 AES-GCM 主密钥加密保存，列表和编辑接口均不返回原值，编辑留空保留原值；该凭据不能用于普通 HTTP、QQ、飞书或 SMTP 节点。
 
-OpenAI 默认模型为 `gpt-6.1-sol`，可在「模型名称」中填写账户可用且支持 Chat Completions / JSON 模式的 GPT 模型。使用固定的官方 `https://api.openai.com/v1/chat/completions`，OpenAI 请求发送 `max_completion_tokens`、JSON 响应格式与 `store:false`，不混入 DeepSeek 的 `thinking` 或 `max_tokens`。来源抓取、输入长度上限、原文链接校验与现有通知字段保持兼容；认证、模型权限或限流失败时显示服务名称和状态，不回显上游错误正文，不自动切换其他服务。参考：[OpenAI Chat Completions](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)、[GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol)。验收：`WorkflowOpenAiTest`、`WorkflowCredentialsTest` 与工作流浏览器回归。
+OpenAI 默认模型为 `gpt-6.1-sol`，在统一模型配置的「模型名称」下拉框中选择 GPT-6.1 Sol、GPT-6 Luna、GPT-6.1 Terra 或 GPT-6 Astra；模型选项随服务切换，已有配置中的其他模型会保留为可选项，避免编辑时被替换。使用固定的官方 `https://api.openai.com/v1/chat/completions`，OpenAI 请求发送 `max_completion_tokens`、JSON 响应格式与 `store:false`，不混入 DeepSeek 的 `thinking` 或 `max_tokens`。来源抓取、输入长度上限、原文链接校验与现有通知字段保持兼容；认证、模型权限或限流失败时显示服务名称和状态，不回显上游错误正文，不自动切换其他服务。参考：[OpenAI Chat Completions](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)、[GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol)。验收：`WorkflowOpenAiTest`、`WorkflowCredentialsTest` 与工作流浏览器回归。
+
+
+## Leon 消息客户端与 Agent 工作台
+
+新增管理页面 `/workspace/agents.html`，从工作空间侧栏的「Agent 工作台」进入。配置显示名称、唯一 `@handle`、OpenAI / DeepSeek、模型 ID、系统提示词、独立 API Key 以及启用状态。配置 API `/api/agent-admin` 只接受管理页面 Cookie，会话写入沿用准确 Origin 和 `X-Requested-With` 校验；客户端 Bearer 不能配置 Agent 或读取提示词、Key。API Key 加密保存在 `chat_agent` 表，复用已有 `LEON_WORKFLOW_CREDENTIAL_KEY`，不得重新生成或轮换原密钥。编辑时 Key 不回显，留空保留；切换 provider 必须填写新 Key。
+
+客户端目录为 `/Users/leon/Documents/ChatGPT/LeonApp`。macOS / Android 支持 Agent 私聊、创建群聊、选择 @Agent 和回复失败重试；页面另提供「聊天测试」。现有单所有者认证不变，私聊和群聊同步到同一令牌下的所有设备，没有新增多用户账号系统。
+
+`GET /api/agents` 返回公开摘要；`GET /api/conversations` 返回会话目录；`POST /api/conversations/direct/{agentId}` 创建或打开 Agent 私聊；`POST /api/conversations/groups` 接收 `{name,agentIds}`。原 `/api/device-messages` 增加 `conversationId`（默认 `shared`）和 `mentionAgentIds`；群聊也识别正文中的独立 `@handle`，只有被 @ 的群成员回复。Agent 回复不递归触发其他 Agent。分页按会话隔离，另返回 `jobs`，显示等待、运行和失败；`POST /api/device-messages/{messageId}/agents/{agentId}/retry` 仅重试失败回复。老消息迁移至 `shared` 并保留 ID、正文及原幂等键。
+
+模型使用当前会话至本次提问的最近 30 条 / 32,000 字符历史及角色提示词，请求固定官方 HTTPS Chat Completions 接口，最多输出 2048 tokens / 8000 字符，不执行工具，不跟随重定向。最多 4 个会话并行、256 个未完成任务，同会话按顺序执行。未开始的任务重启后继续，正在执行的任务重启后转失败，避免自动重复付费调用。超时后的手动重试可能产生新的模型费用。回复完成后一次性展示。
+
+Agent 表与任务表随服务启动自动创建，不需要清空数据库。部署沿用 `scripts/deploy.py`；现有代理需支持 `/api/agents`、`/api/conversations`、`/api/device-messages`、`/api/agent-admin` 并保留认证头与 Cookie；`/workspace/agents.*` 沿用 workspace 的登录保护。本次开发未部署公网。
+
+验证：`mvn -Dtest=AgentChatIntegrationTest,OfficialAgentModelClientTest,DeviceMessageIntegrationTest,DeviceMessagePersistenceTest,ApiAuthenticationIntegrationTest test`（Java 21）。模型适配器使用模拟 HTTP 响应验证，未使用真实 API Key 联调。
+
+
+### Agent 头像配置与上传
+
+Agent 工作台增加头像选择和上传。内置用户提供的 30 张原始 PNG，位于 `src/main/resources/agent-avatars/`，保留透明度与原始比例。`chat_agent.avatar_id` 启动时自动新增，旧 Agent 默认 `alfred`，不修改已有密钥、模型配置和消息。
+
+`GET /api/agent-avatars` 返回头像元数据；`GET /api/agent-avatars/{id}` 沿用 Cookie / Bearer 认证返回 PNG，并使用私有缓存。`POST /api/agent-admin/avatars` 仅接受管理 Cookie 和准确 Origin / `X-Requested-With`，multipart 字段为 `file`。真实格式只允许 PNG / JPEG，最多 5 MB，单边不超过 4096 像素；解码后等比居中生成 512×512 PNG，保留透明背景。不会信任文件扩展名或拼接原始文件路径。
+
+自定义头像以内容 SHA-256 标识去重，PNG 字节持久化在 H2 的 `chat_agent_avatar` 表中，随既有数据库备份；不依赖临时上传目录，无需新增服务端目录或改变部署端口。最多保存 1000 张自定义头像。Agent 管理请求可附带 `avatarId`，只接受预设或已上传的 ID，不接受外部 URL；省略时旧 Agent 保留选择。公开摘要附带 `avatarId`，Mac / Android 使用自身 Bearer 请求加载图片，不把令牌加入 URL。
+
+验证：`mvn -Dtest=AgentAvatarIntegrationTest,AgentChatIntegrationTest,OfficialAgentModelClientTest,DeviceMessageIntegrationTest,DeviceMessagePersistenceTest,ApiAuthenticationIntegrationTest test`（Java 21）。28 项测试通过；本次未部署公网服务。

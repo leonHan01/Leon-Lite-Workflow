@@ -353,3 +353,22 @@
 .workspace-tools-pro-frame { min-height:calc(100dvh - 76px); padding:20px 24px; }
 .workspace-tools-pro-panel { width:100%; height:calc(100dvh - 116px); min-height:550px; border:1px solid #dfe7f3; border-radius:12px; overflow:hidden; }
 @media(max-width:700px) { .workspace-tools-pro-frame { padding:12px; }.workspace-tools-pro-panel { min-height:500px; height:calc(100dvh - 125px); } }
+
+/* Shared AI model catalog in advanced settings. */
+.workspace-app .model-settings { margin-bottom:24px; }
+.workspace-app .model-settings .advanced-card-body { width:100%; min-width:0; }
+.workspace-app .model-row { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:14px 0; border-bottom:1px solid #e5e9e1; }
+.workspace-app .model-row div { min-width:0; overflow-wrap:anywhere; }
+.workspace-app .model-row strong { font-size:14px; }
+.workspace-app .model-row small { display:block; margin-top:5px; color:#7d8984; font-size:12px; }
+.workspace-app .model-form { display:grid; gap:14px; margin:22px 0; }
+.workspace-app .model-form h3 { margin:0; font-size:15px; }
+.workspace-app .model-form label { display:grid; gap:7px; font-size:12px; color:#60716a; }
+.workspace-app .model-form label[hidden] { display:none; }
+.workspace-app .model-form input:not([type=checkbox]), .workspace-app .model-form select { box-sizing:border-box; width:100%; min-width:0; height:38px; padding:7px 11px; border:1px solid #d8dfd9; border-radius:7px; background:#fff; font-size:13px; }
+.workspace-app .model-form .model-checkbox { display:flex; align-items:center; }
+.workspace-app .model-actions { display:flex; gap:10px; flex-wrap:wrap; }
+.workspace-app .model-settings button { padding:8px 13px; border:1px solid #d8dfd9; border-radius:7px; cursor:pointer; }
+.workspace-app .model-settings button:disabled { opacity:.5; cursor:wait; }
+.workspace-app .model-key-settings { margin-top:18px; padding-top:18px; border-top:1px solid #e5e9e1; }
+.workspace-app .model-key-settings summary { cursor:pointer; font-size:13px; }
