@@ -1,6 +1,9 @@
 package com.leon.workflow.automation;
 
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.dao.DuplicateKeyException;
+import java.math.BigDecimal;
+import java.time.Instant;
 import org.springframework.stereotype.Service;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
@@ -14,11 +17,54 @@ public class WorkflowModels {
     private final WorkflowCredentials credentials;
     public WorkflowModels(JdbcTemplate jdbc, WorkflowCredentials credentials) { this.jdbc=jdbc; this.credentials=credentials; }
     public List<Map<String,Object>> list() {
-        return jdbc.query("SELECT id,name,provider,model,credential_id,enabled FROM automation_model ORDER BY created_at,id", (rs,i) -> {
+        return jdbc.query("""
+                SELECT m.id,m.name,m.provider,m.model,m.credential_id,m.enabled,
+                  COALESCE(u.input_tokens,0) input_tokens, COALESCE(u.output_tokens,0) output_tokens,
+                  COALESCE(u.total_tokens,0) total_tokens, COALESCE(u.reported_calls,0) reported_calls,
+                  COALESCE(u.unreported_calls,0) unreported_calls, u.first_recorded_at,u.last_recorded_at
+                FROM automation_model m LEFT JOIN automation_model_usage u ON u.provider=m.provider AND u.model=m.model
+                ORDER BY m.created_at,m.id
+                """, (rs,i) -> {
             var row=new LinkedHashMap<String,Object>();
             for (String key:List.of("id","name","provider","model")) row.put(key,rs.getString(key));
-            row.put("credentialId",Objects.requireNonNullElse(rs.getString("credential_id"),"")); row.put("enabled",rs.getBoolean("enabled")); return row;
+            row.put("credentialId",Objects.requireNonNullElse(rs.getString("credential_id"),"")); row.put("enabled",rs.getBoolean("enabled"));
+            var usage=new LinkedHashMap<String,Object>();
+            usage.put("inputTokens",rs.getLong("input_tokens")); usage.put("outputTokens",rs.getLong("output_tokens")); usage.put("totalTokens",rs.getLong("total_tokens"));
+            usage.put("reportedCalls",rs.getLong("reported_calls")); usage.put("unreportedCalls",rs.getLong("unreported_calls"));
+            for (String field:List.of("first_recorded_at","last_recorded_at")) usage.put(field.equals("first_recorded_at")?"firstRecordedAt":"lastRecordedAt",
+                    rs.getObject(field)==null?null:Instant.ofEpochMilli(rs.getLong(field)).toString());
+            row.put("usage",usage); return row;
         });
+    }
+    /** Account each HTTP response before content validation; cached/reasoning details are already in the totals. */
+    public void recordUsage(String provider, String model, Object rawUsage) {
+        if (!Set.of("deepseek","openai").contains(provider) || !model.matches("[A-Za-z0-9_.:-]{1,100}")) throw new IllegalArgumentException("模型用量标识无效");
+        var usage=rawUsage instanceof Map<?,?> map?map:Map.of();
+        Long input=tokenCount(usage.get("prompt_tokens")), output=tokenCount(usage.get("completion_tokens"));
+        Long total=tokenCount(usage.get("total_tokens"));
+        boolean reported=input!=null && output!=null;
+        if (reported) {
+            try { long sum=Math.addExact(input,output); if (!usage.containsKey("total_tokens")) total=sum; reported=total!=null && total==sum; }
+            catch (ArithmeticException invalid) { reported=false; }
+        }
+        long in=reported?input:0, out=reported?output:0, all=reported?total:0, calls=reported?1:0, missing=reported?0:1, now=System.currentTimeMillis();
+        if (incrementUsage(provider,model,in,out,all,calls,missing,now)==0) {
+            try { jdbc.update("INSERT INTO automation_model_usage(provider,model,input_tokens,output_tokens,total_tokens,reported_calls,unreported_calls,first_recorded_at,last_recorded_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                    provider,model,in,out,all,calls,missing,now,now); }
+            catch (DuplicateKeyException concurrentInsert) { incrementUsage(provider,model,in,out,all,calls,missing,now); }
+        }
+    }
+    private int incrementUsage(String provider,String model,long input,long output,long total,long calls,long missing,long now) {
+        return jdbc.update("""
+                UPDATE automation_model_usage SET input_tokens=input_tokens+?,output_tokens=output_tokens+?,total_tokens=total_tokens+?,
+                  reported_calls=reported_calls+?,unreported_calls=unreported_calls+?,
+                  first_recorded_at=LEAST(first_recorded_at,?),last_recorded_at=GREATEST(last_recorded_at,?) WHERE provider=? AND model=?
+                """,input,output,total,calls,missing,now,now,provider,model);
+    }
+    private static Long tokenCount(Object value) {
+        if (!(value instanceof Number number)) return null;
+        try { long count=new BigDecimal(number.toString()).longValueExact(); return count<0?null:count; }
+        catch (ArithmeticException | NumberFormatException invalid) { return null; }
     }
     public Map<String,Object> save(String id, Map<String,Object> body) {
         String name=required(body.get("name"),"模型显示名称需要 1–100 个字符",100);

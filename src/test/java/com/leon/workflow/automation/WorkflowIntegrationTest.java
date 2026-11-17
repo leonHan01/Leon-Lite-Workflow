@@ -53,6 +53,7 @@ class WorkflowIntegrationTest {
     @AfterAll static void stop() { server.stop(0); }
     @Autowired WebApplicationContext context;
     @Autowired WorkflowStore store;
+    @Autowired WorkflowModels models;
     @Autowired WorkflowEngine engine;
     @Autowired WorkflowHttp http;
     @Autowired WorkflowSchedules schedules;
@@ -94,6 +95,21 @@ class WorkflowIntegrationTest {
         var updated=request(put("/api/workflows/models/"+id).content(write(Map.of("name","集成模型","provider","deepseek","model","deepseek-chat","enabled",false))));
         assertEquals(false,updated.get("enabled"));
         jdbc.update("DELETE FROM automation_model WHERE id=?",id);
+    }
+    @Test void authenticatedModelListShowsReadOnlyPersistentUsageTotals() throws Exception {
+        var profile=request(post("/api/workflows/models").content(write(Map.of("name","用量接口模型","provider","deepseek","model","test-token-usage"))));
+        String id=text(profile.get("id"));
+        try {
+            models.recordUsage("deepseek","test-token-usage",Map.of("prompt_tokens",1000,"completion_tokens",50,"total_tokens",1050));
+            mvc.perform(get("/api/workflows/models").cookie(cookie)).andExpect(status().isOk())
+                    .andExpect(jsonPath("$[?(@.id == '"+id+"')].usage.totalTokens").value(1050))
+                    .andExpect(jsonPath("$[?(@.id == '"+id+"')].usage.inputTokens").value(1000));
+            var updated=request(put("/api/workflows/models/"+id).content(write(Map.of("name","用量不随编辑清零","provider","deepseek","model","test-token-usage","usage",Map.of("totalTokens",99999)))));
+            assertEquals(1050,object(updated.get("usage")).get("totalTokens"));
+        } finally {
+            jdbc.update("DELETE FROM automation_model WHERE id=?",id);
+            jdbc.update("DELETE FROM automation_model_usage WHERE provider='deepseek' AND model='test-token-usage'");
+        }
     }
     @Test void newWorkflowsContainProtectedTerminalsAndRejectMissingOrDuplicateTerminalsOnSave() throws Exception {
         var workflow = request(post("/api/workflows").content(write(Map.of("name", "起止节点"))));

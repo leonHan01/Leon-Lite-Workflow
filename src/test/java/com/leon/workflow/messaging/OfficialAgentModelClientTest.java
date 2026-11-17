@@ -2,6 +2,7 @@ package com.leon.workflow.messaging;
 
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.ObjectMapper;
+import com.leon.workflow.automation.WorkflowModels;
 import java.net.http.*;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -20,7 +21,7 @@ class OfficialAgentModelClientTest {
         for(String provider:List.of("openai","deepseek")) {
             HttpClient http=mock(HttpClient.class);HttpResponse<byte[]> response=mock(HttpResponse.class);
             when(response.statusCode()).thenReturn(200);
-            when(response.body()).thenReturn("{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":\"answer test-secret\"}}]}".getBytes(StandardCharsets.UTF_8));
+            when(response.body()).thenReturn("{\"usage\":{\"prompt_tokens\":20,\"completion_tokens\":5,\"total_tokens\":25},\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":\"answer test-secret\"}}]}".getBytes(StandardCharsets.UTF_8));
             when(http.send(any(HttpRequest.class),any(HttpResponse.BodyHandler.class))).thenAnswer(call->{
                 HttpRequest request=call.getArgument(0);
                 assertEquals(provider.equals("openai")?"https://api.openai.com/v1/chat/completions":"https://api.deepseek.com/chat/completions",request.uri().toString());
@@ -31,9 +32,10 @@ class OfficialAgentModelClientTest {
                 else {assertEquals(2048,body.path("max_tokens").asInt());assertEquals("disabled",body.path("thinking").path("type").asText());}
                 return response;
             });
-            var client=new OfficialAgentModelClient(json,http);
+            var models=mock(WorkflowModels.class); var client=new OfficialAgentModelClient(json,http,models);
             var agent=new AgentRegistry.Agent("id","name","handle",provider,"test-model","",true,true,1);
             assertEquals("answer [已隐藏凭据]",client.complete(agent,"test-secret",List.of(Map.of("role","user","content","question"))));
+            verify(models).recordUsage(provider,"test-model",Map.of("prompt_tokens",20,"completion_tokens",5,"total_tokens",25));
         }
     }
     @SuppressWarnings("unchecked")
@@ -41,10 +43,11 @@ class OfficialAgentModelClientTest {
         HttpClient http=mock(HttpClient.class);HttpResponse<byte[]> response=mock(HttpResponse.class);
         when(http.send(any(HttpRequest.class),any(HttpResponse.BodyHandler.class))).thenReturn(response);
         when(response.statusCode()).thenReturn(401);when(response.body()).thenReturn("echo test-secret".getBytes(StandardCharsets.UTF_8));
-        var client=new OfficialAgentModelClient(json,http);var agent=new AgentRegistry.Agent("id","name","handle","openai","test-model","",true,true,1);
+        var models=mock(WorkflowModels.class); var client=new OfficialAgentModelClient(json,http,models);var agent=new AgentRegistry.Agent("id","name","handle","openai","test-model","",true,true,1);
         var error=assertThrows(AgentModelClient.Failure.class,()->client.complete(agent,"test-secret",List.of()));assertFalse(error.getMessage().contains("test-secret"));
         when(response.statusCode()).thenReturn(200);when(response.body()).thenReturn("{\"choices\":[{\"finish_reason\":\"length\",\"message\":{\"content\":\"partial\"}}]}".getBytes(StandardCharsets.UTF_8));
         assertThrows(AgentModelClient.Failure.class,()->client.complete(agent,"test-secret",List.of()));
+        verify(models).recordUsage("openai","test-model",null);
     }
     @Test void boundsResponseBody() {
         var subscriber=new OfficialAgentModelClient.LimitedBody();Flow.Subscription subscription=mock(Flow.Subscription.class);

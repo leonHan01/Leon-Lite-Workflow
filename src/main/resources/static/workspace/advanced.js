@@ -1,6 +1,6 @@
 export function mount(pane) {
     const button = pane.querySelector('.advanced-download');
-    const status = pane.querySelector('.advanced-status');
+    const status = button.closest('section').querySelector('.advanced-status');
     button.addEventListener('click', async () => {
         button.disabled = true;
         status.textContent = '正在生成备份…';
@@ -56,8 +56,14 @@ function mountModels(pane) {
         if(selected && !choices.some(c=>c.id===selected)) form.elements.credentialId.add(new Option('原凭据已不存在，请重新选择',selected));
         form.elements.credentialId.value=selected;
     }
+    const count=value=>new Intl.NumberFormat('zh-CN').format(Number.isFinite(Number(value)) && Number(value)>=0?Number(value):0);
+    function usageMarkup(usage={}) {
+        const since=usage.firstRecordedAt?`自 ${new Date(usage.firstRecordedAt).toLocaleString('zh-CN',{hour12:false})} 起 · `:'';
+        return `<dl class="model-usage" aria-label="累计 Token 用量"><div><dt>输入 Token</dt><dd data-usage="input">${count(usage.inputTokens)}</dd></div><div><dt>输出 Token</dt><dd data-usage="output">${count(usage.outputTokens)}</dd></div><div><dt>累计 Token</dt><dd data-usage="total">${count(usage.totalTokens)}</dd></div></dl>`
+            + `<small class="model-usage-note">${escape(since)}已统计 ${count(usage.reportedCalls)} 次${usage.unreportedCalls?` · ${count(usage.unreportedCalls)} 次响应未返回完整用量`:''}</small>`;
+    }
     function render() {
-        $('[data-model-list]').innerHTML=models.length?models.map(m=>`<div class="model-row"><div><strong>${escape(m.name)}</strong><small>${m.provider==='openai'?'OpenAI':'DeepSeek'} · ${escape(m.model)} · ${m.enabled?'已启用':'已停用'}</small></div><button type="button" data-model-edit="${escape(m.id)}">编辑</button></div>`).join(''):'<p>尚未配置模型</p>';
+        $('[data-model-list]').innerHTML=models.length?models.map(m=>`<div class="model-row"><div><strong>${escape(m.name)}</strong><small>${m.provider==='openai'?'OpenAI':'DeepSeek'} · ${escape(m.model)} · ${m.enabled?'已启用':'已停用'}</small>${usageMarkup(m.usage)}</div><button type="button" data-model-edit="${escape(m.id)}">编辑</button></div>`).join(''):'<p>尚未配置模型</p>';
         credentialOptions();
     }
     function reset() { editing=null; form.reset(); modelOptions(); $('[data-model-form-title]').textContent='添加模型'; providerFields(); }
@@ -71,6 +77,7 @@ function mountModels(pane) {
         modelOptions(); providerFields();
     });
     $('[data-model-reset]').addEventListener('click',reset);
+    $('[data-model-refresh]').addEventListener('click',()=>perform(async()=>{models=await api('/models');render();status.textContent='用量已刷新。';}));
     $('[data-model-list]').addEventListener('click',event=>{
         if(busy) return;
         const button=event.target.closest('[data-model-edit]'); if(!button) return;

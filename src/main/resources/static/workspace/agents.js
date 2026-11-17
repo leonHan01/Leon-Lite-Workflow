@@ -71,7 +71,7 @@ function renderAgents() {
         $('agentList').append(card);
         if (a.enabled) { const directButton = button(`${a.name} ↗`, async () => { try { const c = await api(`/api/conversations/direct/${a.id}`, { method: 'POST', body: '{}' }); await refreshConversations(); selectConversation(c.id); } catch (e) { notice(e.message, true); } }, 'conversation avatar-row'); directButton.prepend(avatarImage(a.avatarId)); $('directList').append(directButton); }
     }
-    renderMentions();
+    renderMentions(); updateMentionCandidates();
 }
 async function loadAgents() {
     const data = await api('/api/agent-admin'); agents = data.agents; avatarCatalog = data.avatars || []; selectAvatar(selectedAvatarId);
@@ -102,12 +102,75 @@ function renderConversations() {
     $('conversationList').replaceChildren();
     for (const c of conversations) $('conversationList').append(button((c.kind === 'direct' ? '◉ ' : '# ') + c.name, () => selectConversation(c.id), 'conversation' + (current === c.id ? ' active' : '')));
 }
+let mentionCandidates = [], mentionToken = null, mentionIndex = 0, mentionKey = '', dismissedMentionKey = '', mentionComposing = false;
+function hideMentionCandidates(dismiss = false) {
+    if (dismiss) dismissedMentionKey = mentionKey;
+    $('mentionSuggestions').hidden = true; $('composer').removeAttribute('aria-activedescendant');
+    mentionCandidates = []; mentionToken = null;
+}
+function eligibleMentionAgents() {
+    const room = conversations.find(c => c.id === current);
+    return room?.kind === 'group' ? agents.filter(a => a.enabled && room.agentIds.includes(a.id)) : [];
+}
+function updateMentionCandidates() {
+    const input = $('composer');
+    const token = !mentionComposing && document.activeElement === input && activeTab === 'chat' ? LeonMentions.token(input.value, input.selectionStart, input.selectionEnd) : null;
+    const key = token ? `${current}:${token.start}:${token.end}:${input.selectionStart}:${token.query}` : '';
+    const room = conversations.find(c => c.id === current);
+    if (!token || room?.kind !== 'group' || key === dismissedMentionKey) { hideMentionCandidates(); if (!key) { dismissedMentionKey = ''; mentionKey = ''; mentionIndex = 0; } return; }
+    if (key !== mentionKey) mentionIndex = 0;
+    mentionKey = key; mentionToken = token;
+    mentionCandidates = eligibleMentionAgents().filter(a => LeonMentions.matches(a, token.query)).slice(0, 8);
+    mentionIndex = Math.min(mentionIndex, Math.max(0, mentionCandidates.length - 1));
+    $('mentionOptions').replaceChildren();
+    if (!mentionCandidates.length) $('mentionOptions').append(node('p', '没有匹配的 Agent', 'mention-empty'));
+    mentionCandidates.forEach((agent, index) => {
+        const option = button('', () => chooseMentionCandidate(index), 'mention-candidate');
+        option.id = 'mention-candidate-' + index; option.setAttribute('role', 'option'); option.tabIndex = -1;
+        option.setAttribute('aria-selected', String(index === mentionIndex));
+        option.addEventListener('mousedown', event => event.preventDefault());
+        option.addEventListener('mouseenter', () => { mentionIndex = index; highlightMentionCandidate(); });
+        const label = node('div'); label.append(node('strong', agent.name), node('small', '@' + agent.handle));
+        option.append(avatarImage(agent.avatarId), label); $('mentionOptions').append(option);
+    });
+    $('mentionSuggestions').hidden = false; highlightMentionCandidate();
+}
+function highlightMentionCandidate() {
+    [...$('mentionOptions').children].forEach((option, index) => option.setAttribute('aria-selected', String(index === mentionIndex)));
+    if (mentionCandidates.length) $('composer').setAttribute('aria-activedescendant', 'mention-candidate-' + mentionIndex);
+    else $('composer').removeAttribute('aria-activedescendant');
+}
+function chooseMentionCandidate(index) {
+    const agent = mentionCandidates[index], input = $('composer');
+    const live = LeonMentions.token(input.value, input.selectionStart, input.selectionEnd);
+    if (!agent || !live || !eligibleMentionAgents().some(a => a.id === agent.id)) return;
+    const result = LeonMentions.replace(input.value, live, agent.handle);
+    input.value = result.text; input.focus(); input.setSelectionRange(result.caret, result.caret);
+    hideMentionCandidates(); dismissedMentionKey = ''; mentionKey = '';
+}
+$('composer').addEventListener('input', updateMentionCandidates);
+$('composer').addEventListener('click', updateMentionCandidates);
+$('composer').addEventListener('focus', updateMentionCandidates);
+$('composer').addEventListener('blur', () => hideMentionCandidates());
+$('composer').addEventListener('compositionstart', () => { mentionComposing = true; hideMentionCandidates(); });
+$('composer').addEventListener('compositionend', () => { mentionComposing = false; requestAnimationFrame(updateMentionCandidates); });
+document.addEventListener('selectionchange', () => { if (document.activeElement === $('composer')) updateMentionCandidates(); });
+$('composer').addEventListener('keydown', event => {
+    if (event.isComposing || mentionComposing || $('mentionSuggestions').hidden) return;
+    if (event.key === 'Escape') { event.preventDefault(); hideMentionCandidates(true); return; }
+    if (!mentionCandidates.length || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault(); mentionIndex = (mentionIndex + (event.key === 'ArrowDown' ? 1 : -1) + mentionCandidates.length) % mentionCandidates.length; highlightMentionCandidate();
+        $('mentionOptions').children[mentionIndex]?.scrollIntoView({ block: 'nearest' });
+    } else if (event.key === 'Enter' || event.key === 'Tab') { event.preventDefault(); chooseMentionCandidate(mentionIndex); }
+});
 function renderMentions() {
     $('mentionBar').replaceChildren(); const c = conversations.find(c => c.id === current);
     if (!c || c.kind === 'direct') return;
     for (const a of agents.filter(a => a.enabled && c.agentIds.includes(a.id))) $('mentionBar').append(button(`@${a.handle} · ${a.name}`, () => { $('composer').value += ($('composer').value && !/\s$/.test($('composer').value) ? ' ' : '') + `@${a.handle} `; $('composer').focus(); }));
 }
 function selectConversation(id) {
+    hideMentionCandidates(); dismissedMentionKey = ''; mentionKey = '';
     current = id; generation++; loading = false; rows = []; more = false; $('composer').value = ''; clearTimeout(timer);
     const c = conversations.find(c => c.id === id); $('chatTitle').textContent = c?.name || '会话';
     $('chatHint').textContent = c?.kind === 'direct' ? '直接发送消息，Agent 将使用此私聊的上下文回复。' : '只有被 @ 的 Agent 会回复；普通消息只在设备间同步。';
@@ -155,7 +218,7 @@ $('sendForm').onsubmit = async event => {
     event.preventDefault(); const text = $('composer').value.trim(); if (!text) return;
     $('sendMessage').disabled = true; const conversationId = current;
     if (!outgoing || outgoing.text !== text || outgoing.conversationId !== current) outgoing = { clientMessageId: crypto.randomUUID(), deviceId, sender: '网页', platform: 'macos', text, conversationId: current, mentionAgentIds: [] };
-    try { await api('/api/device-messages', { method: 'POST', body: JSON.stringify(outgoing) }); if (current === conversationId) $('composer').value = ''; outgoing = null; poll(); }
+    try { await api('/api/device-messages', { method: 'POST', body: JSON.stringify(outgoing) }); if (current === conversationId) { $('composer').value = ''; hideMentionCandidates(); } outgoing = null; poll(); }
     catch (e) { notice(e.message + '；可再次点击发送，消息标识将复用。', true); }
     finally { $('sendMessage').disabled = false; }
 };

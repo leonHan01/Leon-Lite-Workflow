@@ -372,3 +372,11 @@
 .workspace-app .model-settings button:disabled { opacity:.5; cursor:wait; }
 .workspace-app .model-key-settings { margin-top:18px; padding-top:18px; border-top:1px solid #e5e9e1; }
 .workspace-app .model-key-settings summary { cursor:pointer; font-size:13px; }
+
+.workspace-app .model-row > div { flex:1; }
+.workspace-app .model-row > button { flex:none; }
+.workspace-app .model-usage { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; margin:14px 0 8px; }
+.workspace-app .model-usage dt { color:#7d8984; font-size:11px; }
+.workspace-app .model-usage dd { margin:5px 0 0; color:#35453c; font-size:16px; font-weight:600; font-variant-numeric:tabular-nums; }
+.workspace-app .model-usage div:last-child dd { color:#4669e8; }
+.workspace-app .model-row .model-usage-note { font-size:11px; line-height:1.6; }

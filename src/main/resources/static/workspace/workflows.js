@@ -267,6 +267,7 @@ export function mount(pane, workspace) {
             node.config.timeoutMs = Number(get('timeoutMs'));
             commitAiModel(node, get);
         } else if (node.type === 'github-trending') {
+            commitAiModel(node, get);
             node.config.sourceUrl = get('sourceUrl');
             node.config.maxProjects = Number(get('maxProjects')); node.config.timeoutMs = Number(get('timeoutMs'));
         }
@@ -519,12 +520,12 @@ export function mount(pane, workspace) {
             content += '<div class="wf-trending-output"><h3>后续节点可引用</h3>' + [['整体总结', 'summary'], ['飞书卡片正文', 'feishuMarkdown'], ['飞书纯文本', 'feishuText'], ['邮件主题', 'emailSubject'], ['邮件正文', 'emailBody'], ['邮件 HTML 正文', 'emailHtml'], ...(c.mode === 'top10' ? [['QQ Markdown 消息列表', 'qqMessages']] : [])].map(([title, key]) => field(title, `<input readonly value="{{ input.items[0].json.${key} }}" aria-label="${title}引用">`)).join('') + '</div>';
         }
         if (node.type === 'github-trending') {
+            content += aiModelFields(c);
             content += field('榜单周期', select('sourceUrl', trendingSource(c.sourceUrl), trendingSources));
             content += field('榜单地址', `<input value="${esc(trendingSource(c.sourceUrl))}" readonly data-trending-url aria-label="Trending 榜单地址">`);
             content += field('最多分析项目数（1–25）', inputField('maxProjects', c.maxProjects ?? 25, 'type="number" min="1" max="25" step="1"'));
             content += field('总超时（毫秒，1000–240000）', inputField('timeoutMs', c.timeoutMs || 180000, 'type="number" min="1000" max="240000" step="1000"'));
-            content += '<p class="wf-help">服务器抓取榜单，再由 DeepSeek 逐个分析项目用途和使用场景。复用高级设置中的 DeepSeek API Key；此节点只生成内容。</p>';
-            if (capabilities.githubTrendingReady === false) content += '<p class="wf-run-error">请先到高级设置填写 DeepSeek API Key。</p>';
+            content += '<p class="wf-help">服务器抓取榜单，再由所选模型逐个分析项目用途和使用场景；此节点只生成内容。</p>';
             content += '<div class="wf-trending-output"><h3>后续节点可引用</h3>' + [
                 ['QQ 消息摘要（Markdown）', 'qqMarkdown'], ['QQ 消息摘要（纯文本）', 'qqText'], ['飞书正文（Markdown 卡片）', 'feishuMarkdown'], ['飞书正文（纯文本）', 'feishuText'], ['邮件主题', 'emailSubject'], ['邮件正文（纯文本）', 'emailBody'], ['邮件正文（HTML）', 'emailHtml'],
             ].map(([title, key]) => field(title, `<input readonly value="{{ input.items[0].json.${key} }}" aria-label="${title}引用">`)).join('') + '<p class="wf-help">将出口连接到 QQ、飞书或邮件节点，在后续节点点击“使用 Trending 分析结果”即可填入引用。QQ Markdown 摘要加粗标题、项目名称和重点内容，控制在单条消息内。</p></div>';
@@ -744,7 +745,7 @@ export function mount(pane, workspace) {
             : { left: '{{ input.items[0].json.amount }}', operator: 'gte', right: 100 };
         const node = { id, type, name: kind === 'groovy' ? 'Groovy 脚本' : kind === 'javascript' ? 'JavaScript 脚本' : labels[type], config,
             position: position || { x: Math.min(MAX_POSITION - 300, (parent?.position?.x || 60) + 280), y: parent?.position?.y || 140 } };
-        if (['ai-summary','tech-weekly'].includes(node.type)) { node.config.modelId=models.find(m=>m.enabled)?.id || ''; for (const key of ['provider','model','credentialId']) delete node.config[key]; }
+        if (['ai-summary','tech-weekly','github-trending'].includes(node.type)) { node.config.modelId=models.find(m=>m.enabled)?.id || ''; for (const key of ['provider','model','credentialId']) delete node.config[key]; }
         graph.nodes.push(node);
         if (parent) {
             const branch = (parent.type === 'if' ? ['true', 'false'] : ['']).find(b => !graph.edges.some(e => e.source === parent.id && (e.branch || '') === b && e.target !== end?.id));
@@ -919,7 +920,7 @@ export function mount(pane, workspace) {
             const heading = `<div class="wf-run-summary"><span>草稿节点调试 · ${esc(node.name)}</span></div>`;
             try {
                 commitInspector();
-                if (node.type === 'github-trending') notice('正在抓取 GitHub Trending，并由 DeepSeek 分析项目，请稍候…');
+                if (node.type === 'github-trending') notice('正在抓取 GitHub Trending，并由所选模型分析项目，请稍候…');
                 const result = await send('/test-node', { node, input: runInput() });
                 const report = ['github-trending','tech-weekly','ai-summary'].includes(node.type) ? result.output?.items?.[0]?.json : null;
                 const preview = report ? `${Array.isArray(report.qqMessages) ? `<h3>QQ Markdown 分条预览（${report.qqMessages.length} 条）</h3>${report.qqMessages.map((text, i) => `<h4>第 ${i + 1} 条</h4><pre data-qq-preview>${esc(text)}</pre>`).join('')}` : ''}${(report.qqMarkdown || report.qqText) ? `<h3>QQ Markdown 源码预览</h3><pre data-qq-preview>${esc(report.qqMarkdown || report.qqText)}</pre>` : ''}<h3>飞书消息预览</h3><pre>${esc(report.feishuMarkdown || report.feishuText)}</pre><h3>邮件主题</h3><p>${esc(report.emailSubject)}</p><h3>邮件正文预览</h3><pre>${esc(report.emailBody)}</pre>` : '';

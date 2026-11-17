@@ -1,6 +1,7 @@
 package com.leon.workflow.messaging;
 
 import org.springframework.stereotype.Component;
+import com.leon.workflow.automation.WorkflowModels;
 import org.springframework.beans.factory.annotation.Autowired;
 import tools.jackson.databind.ObjectMapper;
 import java.net.URI;
@@ -15,10 +16,11 @@ import java.util.concurrent.Flow;
 
 @Component
 public class OfficialAgentModelClient implements AgentModelClient {
+    private final WorkflowModels models;
     private final ObjectMapper json;
     private final HttpClient http;
-    @Autowired public OfficialAgentModelClient(ObjectMapper json) { this(json,HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).followRedirects(HttpClient.Redirect.NEVER).build()); }
-    OfficialAgentModelClient(ObjectMapper json,HttpClient http) { this.json=json;this.http=http; }
+    @Autowired public OfficialAgentModelClient(ObjectMapper json,WorkflowModels models) { this(json,HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).followRedirects(HttpClient.Redirect.NEVER).build(),models); }
+    OfficialAgentModelClient(ObjectMapper json,HttpClient http,WorkflowModels models) { this.json=json;this.http=http;this.models=models; }
     @Override public String complete(AgentRegistry.Agent agent,String key,List<Map<String,String>> messages) throws Exception {
         boolean openai=agent.provider().equals("openai");
         var body=new LinkedHashMap<String,Object>(); body.put("model",agent.model()); body.put("messages",messages); body.put("stream",false);
@@ -35,7 +37,9 @@ public class OfficialAgentModelClient implements AgentModelClient {
             case 429 -> "模型限流或额度不足，请稍后重试";
             default -> "模型服务请求失败（HTTP "+response.statusCode()+"）";
         });
-        var choice=json.readTree(response.body()).path("choices").path(0);
+        var payload=json.readTree(response.body());
+        models.recordUsage(agent.provider(),agent.model(),payload.has("usage")?json.convertValue(payload.get("usage"),Object.class):null);
+        var choice=payload.path("choices").path(0);
         if (!"stop".equals(choice.path("finish_reason").asText())) throw new AgentModelClient.Failure("模型未生成完整回复，请缩短问题后重试");
         String result=choice.path("message").path("content").asText("").strip();
         if (result.isEmpty() || result.length()>8000) throw new AgentModelClient.Failure("模型回复为空或超过 8000 字符，请缩短问题后重试");

@@ -185,6 +185,8 @@ const server = http.createServer((req, res) => {
   assert.equal(await page.getByRole('button',{name:'刷新界面，加载最新功能',exact:true}).isVisible(),true,'部署成功后应提供完整刷新入口以加载最新菜单');
   assert.equal(await page.locator('.monitor-deployment-scroll').isVisible(),true,'自动刷新不应收起已展开的记录');
   await page.setViewportSize({width:800,height:900});
+  // Sidebar and chart resize handlers settle on the next frames after the viewport changes.
+  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'部署列表使页面横向溢出');
   await page.setViewportSize({width:1440,height:1000});
   const chartData = await page.evaluate(() => Object.fromEntries(['cpu', 'memory', 'disk', 'pv'].map(name => {

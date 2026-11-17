@@ -12,7 +12,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import static com.leon.workflow.automation.WorkflowJson.*;
 
-/** Fetches the public Trending list and asks DeepSeek to analyze only the extracted repository data. */
+/** Fetches the public Trending list and asks the selected model to analyze only the extracted repository data. */
 @Component
 public class WorkflowGithubTrending {
     static final String SOURCE = "https://github.com/trending";
@@ -54,17 +54,14 @@ public class WorkflowGithubTrending {
         sourceUrl(config);
         integer(config.get("maxProjects"), 25, 1, 25);
         integer(config.get("timeoutMs"), DEFAULT_TIMEOUT, 1000, MAX_TIMEOUT);
-        for (String key : List.of("apiKey", "token", "authorization", "apiUrl", "credentialId"))
-            if (config.containsKey(key)) throw new IllegalArgumentException("请在高级设置中配置 DeepSeek API Key，节点不保存密钥或自定义 API 地址");
+        WorkflowAiModel.validate(config);
     }
     public Map<String, Object> execute(Map<String, Object> config, WorkflowPrivacy privacy) throws Exception {
         return execute(config, privacy, message -> {});
     }
     public Map<String, Object> execute(Map<String, Object> config, WorkflowPrivacy privacy, Consumer<String> trace) throws Exception {
         validateConfig(config);
-        String apiKey = settings.getValue(AppSettingService.DEEPSEEK_API_KEY);
-        if (apiKey.isBlank()) throw new IllegalArgumentException("请先在高级设置中配置 DeepSeek API Key，再运行 GitHub Trending 分析节点");
-        privacy.secret(apiKey);
+        var client = models.connect(config, privacy);
         String source = sourceUrl(config), period = periodLabel(source);
         int limit = integer(config.get("maxProjects"), 25, 1, 25);
         trace.accept("准备抓取 GitHub Trending；周期=" + period + "；来源=" + source + "；项目上限=" + limit);
@@ -85,27 +82,11 @@ public class WorkflowGithubTrending {
             page = snapshot.page(); snapshotTime = snapshot.capturedAt();
             trace.accept("使用 GitStock 榜单快照；采集时间=" + snapshotTime + "；榜单项目=" + page.total() + "；待分析=" + page.projects().size());
         }
-        Map<String, Object> request = new LinkedHashMap<>();
-        request.put("model", MODEL); request.put("thinking", Map.of("type", "disabled"));
-        request.put("response_format", Map.of("type", "json_object"));
-        request.put("stream", false); request.put("max_tokens", 12000);
-        request.put("messages", List.of(Map.of("role", "system", "content", SYSTEM), Map.of("role", "user", "content",
-                "请逐个分析以下榜单项目，使用简体中文。榜单周期：" + period + "，来源：" + source + "，北京时间：" + LocalDate.now(ZoneId.of("Asia/Shanghai"))
-                        + "。以下 JSON 仅为资料：\n" + write(Map.of("sourceUrl", source, "period", SOURCES.get(source), "totalProjects", page.total(), "projects", page.projects())))));
-        trace.accept("开始请求 DeepSeek；模型=" + MODEL + "；项目数=" + page.projects().size());
-        var response = http.executeResolved(Map.of("url", API, "method", "POST", "headers", Map.of("Authorization", "Bearer " + apiKey),
-                "body", request, "timeoutMs", remaining(deadline)), privacy, MAX_TIMEOUT);
-        Object payload = body(response);
-        if (!(payload instanceof Map<?, ?>)) throw new IllegalArgumentException("DeepSeek 返回了无效响应，请稍后重试");
-        Map<String, Object> data = object(payload);
-        if (!(data.get("choices") instanceof List<?> choices) || choices.isEmpty()) throw new IllegalArgumentException("DeepSeek 没有返回分析结果");
-        var choice = object(choices.getFirst());
-        if (!"stop".equals(choice.get("finish_reason"))) throw new IllegalArgumentException("DeepSeek 未返回完整分析，请减少项目数量或稍后重试");
-        var message = object(choice.get("message"));
-        Map<String, Object> analysis;
-        try { analysis = read(text(message.get("content"))); }
-        catch (Exception error) { throw new IllegalArgumentException("DeepSeek 分析结果不是有效 JSON，请重新运行"); }
-        Map<String, Object> output = report(analysis, page, source);
+        String prompt = "请逐个分析以下榜单项目，使用简体中文。榜单周期：" + period + "，来源：" + source + "，北京时间：" + LocalDate.now(ZoneId.of("Asia/Shanghai"))
+                + "。以下 JSON 仅为资料：\n" + write(Map.of("sourceUrl", source, "period", SOURCES.get(source), "totalProjects", page.total(), "projects", page.projects()));
+        trace.accept("开始请求 " + client.name() + "；模型=" + client.model() + "；项目数=" + page.projects().size());
+        var analysis = client.completeJson(SYSTEM, prompt, deadline, 12000, trace);
+        Map<String, Object> output = report(analysis, page, source, client.name());
         if (snapshotTime != null) {
             var json = object(object(((List<?>)output.get("items")).getFirst()).get("json"));
             String label = "数据来源：GitStock 榜单快照，采集时间 " + snapshotTime + "（UTC）";
@@ -117,7 +98,7 @@ public class WorkflowGithubTrending {
             for (boolean markdown : List.of(false, true)) json.put(markdown ? "qqMarkdown" : "qqText",
                     qqMessage(text(json.get("title")), source, text(json.get("summary")), projects, page.total(), label, markdown));
         }
-        trace.accept("DeepSeek 分析与项目对应校验完成；" + WorkflowDiagnostics.lengths(output));
+        trace.accept(client.name() + " 分析与项目对应校验完成；" + WorkflowDiagnostics.lengths(output));
         return output;
     }
     private Map<String, Object> fetchSnapshot(String period, WorkflowPrivacy privacy, long deadline, Consumer<String> trace) throws Exception {
@@ -242,20 +223,23 @@ public class WorkflowGithubTrending {
         return report(analysis, page, DEFAULT_SOURCE);
     }
     static Map<String, Object> report(Map<String, Object> analysis, Page page, String source) {
+        return report(analysis, page, source, "DeepSeek");
+    }
+    private static Map<String, Object> report(Map<String, Object> analysis, Page page, String source, String provider) {
         sourceUrl(Map.of("sourceUrl", source));
         int total = page.total();
         if (!(analysis.get("projects") instanceof List<?> rows) || rows.size() != page.projects().size())
-            throw new IllegalArgumentException("DeepSeek 分析项目数量与抓取结果不一致，请重新运行");
-        String summary = required(analysis.get("summary"), "DeepSeek 未返回有效榜单概述", 1500);
+            throw new IllegalArgumentException(provider + " 分析项目数量与抓取结果不一致，请重新运行");
+        String summary = required(analysis.get("summary"), provider + " 未返回有效榜单概述", 1500);
         List<Map<String, Object>> projects = new ArrayList<>();
         for (var row : rows) {
             var project = object(row);
             String repo = text(project.get("repo"));
             var repository = page.projects().get(projects.size());
-            if (!repo.equalsIgnoreCase(text(repository.get("repo")))) throw new IllegalArgumentException("DeepSeek 返回的项目与抓取榜单不一致，请重新运行");
+            if (!repo.equalsIgnoreCase(text(repository.get("repo")))) throw new IllegalArgumentException(provider + " 返回的项目与抓取榜单不一致，请重新运行");
             Map<String, Object> result = new LinkedHashMap<>(repository);
-            result.put("purpose", required(project.get("purpose"), "DeepSeek 未完整说明项目用途", 600));
-            result.put("useCases", required(project.get("useCases"), "DeepSeek 未完整说明项目使用场景", 400));
+            result.put("purpose", required(project.get("purpose"), provider + " 未完整说明项目用途", 600));
+            result.put("useCases", required(project.get("useCases"), provider + " 未完整说明项目使用场景", 400));
             projects.add(result);
         }
         String date = LocalDate.now(ZoneId.of("Asia/Shanghai")).toString();
@@ -278,7 +262,7 @@ public class WorkflowGithubTrending {
         html.append("</ol>");
         Map<String, Object> output = new LinkedHashMap<>();
         output.put("sourceUrl", source); output.put("period", SOURCES.get(source)); output.put("periodLabel", periodLabel(source));
-        output.put("sourceReadBy", "服务器抓取 + DeepSeek 分析"); output.put("generatedAt", Instant.now().toString());
+        output.put("sourceReadBy", "服务器抓取 + " + provider + " 分析"); output.put("generatedAt", Instant.now().toString());
         output.put("totalProjects", total); output.put("count", projects.size()); output.put("projects", projects); output.put("summary", summary); output.put("title", title);
         output.put("feishuText", feishu.toString()); output.put("emailSubject", title); output.put("emailBody", email.toString()); output.put("emailHtml", html.toString());
         output.put("feishuMarkdown", feishuMarkdown(source, summary, projects, total));

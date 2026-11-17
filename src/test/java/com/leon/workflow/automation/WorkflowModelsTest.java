@@ -4,6 +4,7 @@ import org.junit.jupiter.api.*;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import java.util.*;
+import java.util.concurrent.*;
 import static com.leon.workflow.automation.WorkflowJson.*;
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -30,6 +31,44 @@ class WorkflowModelsTest {
         models.save(id,Map.of("name","日常模型","provider","deepseek","model","deepseek-chat","enabled",false));
         assertTrue(assertThrows(IllegalArgumentException.class,()->models.resolve(config)).getMessage().contains("停用"));
         assertThrows(IllegalArgumentException.class,()->models.resolve(Map.of("modelId","missing")));
+    }
+    Map<String,Object> usage(String id) { return object(models.list().stream().filter(m->id.equals(m.get("id"))).findFirst().orElseThrow().get("usage")); }
+    @Test void actualModelTotalsAreSharedAcrossConfigurationsAndSurviveRenameDisableAndRestart() {
+        models.recordUsage("deepseek","deepseek-flash",Map.of("prompt_tokens",300,"completion_tokens",40,"total_tokens",340,
+                "prompt_tokens_details",Map.of("cached_tokens",100),"completion_tokens_details",Map.of("reasoning_tokens",20)));
+        models.recordUsage("deepseek","deepseek-flash",Map.of("prompt_tokens",10,"completion_tokens",2));
+        var alias=models.save(null,Map.of("name","另一个流程","provider","deepseek","model","deepseek-flash"));
+        assertEquals(usage("default-deepseek"),object(alias.get("usage")));
+        assertEquals(310L,usage("default-deepseek").get("inputTokens")); assertEquals(42L,usage("default-deepseek").get("outputTokens"));
+        assertEquals(352L,usage("default-deepseek").get("totalTokens")); assertEquals(2L,usage("default-deepseek").get("reportedCalls"));
+        assertNotNull(usage("default-deepseek").get("firstRecordedAt"));
+        models.save("default-deepseek",Map.of("name","改名并停用","provider","deepseek","model","deepseek-flash","enabled",false));
+        new WorkflowStore(jdbc).initialize(); assertEquals(352L,usage("default-deepseek").get("totalTokens"));
+        models.save("default-deepseek",Map.of("name","换模型","provider","deepseek","model","deepseek-v4-pro","usage",Map.of("totalTokens",99999)));
+        assertEquals(0L,usage("default-deepseek").get("totalTokens")); assertEquals(352L,usage(text(alias.get("id"))).get("totalTokens"));
+        models.recordUsage("openai","deepseek-flash",Map.of("prompt_tokens",500,"completion_tokens",20,"total_tokens",520));
+        assertEquals(352L,usage(text(alias.get("id"))).get("totalTokens"),"不同服务不能混算同名模型");
+    }
+    @Test void missingOrMalformedUsageIsMarkedWithoutInventingTokenCounts() {
+        for(Object bad:List.of(Map.of(),Map.of("prompt_tokens",3),Map.of("prompt_tokens",-1,"completion_tokens",3),
+                Map.of("prompt_tokens",1.5,"completion_tokens",3),Map.of("prompt_tokens",1,"completion_tokens",3,"total_tokens",9),
+                Map.of("prompt_tokens",Long.MAX_VALUE,"completion_tokens",1),Map.of("prompt_tokens","10","completion_tokens",3)))
+            models.recordUsage("deepseek","deepseek-flash",bad);
+        models.recordUsage("deepseek","deepseek-flash",null);
+        assertEquals(0L,usage("default-deepseek").get("totalTokens")); assertEquals(0L,usage("default-deepseek").get("reportedCalls"));
+        assertEquals(8L,usage("default-deepseek").get("unreportedCalls"));
+        models.recordUsage("deepseek","deepseek-flash",Map.of("prompt_tokens",0,"completion_tokens",0,"total_tokens",0));
+        assertEquals(1L,usage("default-deepseek").get("reportedCalls"));
+    }
+    @Test void simultaneousFirstCallsAndUpdatesNeverLoseUsageAndTotalsUseLongIntegers() throws Exception {
+        var executor=Executors.newFixedThreadPool(6); var start=new CountDownLatch(1); var tasks=new ArrayList<Future<?>>();
+        try {
+            for(int i=0;i<60;i++) tasks.add(executor.submit(()->{start.await();models.recordUsage("deepseek","deepseek-flash",Map.of("prompt_tokens",100,"completion_tokens",20,"total_tokens",120));return null;}));
+            start.countDown(); for(var task:tasks) task.get(10,TimeUnit.SECONDS);
+        } finally {executor.shutdownNow();}
+        assertEquals(60L,usage("default-deepseek").get("reportedCalls")); assertEquals(7200L,usage("default-deepseek").get("totalTokens"));
+        models.recordUsage("deepseek","deepseek-flash",Map.of("prompt_tokens",3_000_000_000L,"completion_tokens",2_000_000_000L,"total_tokens",5_000_000_000L));
+        assertEquals(5_000_007_200L,usage("default-deepseek").get("totalTokens"));
     }
     @Test void profilesUseEncryptedOpenAiReferencesAndRejectKeysEndpointsAndWrongCredentialKinds() {
         String key="catalog-private-api-key";

@@ -332,7 +332,7 @@ const server = http.createServer(async (req, res) => {
         await page.locator('[data-field="timeoutMs"]').fill('120000');
         await savePaletteGraph();
         const trending = workflow.definition.nodes.find(n=>n.type==='github-trending');
-        assert.deepEqual(trending.config,{sourceUrl:'https://github.com/trending?since=weekly',maxProjects:10,timeoutMs:120000});
+        assert.deepEqual(trending.config,{sourceUrl:'https://github.com/trending?since=weekly',maxProjects:10,timeoutMs:120000,modelId:'default-deepseek'});
         await page.locator(`[data-node="${trending.id}"] .wf-node-head`).dblclick();
         assert.equal(await page.getByRole('combobox',{name:'榜单周期',exact:true}).inputValue(),'https://github.com/trending?since=weekly');
         await page.getByRole('combobox',{name:'榜单周期',exact:true}).selectOption('https://github.com/trending?since=monthly');
@@ -1025,6 +1025,18 @@ const server = http.createServer(async (req, res) => {
         await modelForm.locator('[name="enabled"]').uncheck();
         await page.getByRole('button',{name:'保存模型',exact:true}).click();
         await page.waitForFunction(()=>document.querySelectorAll('.model-row').length===3);
+        assert.equal(await page.locator('.model-row').first().locator('[data-usage="total"]').textContent(),'0');
+        models[0].usage={inputTokens:12000,outputTokens:345,totalTokens:12345,reportedCalls:4,unreportedCalls:1,firstRecordedAt:'2026-11-18T01:00:00Z',lastRecordedAt:'2026-11-18T02:00:00Z'};
+        await modelForm.locator('[name="name"]').fill('刷新时保留的编辑');
+        await modelForm.locator('[name="model"]').selectOption('deepseek-v4-pro');
+        await page.getByRole('button',{name:'刷新用量',exact:true}).click();
+        await page.waitForFunction(()=>document.querySelector('.model-row [data-usage="total"]').textContent==='12,345');
+        assert.equal(await page.locator('.model-row').first().locator('[data-usage="input"]').textContent(),'12,000');
+        assert.equal(await page.locator('.model-row').first().locator('[data-usage="output"]').textContent(),'345');
+        assert.ok((await page.locator('.model-row').first().textContent()).includes('1 次响应未返回完整用量'));
+        assert.equal(await modelForm.locator('[name="name"]').inputValue(),'刷新时保留的编辑');
+        assert.equal(await modelForm.locator('[name="model"]').inputValue(),'deepseek-v4-pro');
+        await page.getByRole('button',{name:'添加新模型',exact:true}).click();
         await page.screenshot({path:'/private/tmp/leon-model-catalog.png',fullPage:false});
         await page.setViewportSize({width:390,height:844});
         assert.ok(await page.locator('.model-settings').evaluate(el=>el.getBoundingClientRect().right<=innerWidth),'移动端模型配置不能超出屏幕');
@@ -1046,6 +1058,21 @@ const server = http.createServer(async (req, res) => {
         await savePaletteGraph();
         const weeklyAi=workflow.definition.nodes.find(n=>n.type==='tech-weekly');
         assert.deepEqual(weeklyAi.config,{timeoutMs:180000,modelId:'model-2'});
+        await page.locator('[data-add="github-trending"]').click();
+        assert.equal(await page.getByRole('combobox',{name:'可用模型',exact:true}).inputValue(),'default-deepseek');
+        await page.getByRole('combobox',{name:'可用模型',exact:true}).selectOption('model-2');
+        await savePaletteGraph();
+        const trendingAi=workflow.definition.nodes.find(n=>n.type==='github-trending');
+        assert.deepEqual(trendingAi.config,{sourceUrl:'https://github.com/trending?since=weekly',maxProjects:25,timeoutMs:180000,modelId:'model-2'});
+        await page.locator(`[data-node="${trendingAi.id}"]`).dblclick();
+        assert.equal(await page.getByRole('combobox',{name:'可用模型',exact:true}).inputValue(),'model-2');
+        await page.getByRole('button',{name:'生成 Trending 分析',exact:true}).click();
+        await page.locator('[data-node-dialog] [data-node-debug]').getByRole('heading',{name:'飞书消息预览',exact:true}).waitFor();
+        assert.equal(lastTest.node.config.modelId,'model-2');
+        assert.equal(await page.locator('.wf-run-error').filter({hasText:'请先到高级设置填写 DeepSeek API Key'}).count(),0);
+        await page.screenshot({path:'/private/tmp/leon-trending-model-selector.png',fullPage:false});
+        await page.locator('[data-close="node"]').first().click();
+
         // Loading an older graph must not silently rewrite its provider/model/credential selection.
         const legacy={provider:'openai',model:'gpt-6-sol',credentialId:'credential-5',timeoutMs:180000};
         workflow.definition.nodes.find(n=>n.id===weeklyAi.id).config=structuredClone(legacy);

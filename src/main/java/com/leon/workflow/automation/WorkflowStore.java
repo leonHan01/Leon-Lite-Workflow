@@ -67,6 +67,14 @@ public class WorkflowStore {
               model VARCHAR(100) NOT NULL, credential_id VARCHAR(36), enabled BOOLEAN NOT NULL,
               created_at BIGINT NOT NULL)
             """);
+        jdbc.execute("""
+            CREATE TABLE IF NOT EXISTS automation_model_usage (
+              provider VARCHAR(20) NOT NULL, model VARCHAR(100) NOT NULL,
+              input_tokens BIGINT NOT NULL, output_tokens BIGINT NOT NULL, total_tokens BIGINT NOT NULL,
+              reported_calls BIGINT NOT NULL, unreported_calls BIGINT NOT NULL,
+              first_recorded_at BIGINT NOT NULL, last_recorded_at BIGINT NOT NULL,
+              PRIMARY KEY(provider,model))
+            """);
         jdbc.update("INSERT INTO automation_model(id,name,provider,model,enabled,created_at) SELECT 'default-deepseek','DeepSeek Flash','deepseek',?,TRUE,0 WHERE NOT EXISTS (SELECT 1 FROM automation_model WHERE id='default-deepseek')", WorkflowGithubTrending.MODEL);
         jdbc.execute("""
             CREATE TABLE IF NOT EXISTS automation_rss_seen (

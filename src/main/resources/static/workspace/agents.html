@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Agent 工作台 · Leon</title><script src="/admin-auth.js"></script>
-<link rel="stylesheet" href="/workspace/agents.css"><script src="/workspace/agents.js" defer></script>
+<link rel="stylesheet" href="/workspace/agents.css"><script src="/workspace/mentions.js" defer></script><script src="/workspace/agents.js" defer></script>
 </head>
 <body>
 <header><a href="/index.html" class="brand">leon<span>.</span></a><span class="crumb">工作空间 / Agent 工作台</span><a href="/index.html">返回工作空间 ↗</a></header>
@@ -27,7 +27,7 @@
 <aside class="card"><div class="section-title"><h2>会话</h2><button id="newGroup">＋ 群聊</button></div><div id="conversationList"></div><h3>与 Agent 私聊</h3><div id="directList"></div><p class="subtle">默认设备群聊可 @所有启用的 Agent。自建群聊可选择加入的 Agent。</p></aside>
 <article class="card chat"><div class="section-title"><div><h2 id="chatTitle">设备群聊</h2><p class="subtle" id="chatHint">群聊中 @指定 Agent 才会触发回复。</p></div><button id="refreshChat">同步</button></div>
 <div id="mentionBar" class="mentions"></div><button id="olderMessages" hidden>加载更早的消息</button><div id="messages" class="messages" aria-live="polite"></div><div id="jobs"></div>
-<form id="sendForm"><textarea id="composer" rows="3" maxlength="8000" required placeholder="写点什么，或点击上方 Agent 插入 @标识…"></textarea><div class="form-footer"><small id="chatStatus">正在连接…</small><button class="primary" type="submit" id="sendMessage">发送 ↑</button></div></form></article>
+<form id="sendForm"><div id="mentionSuggestions" class="mention-suggestions" hidden><div class="mention-heading">提及 Agent <small>↑↓ 选择 · Enter/Tab 确认 · Esc 关闭</small></div><div id="mentionOptions" role="listbox" aria-label="提及 Agent 候选"></div></div><textarea id="composer" aria-label="消息" aria-autocomplete="list" aria-controls="mentionOptions" rows="3" maxlength="8000" required placeholder="写点什么，或点击上方 Agent 插入 @标识…"></textarea><div class="form-footer"><small id="chatStatus">正在连接…</small><button class="primary" type="submit" id="sendMessage">发送 ↑</button></div></form></article>
 </section>
 </main>
 <dialog id="avatarDialog" class="avatar-dialog"><div class="section-title"><div><p class="eyebrow">CHOOSE AN AVATAR</p><h2>选择 Agent 头像</h2></div><button type="button" id="closeAvatars" aria-label="关闭头像选择">关闭</button></div><p class="subtle">选择后，点击「保存 Agent」生效。</p><h3>预设头像 · 30 款</h3><div id="presetAvatars" class="avatar-grid"></div><h3 id="uploadedAvatarTitle" hidden>已上传的头像</h3><div id="uploadedAvatars" class="avatar-grid"></div></dialog>

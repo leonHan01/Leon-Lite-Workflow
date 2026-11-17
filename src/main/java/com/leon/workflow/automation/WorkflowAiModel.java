@@ -41,7 +41,7 @@ final class WorkflowAiModel {
     }
 
     Client connect(Map<String,Object> config, WorkflowPrivacy privacy) {
-        validate(config); config = catalog.resolve(config); validate(config); boolean openai = "openai".equals(provider(config));
+        validate(config); if (config.containsKey("modelId")) config = catalog.resolve(config); validate(config); boolean openai = "openai".equals(provider(config));
         String key = openai ? credentials.openai(text(config.get("credentialId")), privacy) : settings.getValue(AppSettingService.DEEPSEEK_API_KEY);
         if (key.isBlank()) throw new IllegalArgumentException("请先在高级设置配置 DeepSeek API Key");
         privacy.secret(key); privacy.secret("Bearer " + key);
@@ -73,6 +73,7 @@ final class WorkflowAiModel {
                     case 429 -> "请求限流或额度不足，请检查账户后重试";
                     default -> status>=500 ? "模型服务暂不可用，请稍后重试" : "请检查模型名称和账户支持情况";
                 });
+                catalog.recordUsage(openai?"openai":"deepseek",model,json.get("body") instanceof Map<?,?> payload?payload.get("usage"):null);
                 if (!(json.get("body") instanceof Map<?,?> payload) || !(payload.get("choices") instanceof List<?> choices) || choices.isEmpty())
                     throw new IllegalArgumentException(name()+" 响应缺少总结结果");
                 var choice=object(choices.getFirst());

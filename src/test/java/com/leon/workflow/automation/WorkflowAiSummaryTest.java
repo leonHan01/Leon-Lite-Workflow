@@ -13,7 +13,7 @@ class WorkflowAiSummaryTest {
     WorkflowHttp http;
     WorkflowAiSummary ai;
     AppSettingService settings;
-    @BeforeEach void setup() { http = mock(WorkflowHttp.class); settings = mock(AppSettingService.class); when(settings.getValue(AppSettingService.DEEPSEEK_API_KEY)).thenReturn("test-ai-key"); ai = new WorkflowAiSummary(http, settings, mock(WorkflowCredentials.class), new WorkflowModels(null,null)); }
+    @BeforeEach void setup() { http = mock(WorkflowHttp.class); settings = mock(AppSettingService.class); when(settings.getValue(AppSettingService.DEEPSEEK_API_KEY)).thenReturn("test-ai-key"); ai = new WorkflowAiSummary(http, settings, mock(WorkflowCredentials.class), mock(WorkflowModels.class)); }
     Map<String, Object> input() { return Map.of("items", List.of(Map.of("json", Map.of("title", "<b>项目</b>", "source", "来源", "url", "https://example.com/article", "content", "<script>prompt-injection()</script>"))), "rss", Map.of("warnings", List.of("某源暂不可用"))); }
     Map<String, Object> result(Object content, String finish) { return Map.of("items", List.of(Map.of("json", Map.of("body", Map.of("choices", List.of(Map.of("finish_reason", finish, "message", Map.of("content", content)))))))); }
     Map<String, Object> analysis(int index) { return Map.of("summary", "整体总结", "entries", List.of(Map.of("index", index, "summary", "<script>不执行</script> 新变化"))); }

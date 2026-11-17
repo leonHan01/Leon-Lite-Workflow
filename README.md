@@ -256,7 +256,7 @@ python3 -m venv /tmp/leon-qq-target-venv
 
 填写收件人、可选抄送 / 密送、主题及纯文本或 HTML 正文；多个邮箱用逗号分隔，每封邮件最多 100 个收件人。上述内容支持 `{{ input.items[0].json.name }}` 等上游引用，只解析一次；主题和邮箱不允许换行，正文最多 1 MB。每次节点执行提交一封邮件，SMTP 接收后继续传递原输入，密送地址不写入邮件头。「发送测试邮件」也会实际发送。连接、读写和整体提交有超时限制，失败不自动重试；SMTP 接收不等于最终投递成功，失败、取消或超时后可能已有部分收件人收到，确认后再手动重跑。服务端回复可能包含认证数据，因此错误按认证、DNS、连接、超时、TLS 与邮件拒收分类，仅提取 SMTP 数字响应码，不保存原始 SMTP 回复。
 
-**GitHub Trending 分析。** 节点库中的「GitHub Trending」支持周榜 `https://github.com/trending?since=weekly` 和月榜 `https://github.com/trending?since=monthly`；在节点配置中选择榜单周期，服务器通过 HTTPS 抓取对应地址，用 Jsoup 解析 `article.Box-row` 中的仓库名称、链接、描述、语言及 Star 信息，然后将这些结构化数据交给 DeepSeek 逐个分析项目用途和适用场景。无需 DeepSeek 联网，页面脚本不执行；网页文字作为资料处理，不作为指令。复用高级设置中的 `DEEPSEEK_API_KEY`，节点及运行输出不保存密钥。当前使用 `deepseek-flash` 和 JSON 输出模式。默认最多 25 个项目，可设置 1–25 个；不足上限时分析全部项目。默认总超时 180 秒，可设置 1–240 秒，抓取阶段最多 30 秒，沿用工作流 HTTP 的地址校验、1 MB 响应限制和不自动重试策略。榜单不可访问、解析为空或异常、分析项目遗漏 / 重复 / 顺序不符、JSON 无效或结果截断都会明确失败。
+**GitHub Trending 分析。** 节点库中的「GitHub Trending」支持周榜 `https://github.com/trending?since=weekly` 和月榜 `https://github.com/trending?since=monthly`；在节点配置中选择榜单周期，服务器通过 HTTPS 抓取对应地址，用 Jsoup 解析 `article.Box-row` 中的仓库名称、链接、描述、语言及 Star 信息，然后将这些结构化数据交给所选 DeepSeek 或 OpenAI 模型逐个分析项目用途和适用场景。模型从高级设置的统一配置中下拉选择，节点仅保存 `modelId`；未选择统一配置的旧节点继续默认使用 `deepseek-flash` 和现有 DeepSeek Key。无需模型联网，页面脚本不执行；网页文字作为资料处理，不作为指令。密钥只从受保护的设置或加密凭据读取，不保存在节点或运行输出中，模型采用 JSON 输出模式。默认最多 25 个项目，可设置 1–25 个；不足上限时分析全部项目。默认总超时 180 秒，可设置 1–240 秒，抓取阶段最多 30 秒，沿用工作流 HTTP 的地址校验、1 MB 响应限制和不自动重试策略。榜单不可访问、解析为空或异常、分析项目遗漏 / 重复 / 顺序不符、JSON 无效或结果截断都会明确失败。
 
 输出为一个 `items[0].json`，包含 `sourceUrl`、`period`（weekly / monthly）、`periodLabel` 和 `projects`（仓库资料、`purpose`、`useCases`）、`summary`、`count`、`totalProjects`、`generatedAt`，以及准备好的 `qqMarkdown`（加粗标题、项目名称和重点内容的单条 QQ Markdown 摘要）、`qqText`（兼容纯文本摘要）、`feishuText`（纯文本）、`feishuMarkdown`（带样式的 Markdown 卡片正文）、`emailSubject`、`emailBody`、`emailHtml`。飞书与邮件标题、正文均标注对应榜单周期和来源 URL；旧节点未选择周期或配置为日榜时使用周榜。节点库、画布与拖动预览使用统一的 GitHub 图标。飞书摘要按消息字节预算收短每项说明并保留所有项目及链接，邮件保留完整说明；HTML 正文统一转义。分析根据榜单描述，资料不足会明确说明，不声称已读取源码。调试时可在弹窗预览飞书正文和邮件正文，此节点只生成内容，不发送消息。
 
@@ -331,7 +331,10 @@ GitHub Trending 页面无法抓取时，节点会尝试使用 GitStock 的公开
 工作台的「Leon Tools Pro」复用插件页面，并通过当前工作台登录会话访问同一个后端的集合、工具箱、便签、待办及 LLM 会话数据。页面通过服务器调用 DeepSeek；回复完整返回后显示。新增便签、添加或完成待办时，沿用插件的飞书通知行为，使用服务端已有机器人设置；未配置时跳过。网页没有 Chrome 扩展的标签页权限，因此当前页面、标签管理和扩展图标缓存不可直接复用；收藏图标使用网站 favicon。工作台不读取插件的浏览器本地缓存，尚未同步到后端的数据需先在插件中同步。聊天和通知接口仅允许工作台会话及受信任来源写入，不将访问令牌保存到网页存储。
 
 
-「高级设置 → 模型配置」集中管理模型显示名称、服务、模型名称、OpenAI 凭据和启用状态，工作流页与 AI 节点均提供快捷入口。新增「AI 总结」（含精选模式）和「科技爱好者周刊分析」节点仅保存 `modelId`；运行时读取当前配置。可编辑或停用模型，修改对所有引用它的节点生效，停用或缺失时明确报错，不自动切换模型。模型元数据持久化在 H2 `automation_model`，默认添加 DeepSeek Flash，升级不会覆盖已编辑配置。DeepSeek 模型同样使用下拉选择，提供 `deepseek-flash`（V4.1 Flash）和 `deepseek-v4-pro`（V4 Pro），默认保留 Flash，沿用现有 API Key；OpenAI 可在同页添加加密凭据，多个模型可复用同一凭据。已有节点的 `provider/model/credentialId` 仍兼容，界面显示“现有配置”，手动选取后才迁移为 `modelId`。密钥使用现有 AES-GCM 主密钥加密保存，列表和编辑接口均不返回原值，编辑留空保留原值；该凭据不能用于普通 HTTP、QQ、飞书或 SMTP 节点。
+「高级设置 → 模型配置」集中管理模型显示名称、服务、模型名称、OpenAI 凭据和启用状态，工作流页与 AI 节点均提供快捷入口。新增「AI 总结」（含精选模式）、「科技爱好者周刊分析」和「GitHub Trending 分析」节点仅保存 `modelId`；运行时读取当前配置。可编辑或停用模型，修改对所有引用它的节点生效，停用或缺失时明确报错，不自动切换模型。模型元数据持久化在 H2 `automation_model`，默认添加 DeepSeek Flash，升级不会覆盖已编辑配置。DeepSeek 模型同样使用下拉选择，提供 `deepseek-flash`（V4.1 Flash）和 `deepseek-v4-pro`（V4 Pro），默认保留 Flash，沿用现有 API Key；OpenAI 可在同页添加加密凭据，多个模型可复用同一凭据。已有节点的 `provider/model/credentialId` 仍兼容，界面显示“现有配置”，手动选取后才迁移为 `modelId`。密钥使用现有 AES-GCM 主密钥加密保存，列表和编辑接口均不返回原值，编辑留空保留原值；该凭据不能用于普通 HTTP、QQ、飞书或 SMTP 节点。
+
+模型列表同时展示累计输入、输出和总 Token，以及已统计次数和未返回完整用量的响应次数。用量取自官方响应的 `usage.prompt_tokens`、`completion_tokens` 和 `total_tokens`，按请求所用的服务及模型名称合并，AI 工作流节点运行、节点测试、旧节点和 Agent 调用均计入；相同模型的多个配置共享统计，切换配置中的模型名称后显示对应模型的累计值。`automation_model_usage` 持久化统计，改名、停用和服务重启不会清零。自动 JSON 重试的每次响应和最终内容校验失败的响应都在校验前入账；缓存输入及推理输出已包含在对应总量中，不重复累加。仅统计功能启用后本系统实际收到的用量，不估算历史、网络中断或平台其他客户端的消耗；可点击“刷新用量”更新页面。
+
 
 OpenAI 默认模型为 `gpt-6.1-sol`，在统一模型配置的「模型名称」下拉框中选择 GPT-6.1 Sol、GPT-6 Luna、GPT-6.1 Terra 或 GPT-6 Astra；模型选项随服务切换，已有配置中的其他模型会保留为可选项，避免编辑时被替换。使用固定的官方 `https://api.openai.com/v1/chat/completions`，OpenAI 请求发送 `max_completion_tokens`、JSON 响应格式与 `store:false`，不混入 DeepSeek 的 `thinking` 或 `max_tokens`。来源抓取、输入长度上限、原文链接校验与现有通知字段保持兼容；认证、模型权限或限流失败时显示服务名称和状态，不回显上游错误正文，不自动切换其他服务。参考：[OpenAI Chat Completions](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)、[GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol)。验收：`WorkflowOpenAiTest`、`WorkflowCredentialsTest` 与工作流浏览器回归。
 
@@ -360,3 +363,12 @@ Agent 工作台增加头像选择和上传。内置用户提供的 30 张原始 
 自定义头像以内容 SHA-256 标识去重，PNG 字节持久化在 H2 的 `chat_agent_avatar` 表中，随既有数据库备份；不依赖临时上传目录，无需新增服务端目录或改变部署端口。最多保存 1000 张自定义头像。Agent 管理请求可附带 `avatarId`，只接受预设或已上传的 ID，不接受外部 URL；省略时旧 Agent 保留选择。公开摘要附带 `avatarId`，Mac / Android 使用自身 Bearer 请求加载图片，不把令牌加入 URL。
 
 验证：`mvn -Dtest=AgentAvatarIntegrationTest,AgentChatIntegrationTest,OfficialAgentModelClientTest,DeviceMessageIntegrationTest,DeviceMessagePersistenceTest,ApiAuthenticationIntegrationTest test`（Java 21）。28 项测试通过；本次未部署公网服务。
+
+
+### 输入 @自动候选
+
+网页聊天在群聊输入框的光标处检测 `@` / `＠`，展示当前群内已启用的 Agent，按中文名称或标识筛选，带头像，最多显示 8 个匹配项。可点击、上下方向键选择、Enter / Tab 确认、Esc 关闭；Shift+Enter 仍换行。输入法组词期间不拦截确认键，邮箱中的 @ 和选中的文本不触发。私聊不展示其他 Agent 候选，切换会话会清理候选。
+
+补全替换当前光标所在的整个 @片段，保留后面的正文，补齐分隔空白并移动光标，不会自动发送消息或触发模型。前端共享算法位于 `/workspace/mentions.js`，检查使用 `node --test src/test/js/agent-mentions.test.cjs`。Mac / Android 客户端同步更新至 0.4.0。
+
+本次只改动客户端与网页交互，未部署公网服务。
