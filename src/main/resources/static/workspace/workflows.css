@@ -207,3 +207,6 @@ body.wf-node-dialog-open { overflow:hidden!important; }
 @media(max-width:1250px) { .wf-list-table .wf-list-schedule,.wf-list-table .wf-list-next { display:none; }.wf-list-timing-inline { display:grid; gap:3px; }.wf-list-table th:first-child { width:28%; } }
 @media(max-width:650px) { .wf-list-table th:first-child { width:auto; }.wf-list-timing-inline { font-size:10px; } }
 @media(max-width:650px) { .wf-page [data-editor].is-focused .wf-library { max-height:min(28dvh,240px); } }
+
+.wf-icon.wf-app-message { color: #4169e1; background: #edf2ff; }
+.wf-app-message svg { width: 24px; height: 24px; }

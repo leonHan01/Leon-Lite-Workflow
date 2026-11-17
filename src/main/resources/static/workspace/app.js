@@ -2,6 +2,7 @@ const routes = {
     '/workspace/tools-pro.html': ['tools-pro', 'Leon Tools Pro', 'workspace-tools-pro'],
     '/workflow-runs.html': ['workflow-runs', '运行实例', 'workspace-workflow-runs'],
     '/workflows.html': ['workflows', '工作流', 'workspace-workflows'],
+    '/workspace/agents.html': ['agents', 'Agent 工作台', 'workspace-agents'],
     '/music-statistics.html': ['music-statistics', '歌曲统计', 'workspace-music'],
     '/music.html': ['music', '歌曲管理', 'workspace-music'],
     '/': ['home', '总览', 'workspace-overview'],
@@ -59,7 +60,7 @@ updateSidebar();
 const navigation = sidebar.querySelector('.lw-nav');
 const agentLink = document.createElement('a');
 agentLink.className = 'lw-nav-link'; agentLink.href = '/workspace/agents.html';
-agentLink.textContent = 'Agent 工作台'; agentLink.setAttribute('aria-label', 'Agent 工作台');
+agentLink.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3" y="6" width="18" height="15" rx="4"/><path d="M12 2v4M8 16h8"/><circle cx="8" cy="11" r="1"/><circle cx="16" cy="11" r="1"/></svg><span>Agent 工作台</span>'; agentLink.setAttribute('aria-label', 'Agent 工作台');
 navigation.append(agentLink);
 const navigationOrderKey = 'leon-workspace-navigation-order';
 const navigationItems = () => Array.from(navigation.children);

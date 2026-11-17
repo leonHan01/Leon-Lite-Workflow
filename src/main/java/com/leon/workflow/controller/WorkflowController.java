@@ -21,12 +21,13 @@ public class WorkflowController {
     private final ApiTokenInterceptor auth;
     private final WorkflowSchedules schedules;
     private final WorkflowQqBindings qqBindings;
+    private final WorkflowAppMessage appMessage;
     private final boolean schedulingEnabled;
-    public WorkflowController(WorkflowModels models, WorkflowStore store, WorkflowEngine engine, WorkflowCredentials credentials, ApiTokenInterceptor auth, WorkflowSchedules schedules, WorkflowQqBindings qqBindings,
+    public WorkflowController(WorkflowModels models, WorkflowStore store, WorkflowEngine engine, WorkflowCredentials credentials, ApiTokenInterceptor auth, WorkflowSchedules schedules, WorkflowQqBindings qqBindings, WorkflowAppMessage appMessage,
             @Value("${leon.workflows.scheduling-enabled:true}") boolean schedulingEnabled) {
         this.models = models; this.store = store; this.engine = engine; this.credentials = credentials; this.auth = auth;
         this.schedules = schedules;
-        this.qqBindings = qqBindings;
+        this.qqBindings = qqBindings; this.appMessage=appMessage;
         this.schedulingEnabled = schedulingEnabled;
     }
     @ModelAttribute void authorize(HttpServletRequest request) {
@@ -63,6 +64,7 @@ public class WorkflowController {
     @GetMapping("/runs/{id}") public ResponseEntity<?> run(@PathVariable String id) { return response(store.run(id)); }
     @PostMapping("/runs/{id}/cancel") public ResponseEntity<?> cancel(@PathVariable String id) { return response(engine.cancel(id)); }
     @PostMapping("/test-node") public ResponseEntity<?> test(@RequestBody Map<String, Object> body) { return response(engine.test(JSON.convertValue(body.get("node"), WorkflowGraph.Node.class), object(body.get("input")))); }
+    @GetMapping("/app-message-targets") public ResponseEntity<?> appMessageTargets() { return response(appMessage.targets()); }
     @GetMapping("/models") public ResponseEntity<?> models() { return response(models.list()); }
     @PostMapping("/models") public ResponseEntity<?> createModel(@RequestBody Map<String,Object> body) { return response(models.save(null,body)); }
     @PutMapping("/models/{id}") public ResponseEntity<?> updateModel(@PathVariable String id, @RequestBody Map<String,Object> body) { return response(models.save(id,body)); }

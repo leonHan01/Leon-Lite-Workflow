@@ -44,6 +44,16 @@ public class AgentChatService {
             return store.submit(input,targets);
         }
     }
+    /** Publish a local workflow notification as the Agent, without starting a model reply. */
+    public DeviceMessageStore.Message publishAgentMessage(String agentId,String conversationId,String text,String messageId) {
+        synchronized(store) {
+            var agent=active(agentId);
+            var room=conversationId==null||conversationId.isBlank()?store.direct(agent):store.conversation(conversationId);
+            if(room.kind().equals("direct")&&!agent.id().equals(room.agentId()) || room.kind().equals("group")&&!room.id().equals("shared")&&!room.agentIds().contains(agent.id()))
+                throw DeviceMessageStore.failure(HttpStatus.BAD_REQUEST,"所选 Agent 不在目标会话中");
+            return store.publishAgent(agent,room.id(),text,messageId);
+        }
+    }
     private AgentRegistry.Agent active(String id) {
         var agent=agents.get(id);
         if(!agent.enabled()) throw DeviceMessageStore.failure(HttpStatus.BAD_REQUEST,"Agent 已停用，请选择其他 Agent"); return agent;

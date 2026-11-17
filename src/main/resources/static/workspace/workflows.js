@@ -3,7 +3,7 @@ const templates = {
     javascript: `function main(input, ctx) {\n  return {\n    items: input.items.map(item => ({\n      json: { ...item.json, name: String(item.json.name ?? '').toUpperCase() }\n    }))\n  };\n}`,
     groovy: `def main(Map input, Map ctx) {\n    return [items: input.items.collect { item ->\n        [json: item.json + [name: (item.json.name ?: '').toUpperCase()]]\n    }]\n}`,
 };
-const labels = { start: '开始', end: '结束', http: 'HTTP 请求', script: '脚本', if: '条件判断', feishu: '飞书消息', qq: 'QQ 消息', email: '发送邮件', 'github-trending': 'GitHub Trending 分析', 'tech-weekly': '科技爱好者周刊分析', rss: 'RSS 订阅', 'ai-summary': 'AI 总结' };
+const labels = { start: '开始', end: '结束', http: 'HTTP 请求', script: '脚本', if: '条件判断', feishu: '飞书消息', qq: 'QQ 消息', email: '发送邮件', 'github-trending': 'GitHub Trending 分析', 'tech-weekly': '科技爱好者周刊分析', rss: 'RSS 订阅', 'ai-summary': 'AI 总结', 'app-message': 'Agent 发送 App 消息' };
 const endIcon = '<img src="/workspace/icons/end.png" alt="" aria-hidden="true">';
 const startIcon = '<img src="/workspace/icons/start.png" alt="" aria-hidden="true">';
 const qqIcon = '<img src="/workspace/icons/qq.png" alt="" aria-hidden="true">';
@@ -71,6 +71,7 @@ export function mount(pane, workspace) {
     const listRuns = new Map();
     const MAX_POSITION = 50000;
     let zoom = 1, world = { width: 2400, height: 1600 }, focused = false, focusPanels = null;
+    let appTargets = {agents: [], conversations: []}, appTargetsStatus = 'idle';
     let dirty = false, busy = false, active = false, initialized = false, timer = null, currentRun = null, capabilities = {}, credentials = [], models = [], schedule = null;
     let inspectorOriginal = null, inspectorInitial = '', inspectorLast = '', invalidInspector = false;
     let cancelLibraryDrag = null;
@@ -249,6 +250,8 @@ export function mount(pane, workspace) {
         } else if (node.type === 'feishu') {
             node.config.credentialId = get('credentialId'); node.config.messageType = get('messageType');
             node.config.title = get('title') ?? node.config.title; node.config.text = get('text'); node.config.timeoutMs = Number(get('timeoutMs'));
+        } else if (node.type === 'app-message') {
+            for (const key of ['agentId', 'targetType', 'conversationId', 'text']) node.config[key] = get(key) ?? node.config[key];
         } else if (node.type === 'qq') {
             for (const key of ['credentialId', 'targetType', 'targetId', 'messageType', 'messageMode', 'text']) node.config[key] = get(key);
             node.config.timeoutMs = Number(get('timeoutMs'));
@@ -345,8 +348,8 @@ export function mount(pane, workspace) {
     }
     function nodeStyle(node) {
         const requested = node.type === 'script' ? (node.config?.language === 'groovy' ? 'groovy' : 'script') : node.type;
-        const kind = ['start', 'end', 'http', 'script', 'groovy', 'if', 'feishu', 'qq', 'email', 'github-trending', 'tech-weekly', 'rss', 'ai-summary'].includes(requested) ? requested : 'script';
-        return { kind, icon: ({ start: startIcon, end: endIcon, http: httpIcon, script: javascriptIcon, groovy: groovyIcon, if: '⑂', feishu: feishuIcon, qq: qqIcon, email: emailIcon, 'github-trending': githubIcon, 'tech-weekly': githubIcon, rss: rssIcon, 'ai-summary': aiIcon })[kind], label: node.type === 'script' ? (node.config.language === 'groovy' ? 'Groovy' : 'JavaScript') : labels[node.type] };
+        const kind = ['start', 'end', 'http', 'script', 'groovy', 'if', 'feishu', 'qq', 'email', 'github-trending', 'tech-weekly', 'rss', 'ai-summary', 'app-message'].includes(requested) ? requested : 'script';
+        return { kind, icon: ({ start: startIcon, end: endIcon, http: httpIcon, script: javascriptIcon, groovy: groovyIcon, if: '⑂', 'app-message': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M20 11V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v12l4-3h5m3 2h7m-3-3 3 3-3 3"/></svg>', feishu: feishuIcon, qq: qqIcon, email: emailIcon, 'github-trending': githubIcon, 'tech-weekly': githubIcon, rss: rssIcon, 'ai-summary': aiIcon })[kind], label: node.type === 'script' ? (node.config.language === 'groovy' ? 'Groovy' : 'JavaScript') : labels[node.type] };
     }
     function renderCanvas() {
         if (!graph) return;
@@ -465,6 +468,13 @@ export function mount(pane, workspace) {
         const options = (nodes, value) => nodes.map(n => `<option value="${esc(n.id)}" ${n.id === value ? 'selected' : ''}>${esc(n.name)}</option>`).join('');
         $('[data-inspector]').innerHTML = `<h2>连线配置</h2><p class="wf-help">可删除或修改两端节点，也可拖动蓝色端点重新连接；Esc 取消时保留原连线。</p>${field('起点节点', `<select data-edge-field="source">${options(graph.nodes.filter(n => n.type !== 'end'), edge.source)}</select>`)}<label data-edge-branch ${source?.type === 'if' ? '' : 'hidden'}>起点出口<select data-edge-field="branch">${(source?.type === 'if' ? ['true', 'false'] : ['']).map(b => `<option value="${b}" ${b === (edge.branch || '') ? 'selected' : ''}>${b || '默认'}</option>`).join('')}</select></label>${field('终点节点', `<select data-edge-field="target">${options(graph.nodes.filter(n => n.type !== 'start'), edge.target)}</select>`)}<div class="wf-edge-actions"><button type="button" data-action="apply-edge">保存连线修改</button><button type="button" data-action="reconnect-source">重新连接起点</button><button type="button" data-action="reconnect-target">重新连接终点</button><button type="button" class="wf-danger" data-action="delete-edge">删除连线</button></div><p class="wf-help">也可按 Delete / Backspace 删除选中连线。同一出口可以连接多个后续节点。</p>`;
     }
+    async function loadAppTargets() {
+        if (appTargetsStatus === 'loading') return;
+        appTargetsStatus = 'loading';
+        try { appTargets = await api('/app-message-targets'); appTargetsStatus = 'ready'; }
+        catch (error) { appTargetsStatus = 'error'; notice(error.message, true); }
+        if (active && graph?.nodes.find(n => n.id === selected)?.type === 'app-message') { commitInspector(); inspector(); }
+    }
     function inspector() {
         if (qqBinding && !sameQqBinding(qqBinding)) stopQqBinding();
         const edge = graph?.edges.find(e => e.id === selectedEdge);
@@ -536,6 +546,23 @@ export function mount(pane, workspace) {
             content += '<p class="wf-help">每次运行读取仓库索引和最新一期正文，由所选 DeepSeek 或 OpenAI 模型分析，生成飞书卡片和邮件内容。</p>';
             content += '<div class="wf-trending-output"><h3>后续节点可引用</h3>' + [['飞书卡片正文','feishuMarkdown'],['飞书卡片标题','title'],['邮件主题','emailSubject'],['邮件正文','emailBody'],['邮件正文（HTML）','emailHtml']].map(([title,key]) => field(title, `<input readonly value="{{ input.items[0].json.${key} }}" aria-label="${title}引用">`)).join('') + '</div>';
         }
+        if (node.type === 'app-message') {
+            if (appTargetsStatus === 'idle') void loadAppTargets();
+            const agents = appTargets.agents.filter(a => a.enabled || a.id === c.agentId);
+            const agentChoices = [['', '请选择 Agent'], ...agents.map(a => [a.id, `${a.name} (@${a.handle})${a.enabled ? '' : '（已停用）'}`])];
+            if (c.agentId && !agents.some(a => a.id === c.agentId)) agentChoices.push([c.agentId, appTargetsStatus === 'ready' ? 'Agent 已不存在，请重新选择' : '正在加载所选 Agent…']);
+            content += field('发送身份', select('agentId', c.agentId || '', agentChoices));
+            content += field('发送到', select('targetType', c.targetType || 'direct', [['direct', '与此 Agent 的私聊'], ['group', '群聊']]));
+            if (c.targetType === 'group') {
+                const groups = appTargets.conversations.filter(room => room.kind === 'group' && (room.id === 'shared' || room.agentIds.includes(c.agentId)));
+                const choices = [['', '请选择包含此 Agent 的群聊'], ...groups.map(room => [room.id, room.name])];
+                if (c.conversationId && !groups.some(room => room.id === c.conversationId)) choices.push([c.conversationId, appTargetsStatus === 'ready' ? '群聊不可用，请重新选择' : '正在加载所选群聊…']);
+                content += field('目标群聊', select('conversationId', c.conversationId || '', choices));
+            }
+            content += `<button type="button" data-action="refresh-app-targets" ${appTargetsStatus === 'loading' ? 'disabled' : ''}>${appTargetsStatus === 'loading' ? '正在加载…' : '刷新 Agent 和群聊'}</button>`;
+            content += field('消息正文', `<textarea data-field="text" maxlength="8000" placeholder="工作流通知，或 {{ input.items[0].json.summary }}">${esc(c.text || '')}</textarea>`);
+            content += '<button type="button" data-action="use-summary-app">使用上游摘要</button><p class="wf-help">以所选 Agent 的名称和头像发送。支持模板，最多 8000 字符；空输入跳过。发送测试会写入真实会话。在线 App 自动同步，离线后下次打开可查看。</p><a href="/workspace/agents.html" target="_blank" rel="noopener">管理 Agent 和群聊 ↗</a>';
+        }
         if (node.type === 'feishu') {
             content += '<button type="button" data-action="use-trending-feishu">使用 AI 总结结果</button>';
             content += '<button type="button" data-action="use-trending-feishu">使用 Trending 分析结果</button>';
@@ -580,7 +607,7 @@ export function mount(pane, workspace) {
         }
         if (['http', 'script', 'feishu', 'qq', 'email'].includes(node.type)) content += field('超时（毫秒，100–30000）', inputField('timeoutMs', c.timeoutMs || 10000, 'type="number" min="100" max="30000" step="100"'));
         if (node.type !== 'end') content += `<h3 class="wf-section-label">连接出口</h3>${connectionFields(node)}`;
-        content += `<div class="wf-node-actions"><button type="button" data-action="test">${['feishu', 'qq'].includes(node.type) ? '发送测试消息' : node.type === 'email' ? '发送测试邮件' : node.type === 'rss' ? '预览订阅文章' : node.type === 'ai-summary' ? '测试 AI 总结' : node.type === 'tech-weekly' ? '生成周刊分析' : node.type === 'github-trending' ? '生成 Trending 分析' : '调试此节点'}</button>${!['start', 'end'].includes(node.type) ? '<button type="button" class="wf-danger" data-action="delete-node">删除节点</button>' : ''}</div>`;
+        content += `<div class="wf-node-actions"><button type="button" data-action="test">${['feishu', 'qq', 'app-message'].includes(node.type) ? '发送测试消息' : node.type === 'email' ? '发送测试邮件' : node.type === 'rss' ? '预览订阅文章' : node.type === 'ai-summary' ? '测试 AI 总结' : node.type === 'tech-weekly' ? '生成周刊分析' : node.type === 'github-trending' ? '生成 Trending 分析' : '调试此节点'}</button>${!['start', 'end'].includes(node.type) ? '<button type="button" class="wf-danger" data-action="delete-node">删除节点</button>' : ''}</div>`;
         $('[data-inspector]').innerHTML = `<h2>${esc(style.label)}</h2><div data-node-error></div>${content}<div data-node-debug></div>`;
         inspectorOriginal = {id:node.id, name:node.name, config:structuredClone(node.config)};
         inspectorInitial = inspectorLast = inspectorValues(); invalidInspector = false;
@@ -736,6 +763,7 @@ export function mount(pane, workspace) {
         const config = type === 'script' ? { language: kind, source: templates[kind], sources: { [kind]: templates[kind] }, params: {}, timeoutMs: 10000 }
             : type === 'http' ? { method: 'GET', url: '', headers: {}, body: null, timeoutMs: 10000, failOnHttpError: true }
             : type === 'feishu' ? { credentialId: credentials.find(v => v.kind === 'feishu')?.id || '', messageType: 'text', title: '工作流通知', text: '工作流通知：{{ input.items[0].json.name }}', timeoutMs: 10000 }
+            : type === 'app-message' ? {agentId: appTargets.agents.find(a => a.enabled)?.id || '', targetType: 'direct', conversationId: '', text: '工作流通知'}
             : type === 'qq' ? { credentialId: credentials.find(v => v.kind === 'qq')?.id || '', targetType: 'user', targetId: '', messageType: 'text', text: '工作流通知：{{ input.items[0].json.name }}', timeoutMs: 10000 }
             : type === 'email' ? { credentialId: credentials.find(v => v.kind === 'smtp')?.id || '', to: '', cc: '', bcc: '', subject: '工作流通知', body: '你好，{{ input.items[0].json.name }}', format: 'text', timeoutMs: 10000 }
             : type === 'rss' ? { sources: structuredClone(rssSources), maxItems: 35, perSource: 5, lookbackHours: 168, onlyNew: true, timeoutMs: 60000 }
@@ -967,6 +995,11 @@ export function mount(pane, workspace) {
             commitInspector(); const node = graph.nodes.find(n => n.id === selected); if (node?.type !== 'qq') return;
             Object.assign(node.config, {messageType:'markdown', messageMode:'list', text:'{{ input.items[0].json.qqMessages }}', timeoutMs:30000}); markDirty(); inspector();
         },
+        'refresh-app-targets': async () => { commitInspector(); await loadAppTargets(); },
+        'use-summary-app': () => {
+            commitInspector(); const node = graph.nodes.find(n => n.id === selected); if (node?.type !== 'app-message') return;
+            node.config.text = '{{ input.items[0].json.summary }}'; markDirty(); inspector();
+        },
         'use-summary-qq': () => {
             commitInspector(); const node = graph.nodes.find(n => n.id === selected); if (node?.type !== 'qq') return;
             Object.assign(node.config, {messageMode:'single', text:'{{ input.items[0].json.summary }}'}); markDirty(); inspector();
@@ -1056,6 +1089,11 @@ export function mount(pane, workspace) {
         if (target.matches('[data-field="credentialId"]')) $('[data-action="edit-node-credential"]').disabled = !target.value;
         if (target.matches('[data-field="sourceUrl"]')) $('[data-trending-url]').value = target.value;
         try {
+            if (graph?.nodes.find(n => n.id === selected)?.type === 'app-message' && target.matches('[data-field="agentId"],[data-field="targetType"]')) {
+                commitInspector(); const c = graph.nodes.find(n => n.id === selected).config;
+                if (target.dataset.field === 'agentId' && c.conversationId !== 'shared' && !appTargets.conversations.some(room => room.id === c.conversationId && room.agentIds.includes(c.agentId))) c.conversationId = '';
+                markDirty(); inspector();
+            }
             if (target.matches('[data-field="mode"]')) { commitInspector(); inspector(); }
             if (target.matches('[data-field="messageType"]')) { commitInspector(); const title = $('[data-feishu-title]'); if (title) title.hidden = target.value !== 'card'; }
             if (graph?.nodes.find(n => n.id === selected)?.type === 'qq' && target.matches('[data-field="credentialId"],[data-field="targetType"]')) { stopQqBinding(); commitInspector(); renderQqBinding(); }

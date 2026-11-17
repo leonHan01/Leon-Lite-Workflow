@@ -102,6 +102,21 @@ public class DeviceMessageStore {
             return inserted;
         });
     }
+    synchronized Message publishAgent(AgentRegistry.Agent agent,String room,String text,String messageId) {
+        uuid(messageId); conversation(room);
+        if(text==null||text.isBlank()||text.length()>8000||text.indexOf('\0')>=0) throw bad("消息应为 1–8000 字符");
+        var existing=jdbc.query("SELECT * FROM device_message WHERE device_id=? AND client_message_id=?",ROW,agent.id(),messageId);
+        if(!existing.isEmpty()) {
+            var saved=existing.getFirst();
+            if(!saved.conversationId().equals(room)||!saved.text().equals(text)||!"assistant".equals(saved.role())||!agent.id().equals(saved.agentId()))
+                throw failure(HttpStatus.CONFLICT,"相同工作流消息标识不能发送不同内容或会话");
+            return saved;
+        }
+        return transaction.execute(status -> {
+            jdbc.update("INSERT INTO device_message(client_message_id,device_id,sender,platform,body,created_at,conversation_id,message_role,agent_id) VALUES(?,?,?,?,?,?,?,'assistant',?)",messageId,agent.id(),agent.name(),"agent",text,System.currentTimeMillis(),room,agent.id());
+            return jdbc.query("SELECT * FROM device_message WHERE device_id=? AND client_message_id=?",ROW,agent.id(),messageId).getFirst();
+        });
+    }
     public synchronized Page page(Long after,Long before,int limit) { return page("shared",after,before,limit); }
     public synchronized Page page(String conversation,Long after,Long before,int limit) {
         conversation(conversation);

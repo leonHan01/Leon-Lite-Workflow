@@ -29,7 +29,7 @@ final class WorkflowDiagnostics {
         return refs.isEmpty() ? "未使用消息字段引用" : "消息字段引用：" + String.join("；", refs);
     }
     static String resolvedLengths(WorkflowGraph.Node node, Map<String, Object> input, Map<String, Object> ctx) {
-        List<String> fields = Set.of("feishu", "qq").contains(node.type()) ? List.of("text") : "email".equals(node.type()) ? List.of("subject", "body") : List.of();
+        List<String> fields = Set.of("feishu", "qq", "app-message").contains(node.type()) ? List.of("text") : "email".equals(node.type()) ? List.of("subject", "body") : List.of();
         List<String> lengths = new ArrayList<>();
         for (String key : fields) {
             Object value = WorkflowExpressions.resolve(node.settings().get(key), input, ctx);

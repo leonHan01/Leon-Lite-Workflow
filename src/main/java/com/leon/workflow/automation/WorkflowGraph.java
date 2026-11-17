@@ -117,6 +117,7 @@ public record WorkflowGraph(List<Node> nodes, List<Edge> edges) {
             case "start", "end" -> {}
             case "feishu" -> WorkflowFeishu.validateConfig(c);
             case "qq" -> WorkflowQq.validateConfig(c);
+            case "app-message" -> WorkflowAppMessage.validateConfig(c);
             case "email" -> WorkflowEmail.validateConfig(c);
             case "github-trending" -> WorkflowGithubTrending.validateConfig(c);
             case "tech-weekly" -> WorkflowGithubTrending.validateWeeklyConfig(c);

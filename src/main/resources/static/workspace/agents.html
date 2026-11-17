@@ -1,35 +1,30 @@
 <!doctype html>
 <html lang="zh-CN">
-<head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Agent 工作台 · Leon</title><script src="/admin-auth.js"></script>
-<link rel="stylesheet" href="/workspace/agents.css"><script src="/workspace/mentions.js" defer></script><script src="/workspace/agents.js" defer></script>
-</head>
-<body>
-<header><a href="/index.html" class="brand">leon<span>.</span></a><span class="crumb">工作空间 / Agent 工作台</span><a href="/index.html">返回工作空间 ↗</a></header>
-<main>
-<div class="heading"><div><p class="eyebrow">YOUR AI TEAM</p><h1>让每个 Agent 各司其职。</h1><p>定义角色，连接模型，在私聊和群聊中与它们协作。</p></div><div class="tabs"><button id="configTab" class="active">Agent 配置</button><button id="chatTab">聊天测试</button></div></div>
-<p id="notice" role="status" hidden></p>
-<section id="configPanel" class="layout">
-<aside class="card"><div class="section-title"><h2>我的 Agents</h2><button id="newAgent">＋ 新建</button></div><div id="agentList"></div><p class="subtle">停用 Agent 会保留历史消息。<br>API Key 仅在服务端加密存储，不回显给客户端。</p></aside>
-<article class="card"><form id="agentForm">
-<div class="section-title"><div><p class="eyebrow">IDENTITY & MODEL</p><h2 id="formTitle">新建 Agent</h2></div><label class="toggle"><input id="enabled" type="checkbox" checked>启用</label></div>
-<div class="avatar-setting"><img id="avatarPreview" class="avatar avatar-preview" src="/api/agent-avatars/alfred" alt="当前 Agent 头像"><div><strong>Agent 头像</strong><p id="avatarName" class="subtle">Alfred</p><div class="avatar-actions"><button type="button" id="chooseAvatar">选择头像</button><button type="button" id="uploadAvatar">上传头像</button></div><small>PNG / JPG，最多 5 MB，宽高不超过 4096 像素</small></div></div>
-<input type="file" id="avatarFile" accept="image/png,image/jpeg" hidden>
-<div class="fields"><label>显示名称<input id="name" maxlength="60" required placeholder="例如：写作助手"></label><label>@标识<input id="handle" pattern="[a-z][a-z0-9_-]{1,31}" maxlength="32" required placeholder="例如：writer"><small>2–32 位小写字母、数字、_ 或 -，以字母开头</small></label></div>
-<div class="fields"><label>模型服务<select id="provider"><option value="openai">OpenAI</option><option value="deepseek">DeepSeek</option></select></label><label>模型名称<input id="model" maxlength="100" required placeholder="填写账户可用的模型 ID"></label></div>
-<label>API Key<input id="apiKey" type="password" autocomplete="new-password" maxlength="8192" placeholder="新建必填；编辑时留空保留"><small id="keyHint">请求仅发送至所选服务商的官方 HTTPS 接口。</small></label>
-<label>角色与系统提示词<textarea id="systemPrompt" rows="8" maxlength="16000" placeholder="例如：你是一位严谨的写作编辑，先梳理逻辑，再给出具体修改建议。"></textarea></label>
-<div class="form-footer"><p class="subtle">私聊直接回复；群聊仅响应 @标识。<br>每次回复仅使用当前会话的最近上下文。</p><button id="saveAgent" class="primary" type="submit">保存 Agent</button></div>
-</form></article>
-</section>
-<section id="chatPanel" class="layout" hidden>
-<aside class="card"><div class="section-title"><h2>会话</h2><button id="newGroup">＋ 群聊</button></div><div id="conversationList"></div><h3>与 Agent 私聊</h3><div id="directList"></div><p class="subtle">默认设备群聊可 @所有启用的 Agent。自建群聊可选择加入的 Agent。</p></aside>
-<article class="card chat"><div class="section-title"><div><h2 id="chatTitle">设备群聊</h2><p class="subtle" id="chatHint">群聊中 @指定 Agent 才会触发回复。</p></div><button id="refreshChat">同步</button></div>
-<div id="mentionBar" class="mentions"></div><button id="olderMessages" hidden>加载更早的消息</button><div id="messages" class="messages" aria-live="polite"></div><div id="jobs"></div>
-<form id="sendForm"><div id="mentionSuggestions" class="mention-suggestions" hidden><div class="mention-heading">提及 Agent <small>↑↓ 选择 · Enter/Tab 确认 · Esc 关闭</small></div><div id="mentionOptions" role="listbox" aria-label="提及 Agent 候选"></div></div><textarea id="composer" aria-label="消息" aria-autocomplete="list" aria-controls="mentionOptions" rows="3" maxlength="8000" required placeholder="写点什么，或点击上方 Agent 插入 @标识…"></textarea><div class="form-footer"><small id="chatStatus">正在连接…</small><button class="primary" type="submit" id="sendMessage">发送 ↑</button></div></form></article>
-</section>
-</main>
-<dialog id="avatarDialog" class="avatar-dialog"><div class="section-title"><div><p class="eyebrow">CHOOSE AN AVATAR</p><h2>选择 Agent 头像</h2></div><button type="button" id="closeAvatars" aria-label="关闭头像选择">关闭</button></div><p class="subtle">选择后，点击「保存 Agent」生效。</p><h3>预设头像 · 30 款</h3><div id="presetAvatars" class="avatar-grid"></div><h3 id="uploadedAvatarTitle" hidden>已上传的头像</h3><div id="uploadedAvatars" class="avatar-grid"></div></dialog>
-<dialog id="groupDialog"><form id="groupForm"><h2>创建群聊</h2><label>群名称<input id="groupName" required maxlength="60" placeholder="例如：产品讨论组"></label><p>选择加入此群聊的 Agent</p><div id="groupMembers"></div><div class="form-footer"><button type="button" id="cancelGroup">取消</button><button type="submit" class="primary">创建群聊</button></div></form></dialog>
-</body></html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Leon Workflow 工作空间</title><script src="/admin-auth.js"></script><link rel="stylesheet" href="/workspace/legacy.css"><link rel="stylesheet" href="/geek-theme.css"><link rel="stylesheet" href="/workspace/app.css"><script type="module" src="/workspace/app.js"></script></head>
+<body class="workspace-home workspace-app"><div class="lw-shell">
+    <aside class="lw-sidebar" aria-label="主导航">
+        <a class="lw-brand" href="/index.html" aria-label="Leon Workflow 首页">
+            <span class="lw-brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none"><path d="M8 23V9h4v10h12v4H8Z" fill="currentColor"/><circle cx="22" cy="10" r="4" fill="currentColor" opacity=".65"/></svg></span>
+            <span class="lw-brand-text"><strong>leon<span>.</span></strong><small>WORKFLOW</small></span>
+        </a>
+        <div class="lw-nav-label">工作空间</div>
+        <nav class="lw-nav">
+            <a class="lw-nav-link" href="/workspace/tools-pro.html" aria-label="Leon Tools Pro"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M4 5h7v7H4zM13 5h7v7h-7zM4 14h7v7H4zM13 14h7v7h-7z"/></svg><span>Leon Tools Pro</span></a>
+            <a class="lw-nav-link is-active" aria-current="page" href="/index.html" aria-label="总览"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m3 10 9-7 9 7v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-9Z"/><path d="M9 21v-8h6v8"/></svg><span>总览</span></a>
+            <a class="lw-nav-link " href="/simple-kv.html" aria-label="快捷项"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3" y="4" width="7" height="7" rx="1.5"/><rect x="14" y="4" width="7" height="7" rx="1.5"/><rect x="3" y="15" width="7" height="5" rx="1.5"/><rect x="14" y="15" width="7" height="5" rx="1.5"/></svg><span>快捷项</span></a>
+            <a class="lw-nav-link" href="/json-record-search.html" aria-label="JSON 记录"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M6 3h8l4 4v13H6z"/><path d="M14 3v5h5M9 12h6M9 16h6"/></svg><span>JSON 记录</span></a>
+            <div class="lw-nav-group" data-nav-group="workflows">
+                <button class="lw-nav-toggle" type="button" aria-label="工作流" aria-expanded="true" aria-controls="workflowNavLinks" title="工作流"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="2" y="8" width="6" height="8" rx="2"/><rect x="16" y="2" width="6" height="7" rx="2"/><rect x="16" y="15" width="6" height="7" rx="2"/><path d="M8 12h4V5h4M12 12v7h4"/></svg><span>工作流</span><svg class="lw-nav-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg></button>
+                <div class="lw-nav-children" id="workflowNavLinks">
+                    <a class="lw-nav-link" href="/workflows.html" aria-label="工作流编排"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="2" y="8" width="6" height="8" rx="2"/><rect x="16" y="2" width="6" height="7" rx="2"/><rect x="16" y="15" width="6" height="7" rx="2"/><path d="M8 12h4V5h4M12 12v7h4"/></svg><span>工作流编排</span></a>
+                    <a class="lw-nav-link" href="/workflow-runs.html" aria-label="运行实例"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="m9 8 7 4-7 4V8Z"/><path d="M3 7h18"/></svg><span>运行实例</span></a>
+                </div>
+            </div>
+            <a class="lw-nav-link" href="/monitor.html" aria-label="服务器监控"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M6 14h3l2-5 3 7 2-4h2"/></svg><span>服务器监控</span></a>
+            <a class="lw-nav-link" href="/advanced-settings.html" aria-label="高级设置"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="2" fill="white"/><circle cx="15" cy="17" r="2" fill="white"/></svg><span>高级设置</span></a>
+            <a class="lw-nav-link" href="/music.html" aria-label="歌曲管理"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M9 18V5l12-2v13M9 9l12-2"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg><span>歌曲管理</span></a>
+        </nav>
+        <div class="lw-sidebar-foot"><span class="lw-foot-dot"></span><span>你的工作流，井井有条</span></div>
+    </aside>
+<main class="lw-main"><header class="lw-topbar"><div class="lw-breadcrumb"><span>WORKSPACE</span><i></i><strong id="workspaceTitle">总览</strong></div><div class="ws-account"><span class="ws-shell-note">LEON WORKFLOW</span><button id="workspaceLogout" type="button">退出登录</button></div></header>
+<div id="workspaceStatus" class="ws-load-status" role="status" hidden></div><div id="workspaceViews"></div></main></div></body></html>

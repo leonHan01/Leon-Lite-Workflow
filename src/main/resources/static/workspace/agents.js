@@ -1,7 +1,10 @@
-'use strict';
-const $ = id => document.getElementById(id);
+import './mentions.js';
+export function mount(pane) {
+    if (!document.getElementById('agents-css')) { const css = document.createElement('link'); css.id = 'agents-css'; css.rel = 'stylesheet'; css.href = '/workspace/agents.css'; document.head.append(css); }
+    let viewActive = false;
+const $ = id => pane.querySelector('#' + CSS.escape(id));
 let agents = [], conversations = [], editing = null, current = 'shared', rows = [], more = false, generation = 0, timer, loading = false, activeTab = 'config';
-let avatarCatalog = [], selectedAvatarId = 'alfred', uploadingAvatar = false;
+let avatarCatalog = [], selectedAvatarId = 'alfred', uploadingAvatar = false, models = [];
 const deviceId = (() => { let value = localStorage.getItem('leon-agent-web-device'); if (!value) { value = crypto.randomUUID(); localStorage.setItem('leon-agent-web-device', value); } return value; })();
 function node(tag, text, className) { const element = document.createElement(tag); if (text != null) element.textContent = text; if (className) element.className = className; return element; }
 function notice(message, error = false) { $('notice').textContent = message; $('notice').hidden = !message; $('notice').className = error ? 'error' : ''; }
@@ -50,14 +53,32 @@ $('avatarFile').onchange = async () => {
     } catch (error) { notice(error.message, true); }
     finally { uploadingAvatar = false; $('avatarFile').value = ''; $('saveAgent').disabled = false; $('uploadAvatar').disabled = false; $('newAgent').disabled = false; }
 };
+function modelOptions(value = '') {
+    $('modelId').replaceChildren();
+    const legacy = editing && !editing.modelId;
+    const placeholder = node('option', legacy ? `沿用原配置：${editing.provider} · ${editing.model}` : '请选择已保存的模型'); placeholder.value = '';
+    $('modelId').append(placeholder);
+    for (const model of models) {
+        const option = node('option', `${model.name} · ${model.provider} / ${model.model}${model.enabled ? '' : '（已停用）'}`);
+        option.value = model.id; option.disabled = !model.enabled; $('modelId').append(option);
+    }
+    if (value && !models.some(m => m.id === value)) { const missing = node('option', '原模型已不存在，请重新选择'); missing.value = value; missing.disabled = true; $('modelId').append(missing); }
+    $('modelId').value = value; $('modelId').required = !legacy; modelHint();
+}
+function modelHint() {
+    const profile = models.find(m => m.id === $('modelId').value);
+    $('modelHint').textContent = profile ? `${profile.provider === 'openai' ? 'OpenAI' : 'DeepSeek'} · ${profile.model}。复用模型凭据；修改模型配置会同步影响此 Agent。${profile.enabled ? '' : '所选模型已停用，请重新选择。'}`
+        : editing && !editing.modelId ? '现有独立配置仍可使用。选择已保存的模型后，将改用统一模型与凭据。' : models.some(m => m.enabled) ? '请选择一个可用模型，无需另填 API Key。' : '还没有可用模型，请先在模型配置中添加并启用。';
+}
+$('modelId').onchange = modelHint;
+$('reloadModels').onclick = async () => { try { await loadAgents(); notice('模型列表已刷新。'); } catch (error) { notice(error.message, true); } };
 function resetForm(agent = null) {
     if (uploadingAvatar) return;
     editing = agent; $('agentForm').reset();
     selectAvatar(agent?.avatarId || 'alfred');
-    for (const key of ['name', 'handle', 'model', 'systemPrompt']) $(key).value = agent?.[key] || '';
-    $('provider').value = agent?.provider || 'openai'; $('enabled').checked = agent?.enabled ?? true; $('apiKey').value = '';
-    $('apiKey').required = !agent; $('formTitle').textContent = agent ? `编辑 ${agent.name}` : '新建 Agent';
-    $('keyHint').textContent = agent ? '已保存加密凭据。留空保留；切换服务商必须填写新 Key。' : '请求仅发送至所选服务商的官方 HTTPS 接口。';
+    for (const key of ['name', 'handle', 'systemPrompt']) $(key).value = agent?.[key] || '';
+    modelOptions(agent?.modelId || ''); $('enabled').checked = agent?.enabled ?? true;
+    $('formTitle').textContent = agent ? `编辑 ${agent.name}` : '新建 Agent';
     renderAgents();
 }
 function renderAgents() {
@@ -74,21 +95,21 @@ function renderAgents() {
     renderMentions(); updateMentionCandidates();
 }
 async function loadAgents() {
-    const data = await api('/api/agent-admin'); agents = data.agents; avatarCatalog = data.avatars || []; selectAvatar(selectedAvatarId);
+    const data = await api('/api/agent-admin'); agents = data.agents; avatarCatalog = data.avatars || []; models = data.models || []; modelOptions($('modelId').value || editing?.modelId || ''); selectAvatar(selectedAvatarId);
     $('saveAgent').disabled = !data.keyStorageEnabled;
     if (!data.keyStorageEnabled) notice('请先配置服务器 LEON_WORKFLOW_CREDENTIAL_KEY，启用 Agent 的加密凭据存储。', true);
     renderAgents();
 }
 $('newAgent').onclick = () => { notice(''); resetForm(); $('name').focus(); };
-$('provider').onchange = () => { $('apiKey').required = !editing || editing.provider !== $('provider').value; };
 $('agentForm').onsubmit = async event => {
     event.preventDefault(); $('saveAgent').disabled = true; notice('');
-    const body = Object.fromEntries(['name', 'handle', 'provider', 'model', 'systemPrompt', 'apiKey'].map(k => [k, $(k).value]));
+    const body = Object.fromEntries(['name', 'handle', 'systemPrompt'].map(k => [k, $(k).value]));
+    if ($('modelId').value) body.modelId = $('modelId').value;
     if (uploadingAvatar) return; body.avatarId = selectedAvatarId;
     body.enabled = $('enabled').checked; body.version = editing?.version;
     try {
         const saved = await api('/api/agent-admin' + (editing ? '/' + editing.id : ''), { method: editing ? 'PUT' : 'POST', body: JSON.stringify(body) });
-        $('apiKey').value = ''; await loadAgents(); resetForm(saved); notice('Agent 已保存。客户端同步后即可开始私聊或在群聊中 @它。');
+        await loadAgents(); resetForm(saved); notice('Agent 已保存。客户端同步后即可开始私聊或在群聊中 @它。');
     } catch (e) { notice(e.message, true); } finally { $('saveAgent').disabled = false; }
 };
 function tab(which) {
@@ -177,7 +198,7 @@ function selectConversation(id) {
     renderConversations(); renderMentions(); renderMessages(); poll(true);
 }
 async function poll(initial = false) {
-    if (loading || activeTab !== 'chat' || document.hidden) return;
+    if (!viewActive || loading || activeTab !== 'chat' || document.hidden) return;
     loading = true; const epoch = generation; clearTimeout(timer);
     try {
         const query = new URLSearchParams({ conversationId: current, limit: '100' });
@@ -237,5 +258,10 @@ $('cancelGroup').onclick = () => $('groupDialog').close();
 $('groupForm').onsubmit = async event => {
     event.preventDefault(); try { const agentIds = [...$('groupMembers').querySelectorAll('input:checked')].map(e => e.value); const c = await api('/api/conversations/groups', { method: 'POST', body: JSON.stringify({ name: $('groupName').value, agentIds }) }); $('groupDialog').close(); await refreshConversations(); selectConversation(c.id); } catch (e) { notice(e.message, true); }
 };
-document.addEventListener('visibilitychange', () => { clearTimeout(timer); if (!document.hidden && activeTab === 'chat') poll(); });
-loadAgents().catch(e => notice(e.message, true));
+document.addEventListener('visibilitychange', () => { clearTimeout(timer); if (viewActive && !document.hidden && activeTab === 'chat') poll(); });
+return {
+    async activate() { viewActive = true; try { await loadAgents(); if (activeTab === 'chat') { await refreshConversations(); poll(); } } catch (error) { notice(error.message, true); } },
+    deactivate() { viewActive = false; generation++; loading = false; clearTimeout(timer); hideMentionCandidates(); for (const id of ['avatarDialog', 'groupDialog']) { if ($(id).open) $(id).close(); } }
+};
+}
+

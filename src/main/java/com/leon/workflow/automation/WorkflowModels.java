@@ -87,7 +87,7 @@ public class WorkflowModels {
     private Map<String,Object> get(String id) {
         return list().stream().filter(row -> id.equals(row.get("id"))).findFirst().orElseThrow(() -> new IllegalArgumentException("引用的模型配置不存在，请重新选择可用模型"));
     }
-    Map<String,Object> resolve(Map<String,Object> config) {
+    public Map<String,Object> resolve(Map<String,Object> config) {
         if (!config.containsKey("modelId")) return config;
         var profile=get(text(config.get("modelId")));
         if (!Boolean.TRUE.equals(profile.get("enabled"))) throw new IllegalArgumentException("所选模型已停用，请在模型配置中启用或重新选择");
