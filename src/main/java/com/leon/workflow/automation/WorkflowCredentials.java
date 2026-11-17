@@ -79,11 +79,17 @@ public class WorkflowCredentials {
             case "header" -> List.of("secret");
             case "feishu" -> List.of("webhookUrl", "secret");
             case "qq" -> List.of("appSecret");
+            case "openai" -> List.of("apiKey");
             default -> List.of();
         };
     }
     private Map<String, Object> validate(String kind, Map<String, Object> value) {
         switch (kind) {
+            case "openai" -> {
+                String apiKey = required(value.get("apiKey"), "请填写 OpenAI API Key", 8192);
+                if (apiKey.chars().anyMatch(Character::isWhitespace)) throw new IllegalArgumentException("OpenAI API Key 不能包含空白字符");
+                value = Map.of("apiKey", apiKey);
+            }
             case "qq" -> value = WorkflowQq.credential(value);
             case "smtp" -> value = WorkflowEmail.credential(value);
             case "bearer" -> required(value.get("token"), "请填写访问令牌", 8192);
@@ -115,11 +121,17 @@ public class WorkflowCredentials {
                 header = "Basic " + Base64.getEncoder().encodeToString((text(value.get("username")) + ":" + text(value.get("password"))).getBytes(StandardCharsets.UTF_8));
             }
             case "header" -> { name = text(value.get("header")); header = text(value.get("secret")); }
-            default -> throw new IllegalArgumentException("请选择 HTTP 认证凭据；飞书、QQ 和 SMTP 凭据仅用于对应消息节点");
+            default -> throw new IllegalArgumentException("请选择 HTTP 认证凭据；OpenAI、飞书、QQ 和 SMTP 凭据仅用于对应节点");
         }
         privacy.secret(header); return Map.of(name, header);
     }
     public record FeishuWebhook(String url, String secret) {}
+    public String openai(String id, WorkflowPrivacy privacy) {
+        requireKey(); var row = stored(id);
+        if (!"openai".equals(row.get("kind"))) throw new IllegalArgumentException("请选择 OpenAI API Key 凭据");
+        String value = required(read(decrypt(id,text(row.get("encrypted")))).get("apiKey"), "OpenAI API Key 无效，请重新编辑凭据", 8192);
+        privacy.secret(value); privacy.secret("Bearer "+value); return value;
+    }
     public Map<String, Object> qq(String id, WorkflowPrivacy privacy) {
         requireKey();
         var rows = jdbc.queryForList("SELECT kind,encrypted FROM automation_credential WHERE id=?", id);

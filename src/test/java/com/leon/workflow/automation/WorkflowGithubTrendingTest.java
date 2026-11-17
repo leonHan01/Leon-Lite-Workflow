@@ -26,7 +26,7 @@ class WorkflowGithubTrendingTest {
             """;
     @BeforeEach void setup() {
         http = mock(WorkflowHttp.class); settings = mock(AppSettingService.class);
-        trending = new WorkflowGithubTrending(http, settings);
+        trending = new WorkflowGithubTrending(http, settings, mock(WorkflowCredentials.class));
         when(settings.getValue(AppSettingService.DEEPSEEK_API_KEY)).thenReturn("test-private-trending-key");
     }
     Map<String, Object> response(Object body) { return Map.of("items", List.of(Map.of("json", Map.of("body", body)))); }

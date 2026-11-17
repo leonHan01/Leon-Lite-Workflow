@@ -268,7 +268,7 @@ QQ 摘要加粗标题、项目名称、榜单概览和用途标签，模型文�
 
 默认仅处理新增文章，链接（忽略追踪参数及片段）和来源条目 ID 共同去重。H2 的 `automation_rss_seen` 按工作流 / 节点保存已处理键，`automation_rss_pending` 暂存本次输出键；只有整个流程成功时才与实例成功状态在同一事务中确认，失败、取消和重启清理本次暂存键，历史去重状态保留。调试预览不读取或写入历史去重状态。含 RSS 的同一工作流禁止重叠运行；其他流程的并发规则保留。外部发送与 H2 无法跨系统原子提交，若对端已收到但本次最终失败，手动重试仍可能重复发送。
 
-「AI 总结」支持任意上游 `items` 数据，使用高级设置已有的 DeepSeek API Key；可配置模型、标题、总结要求、条数上限、输入文本预算和超时。长输入均分预算截断并在输出标记 `inputTruncated`，不会静默丢弃超出条数上限的数据。空白或无效 JSON 响应在总超时内最多重试一次，不自动重试 HTTP 失败或发送操作；校验模型返回的条目与输入逐项对应，原文链接只来自输入；生成 HTML 时转义内容。输出 `summary`、`articles`、`emailSubject`、`emailBody`、`emailHtml`、`feishuText`、`feishuMarkdown`，邮件 / 飞书节点可用「使用 AI 总结结果」自动填入引用。飞书正文过长时按段落缩短，完整总结保留在运行详情和邮件字段。空输入不调用 AI，邮件和飞书节点也跳过发送。
+「AI 总结」支持任意上游 `items` 数据，模型服务可选 DeepSeek 或 OpenAI GPT；可配置模型名称、标题、总结要求、条数上限、输入文本预算和超时。长输入均分预算截断并在输出标记 `inputTruncated`，不会静默丢弃超出条数上限的数据。空白或无效 JSON 响应在总超时内最多重试一次，不自动重试 HTTP 失败或发送操作；校验模型返回的条目与输入逐项对应，原文链接只来自输入；生成 HTML 时转义内容。输出 `summary`、`articles`、`emailSubject`、`emailBody`、`emailHtml`、`feishuText`、`feishuMarkdown`，邮件 / 飞书节点可用「使用 AI 总结结果」自动填入引用。飞书正文过长时按段落缩短，完整总结保留在运行详情和邮件字段。空输入不调用 AI，邮件和飞书节点也跳过发送。
 
 `scripts/create_rss_workflow.py` 创建「RSS 科技资讯日报」：7 个来源 → AI 精选 10 篇 · 其余速览 → 已有飞书机器人，北京时间每天 09:00，默认最近 7 天、每源最多 5 篇、总计 35 篇。精选节点为 `ai-summary` 的 `mode: top10`，直接接收 RSS 原始文章，复用高级设置的 DeepSeek Key，一次调用评选阅读价值排名、核心看点、精选摘要与其余一句话速览；不足 10 篇全部精选。服务端校验全部文章 index、精选数量和排名范围；允许排名重复，并按排名、原输入顺序稳定排序，链接只来自原始输入，AI 不得替换。默认 `mode: summary` 保持普通汇总行为。
 
@@ -324,8 +324,13 @@ mvn package
 
 浏览器回归检查位于 `src/test/browser/workspace-navigation.cjs`。它使用模拟数据验证页签状态、快捷项 CRUD、JSON 详情和历史导航。运行前设置 `PLAYWRIGHT_MODULE_PATH` 和 `CHROME_PATH`。
 
-科技爱好者周刊分析节点每次通过 GitHub 官方 API 读取 `ruanyf/weekly` 的仓库索引，选择最高期数并读取对应 `docs/issue-N.md`，使用高级设置中的 DeepSeek API Key 分析正文。节点提供 `title`、`sourceUrl`、`issue`、`summary`、`highlights`、`feishuMarkdown`、`feishuText`、`emailSubject`、`emailBody` 和 `emailHtml`。连接飞书和邮件节点后，点击「使用周刊分析结果」填入相应引用；该节点本身不发送消息。GitHub API 可能限制匿名请求频率，失败时会显示原因。
+科技爱好者周刊分析节点每次通过 GitHub 官方 API 读取 `ruanyf/weekly` 的仓库索引，选择最高期数并读取对应 `docs/issue-N.md`，使用所选 DeepSeek 或 OpenAI GPT 模型分析正文。节点提供 `title`、`sourceUrl`、`issue`、`summary`、`highlights`、`feishuMarkdown`、`feishuText`、`emailSubject`、`emailBody` 和 `emailHtml`。连接飞书和邮件节点后，点击「使用周刊分析结果」填入相应引用；该节点本身不发送消息。GitHub API 可能限制匿名请求频率，失败时会显示原因。
 
 GitHub Trending 页面无法抓取时，节点会尝试使用 GitStock 的公开榜单快照；遇到暂时性的只读连接错误时最多请求三次，并记录每次请求的结果（支持周、月榜）。快照超过 48 小时或周期、项目、采集时间无效时会报错，不会继续分析；使用快照时，日志和飞书、邮件正文会标注来源及采集时间。GitStock 是第三方服务，快照可能与实时榜单不同。
 
 工作台的「Leon Tools Pro」复用插件页面，并通过当前工作台登录会话访问同一个后端的集合、工具箱、便签、待办及 LLM 会话数据。页面通过服务器调用 DeepSeek；回复完整返回后显示。新增便签、添加或完成待办时，沿用插件的飞书通知行为，使用服务端已有机器人设置；未配置时跳过。网页没有 Chrome 扩展的标签页权限，因此当前页面、标签管理和扩展图标缓存不可直接复用；收藏图标使用网站 favicon。工作台不读取插件的浏览器本地缓存，尚未同步到后端的数据需先在插件中同步。聊天和通知接口仅允许工作台会话及受信任来源写入，不将访问令牌保存到网页存储。
+
+
+「AI 总结」（含精选模式）与「科技爱好者周刊分析」的 `provider` 默认 `deepseek`，兼容未配置服务选项的已有流程。DeepSeek 沿用高级设置的 API Key；选择 `openai` 后，点击「添加 OpenAI API Key」创建 `openai` 类型的加密工作流凭据，节点仅保存 `credentialId`。密钥使用现有 AES-GCM 主密钥加密保存，列表和编辑接口均不返回原值，编辑留空保留原值；该凭据不能用于普通 HTTP、QQ、飞书或 SMTP 节点。
+
+OpenAI 默认模型为 `gpt-6.1-sol`，可在「模型名称」中填写账户可用且支持 Chat Completions / JSON 模式的 GPT 模型。使用固定的官方 `https://api.openai.com/v1/chat/completions`，OpenAI 请求发送 `max_completion_tokens`、JSON 响应格式与 `store:false`，不混入 DeepSeek 的 `thinking` 或 `max_tokens`。来源抓取、输入长度上限、原文链接校验与现有通知字段保持兼容；认证、模型权限或限流失败时显示服务名称和状态，不回显上游错误正文，不自动切换其他服务。参考：[OpenAI Chat Completions](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)、[GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol)。验收：`WorkflowOpenAiTest`、`WorkflowCredentialsTest` 与工作流浏览器回归。

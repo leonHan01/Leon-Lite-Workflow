@@ -27,6 +27,7 @@ const rssSources = [
 const rssIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="6" cy="18" r="1"/><path d="M5 11a8 8 0 0 1 8 8M5 5a14 14 0 0 1 14 14"/></svg>';
 const aiIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 2.8 6.2L21 12l-6.2 2.8L12 21l-2.8-6.2L3 12l6.2-2.8Z"/></svg>';
 const summaryPrompt = '请用简体中文汇总这些资讯，突出技术要点、实际影响和值得关注的变化。资料不足时明确说明；避免营销话术。';
+const aiModelDefaults = {deepseek:'deepseek-flash', openai:'gpt-6.1-sol'};
 const statuses = { QUEUED: '排队中', PENDING: '等待', RUNNING: '运行中', SUCCEEDED: '成功', FAILED: '失败', CANCELLED: '已取消', SKIPPED: '已跳过' };
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const pretty = value => JSON.stringify(value, null, 2);
@@ -259,15 +260,34 @@ export function mount(pane, workspace) {
             for (const key of ['maxItems', 'perSource', 'lookbackHours', 'timeoutMs']) node.config[key] = Number(get(key));
             node.config.onlyNew = get('onlyNew') !== 'false';
         } else if (node.type === 'ai-summary') {
-            for (const key of ['title', 'prompt', 'model', 'mode']) node.config[key] = get(key);
+            for (const key of ['title', 'prompt', 'mode']) node.config[key] = get(key);
+            commitAiModel(node, get);
             for (const key of ['maxItems', 'maxInputChars', 'timeoutMs']) node.config[key] = Number(get(key));
         } else if (node.type === 'tech-weekly') {
             node.config.timeoutMs = Number(get('timeoutMs'));
+            commitAiModel(node, get);
         } else if (node.type === 'github-trending') {
             node.config.sourceUrl = get('sourceUrl');
             node.config.maxProjects = Number(get('maxProjects')); node.config.timeoutMs = Number(get('timeoutMs'));
         }
         inspectorLast = snapshot; invalidInspector = false;
+    }
+    function commitAiModel(node, get) {
+        node.config.provider = get('provider') || 'deepseek'; node.config.model = get('model');
+        if (node.config.provider === 'openai') node.config.credentialId = get('credentialId') || '';
+        else delete node.config.credentialId;
+    }
+    function aiModelFields(config) {
+        const provider=config.provider || 'deepseek';
+        let content=field('模型服务',select('provider',provider,[['deepseek','DeepSeek'],['openai','OpenAI GPT']]));
+        content+=field('模型名称',inputField('model',config.model || aiModelDefaults[provider],'maxlength="100" spellcheck="false"'));
+        if(provider==='openai') {
+            content+=field('OpenAI API Key 凭据',select('credentialId',config.credentialId || '',[['','请选择 OpenAI 凭据'],...credentials.filter(c=>c.kind==='openai').map(c=>[c.id,c.name])]));
+            content+='<button type="button" data-action="openai-credentials">添加 OpenAI API Key</button>';
+            content+=`<button type="button" data-action="edit-node-credential" ${config.credentialId ? '' : 'disabled'}>编辑所选凭据</button>`;
+            content+='<p class="wf-help">API Key 加密保存在工作流凭据中，节点仅保存引用。可填写账户可用的 GPT 模型名称。</p>';
+        } else content+='<p class="wf-help">DeepSeek 沿用现有 API Key 配置。</p>';
+        return content;
     }
     function parseValue(value) {
         if (value == null || !value.trim()) return null;
@@ -487,11 +507,11 @@ export function mount(pane, workspace) {
             content += field('整理方式', select('mode', c.mode || 'summary', [['summary', '普通汇总'], ['top10', 'AI 精选 10 篇 · 其余速览']]));
             content += field('汇总标题', inputField('title', c.title || 'RSS 科技资讯汇总', 'maxlength="100"'));
             content += field('总结要求', `<textarea aria-label="AI 总结要求" data-field="prompt" rows="5" maxlength="8000">${esc(c.prompt || summaryPrompt)}</textarea>`);
-            content += field('DeepSeek 模型', inputField('model', c.model || 'deepseek-flash', 'maxlength="100"'));
+            content += aiModelFields(c);
             content += field('最多总结条数（须覆盖上游输出）', inputField('maxItems', c.maxItems ?? 50, 'type="number" min="1" max="100"'));
             content += field('输入文本预算（字符，长内容均分截断）', inputField('maxInputChars', c.maxInputChars ?? 60000, 'type="number" min="1000" max="120000"'));
             content += field('总超时（毫秒）', inputField('timeoutMs', c.timeoutMs ?? 180000, 'type="number" min="1000" max="240000"'));
-            content += '<p class="wf-help">总结任意上游 items 数据；复用高级设置中的 DeepSeek API Key。精选模式会直接调用 AI 评选最多 10 篇，给出核心看点和阅读价值，其余每篇一句速览；无需上游先总结。标题、精选文章名和看点支持加粗。无新增内容时跳过 AI 与发送；原文链接来自输入。</p>';
+            content += '<p class="wf-help">使用所选模型总结上游 items 数据。精选模式会直接调用 AI 评选最多 10 篇，给出核心看点和阅读价值，其余每篇一句速览；无需上游先总结。标题、精选文章名和看点支持加粗。无新增内容时跳过 AI 与发送；原文链接来自输入。</p>';
             content += '<div class="wf-trending-output"><h3>后续节点可引用</h3>' + [['整体总结', 'summary'], ['飞书卡片正文', 'feishuMarkdown'], ['飞书纯文本', 'feishuText'], ['邮件主题', 'emailSubject'], ['邮件正文', 'emailBody'], ['邮件 HTML 正文', 'emailHtml'], ...(c.mode === 'top10' ? [['QQ Markdown 消息列表', 'qqMessages']] : [])].map(([title, key]) => field(title, `<input readonly value="{{ input.items[0].json.${key} }}" aria-label="${title}引用">`)).join('') + '</div>';
         }
         if (node.type === 'github-trending') {
@@ -506,8 +526,9 @@ export function mount(pane, workspace) {
             ].map(([title, key]) => field(title, `<input readonly value="{{ input.items[0].json.${key} }}" aria-label="${title}引用">`)).join('') + '<p class="wf-help">将出口连接到 QQ、飞书或邮件节点，在后续节点点击“使用 Trending 分析结果”即可填入引用。QQ Markdown 摘要加粗标题、项目名称和重点内容，控制在单条消息内。</p></div>';
         }
         if (node.type === 'tech-weekly') {
+            content += aiModelFields(c);
             content += field('总超时（毫秒，1000–240000）', inputField('timeoutMs', c.timeoutMs || 180000, 'type="number" min="1000" max="240000" step="1000"'));
-            content += '<p class="wf-help">每次运行读取仓库索引和最新一期正文，由 DeepSeek 分析并生成飞书卡片和邮件内容。使用高级设置中的 DeepSeek API Key。</p>';
+            content += '<p class="wf-help">每次运行读取仓库索引和最新一期正文，由所选 DeepSeek 或 OpenAI 模型分析，生成飞书卡片和邮件内容。</p>';
             content += '<div class="wf-trending-output"><h3>后续节点可引用</h3>' + [['飞书卡片正文','feishuMarkdown'],['飞书卡片标题','title'],['邮件主题','emailSubject'],['邮件正文','emailBody'],['邮件正文（HTML）','emailHtml']].map(([title,key]) => field(title, `<input readonly value="{{ input.items[0].json.${key} }}" aria-label="${title}引用">`)).join('') + '</div>';
         }
         if (node.type === 'feishu') {
@@ -769,7 +790,7 @@ export function mount(pane, workspace) {
         }
     }
     function credentialList() {
-        $('[data-credential-list]').innerHTML = credentials.length ? credentials.map(c => `<div class="wf-credential-row"><span>${esc(c.name)} <small class="wf-muted">${esc(c.kind === 'feishu' ? '飞书机器人' : c.kind === 'qq' ? 'QQ 机器人' : c.kind === 'smtp' ? 'SMTP 邮箱' : c.kind)}</small></span><div class="wf-actions"><button type="button" data-edit-credential="${esc(c.id)}">编辑</button><button type="button" data-delete-credential="${esc(c.id)}">删除</button></div></div>`).join('') : '<p class="wf-muted">尚未保存凭据</p>';
+        $('[data-credential-list]').innerHTML = credentials.length ? credentials.map(c => `<div class="wf-credential-row"><span>${esc(c.name)} <small class="wf-muted">${esc(c.kind === 'openai' ? 'OpenAI API Key' : c.kind === 'feishu' ? '飞书机器人' : c.kind === 'qq' ? 'QQ 机器人' : c.kind === 'smtp' ? 'SMTP 邮箱' : c.kind)}</small></span><div class="wf-actions"><button type="button" data-edit-credential="${esc(c.id)}">编辑</button><button type="button" data-delete-credential="${esc(c.id)}">删除</button></div></div>`).join('') : '<p class="wf-muted">尚未保存凭据</p>';
         $('[data-credential-form] button[type="submit"]').disabled = !capabilities.credentialsEnabled;
         $('[data-credential-hint]').textContent = !capabilities.credentialsEnabled ? '凭据存储尚未启用，请联系管理员配置后使用。' : editingCredential ? '密码、令牌、Webhook 和签名密钥不回显，留空保留原值。修改将用于所有引用此凭据的节点。' : 'HTTP / 飞书 / QQ 使用 HTTPS；SMTP 邮箱使用 SSL/TLS 或 STARTTLS。';
         credentialFields();
@@ -810,6 +831,7 @@ export function mount(pane, workspace) {
     function credentialFields() {
         const form = $('[data-credential-form]'), kind = form.elements.kind.value, isFeishu = kind === 'feishu', isSmtp = kind === 'smtp', isQq = kind === 'qq';
         $('[data-credential-user]').hidden = !['basic', 'header'].includes(kind);
+        $('[data-credential-secret-label]').textContent = kind === 'openai' ? 'OpenAI API Key' : '令牌 / 密码 / Header 值';
         $('[data-credential-secret]').hidden = isFeishu || isSmtp || isQq;
         $('[data-credential-feishu]').hidden = !isFeishu;
         $('[data-credential-smtp]').hidden = !isSmtp;
@@ -922,6 +944,7 @@ export function mount(pane, workspace) {
         credentials: () => openCredentials(),
         'feishu-credentials': () => openCredentials('feishu'),
         'qq-credentials': () => openCredentials('qq'),
+        'openai-credentials': () => openCredentials('openai'),
         'qq-bind': startQqBinding,
         'qq-cancel-binding': () => { stopQqBinding(); renderQqBinding(); },
         'qq-copy-binding': async () => {
@@ -1005,6 +1028,7 @@ export function mount(pane, workspace) {
         if (target.matches('[data-workflow-search]')) { renderWorkflowList(); return; }
         if (target.matches('[data-name]')) { markDirty(); return; }
         if (!target.matches('[data-inspector] input,[data-inspector] textarea,[data-inspector] select')) return;
+        if (target.matches('[data-field="provider"]')) return;
         const node = graph?.nodes.find(n => n.id === selected); if (!node) return;
         if (node.type === 'qq' && target.matches('[data-field="targetId"]')) { stopQqBinding(); renderQqBinding(); }
         if (target.dataset.field === 'name') { node.name = target.value; const name = pane.querySelector(`[data-node="${CSS.escape(node.id)}"] .wf-node-name`); if (name) { name.textContent = target.value; syncWorld(); lines(); } }
@@ -1025,6 +1049,12 @@ export function mount(pane, workspace) {
         if (target.matches('[data-field="credentialId"]')) $('[data-action="edit-node-credential"]').disabled = !target.value;
         if (target.matches('[data-field="sourceUrl"]')) $('[data-trending-url]').value = target.value;
         try {
+            if (target.matches('[data-field="provider"]')) {
+                commitInspector(); const node=graph.nodes.find(n=>n.id===selected);
+                node.config.model=aiModelDefaults[target.value];
+                if(target.value==='openai') node.config.credentialId ||= credentials.find(c=>c.kind==='openai')?.id || '';
+                markDirty(); inspector();
+            }
             if (target.matches('[data-field="mode"]')) { commitInspector(); inspector(); }
             if (target.matches('[data-field="messageType"]')) { commitInspector(); const title = $('[data-feishu-title]'); if (title) title.hidden = target.value !== 'card'; }
             if (graph?.nodes.find(n => n.id === selected)?.type === 'qq' && target.matches('[data-field="credentialId"],[data-field="targetType"]')) { stopQqBinding(); commitInspector(); renderQqBinding(); }
@@ -1222,11 +1252,12 @@ export function mount(pane, workspace) {
         event.preventDefault(); const form = event.currentTarget, data = new FormData(form), kind = form.elements.kind.value, secret = data.get('secret'), editingId = editingCredential?.id;
         perform(async () => {
             const value = kind === 'qq' ? { appId: data.get('qqAppId'), appSecret: data.get('qqAppSecret') || '' }
+                : kind === 'openai' ? { apiKey: secret || '' }
                 : kind === 'feishu' ? { webhookUrl: data.get('webhookUrl'), secret: data.get('feishuSecret') || '' }
                 : kind === 'smtp' ? { host: data.get('smtpHost'), port: Number(data.get('smtpPort')), security: data.get('smtpSecurity'), username: data.get('smtpUsername'), password: data.get('smtpPassword'), from: data.get('smtpFrom') }
                 : kind === 'bearer' ? { token: secret } : kind === 'basic' ? { username: data.get('username'), password: secret } : { header: data.get('username'), secret };
             const created = await send('/credentials' + (editingId ? '/' + encodeURIComponent(editingId) : ''), { name: data.get('name'), kind, value, clearSecret: data.get('clearSecret') === 'on' }, editingId ? 'PUT' : 'POST');
-            if (!editingId && ((kind === 'qq' && graph?.nodes.find(n => n.id === selected)?.type === 'qq') || (kind === 'feishu' && graph?.nodes.find(n => n.id === selected)?.type === 'feishu') || (kind === 'smtp' && graph?.nodes.find(n => n.id === selected)?.type === 'email'))) {
+            if (!editingId && ((kind === 'openai' && ['ai-summary','tech-weekly'].includes(graph?.nodes.find(n => n.id === selected)?.type) && graph.nodes.find(n=>n.id===selected).config.provider==='openai') || (kind === 'qq' && graph?.nodes.find(n => n.id === selected)?.type === 'qq') || (kind === 'feishu' && graph?.nodes.find(n => n.id === selected)?.type === 'feishu') || (kind === 'smtp' && graph?.nodes.find(n => n.id === selected)?.type === 'email'))) {
                 commitInspector(); graph.nodes.find(n => n.id === selected).config.credentialId = created.id; markDirty();
             }
             resetCredentialForm(); credentials = await api('/credentials'); credentialList(); inspector(); notice(editingId ? '凭据已更新，已有节点继续使用此凭据。' : '凭据已保存。');

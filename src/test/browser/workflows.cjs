@@ -56,11 +56,11 @@ const server = http.createServer(async (req, res) => {
             if (req.method === 'PUT') {
                 lastCredential = data; credential.name = data.name;
                 const value = credentialValues.get(id);
-                for (const [key, change] of Object.entries(data.value)) if (!['token','password','secret','webhookUrl','appSecret'].includes(key) || change) value[key] = change;
+                for (const [key, change] of Object.entries(data.value)) if (!['token','password','secret','webhookUrl','appSecret','apiKey'].includes(key) || change) value[key] = change;
                 if (data.clearSecret) value.secret = '';
                 return reply(credential);
             }
-            const value = Object.fromEntries(Object.entries(credentialValues.get(id)).filter(([key]) => !['token','password','secret','webhookUrl','appSecret'].includes(key)));
+            const value = Object.fromEntries(Object.entries(credentialValues.get(id)).filter(([key]) => !['token','password','secret','webhookUrl','appSecret','apiKey'].includes(key)));
             return reply({...credential,value});
         }
         if (route === '/test-node') { lastTest = data; if (testFailure) return reply(testFailure,400);
@@ -523,6 +523,7 @@ const server = http.createServer(async (req, res) => {
         };
         const clickEdge = async id => {
             await page.getByRole('button',{name:'适应视图',exact:true}).click();
+            await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
             const point = await page.locator(`[data-edge="${id}"] .wf-edge-hit`).evaluate(path => {
                 for (const fraction of [.5,...Array.from({length:19},(_,i)=>(i+1)/20)]) {
                     const point = path.getPointAtLength(path.getTotalLength() * fraction).matrixTransform(path.getScreenCTM());
@@ -531,7 +532,8 @@ const server = http.createServer(async (req, res) => {
             });
             assert.ok(point, '连线没有可点击的可见区域');
             await page.mouse.click(point.x, point.y);
-            assert.equal(await page.locator('[data-edge].is-selected').getAttribute('data-edge'), id);
+            try { assert.equal(await page.locator('[data-edge].is-selected').getAttribute('data-edge'), id); }
+            catch(error) { await page.screenshot({path:'/private/tmp/leon-workflow-edge-failure.png',fullPage:false}); throw error; }
         };
         const connectPorts = async (source, target, branch = '', halfScale = false) => {
             await page.getByRole('button',{name:'适应视图',exact:true}).click();
@@ -972,6 +974,52 @@ const server = http.createServer(async (req, res) => {
         assert.ok(!JSON.stringify(workflow.definition).includes('qq-bind:'));
         assert.equal(workflow.definition.nodes.find(n=>n.type==='qq').config.targetId,boundQqId);
         await page.screenshot({path:'/private/tmp/leon-workflow-qq-node.png',fullPage:false});
+        await page.locator('[data-node="start"]').click();
+        await page.locator('[data-add="ai-summary"]').click();
+        assert.equal(await page.locator('[data-field="provider"]').inputValue(),'deepseek');
+        await page.getByRole('combobox',{name:'模型服务',exact:true}).selectOption('openai');
+        assert.equal(await page.locator('[data-field="model"]').inputValue(),'gpt-6.1-sol');
+        await page.getByRole('button',{name:'添加 OpenAI API Key',exact:true}).click();
+        await page.waitForSelector('[data-credentials-dialog][open]');
+        assert.equal(await credentialForm.locator('[name="kind"]').inputValue(),'openai');
+        await credentialForm.locator('[name="name"]').fill('OpenAI GPT');
+        await credentialForm.locator('[name="secret"]').fill('browser-openai-api-key');
+        await page.getByRole('button',{name:'保存凭据',exact:true}).click();
+        await page.waitForFunction(()=>document.querySelectorAll('.wf-credential-row').length===5);
+        assert.equal(lastCredential.kind,'openai'); assert.deepEqual(lastCredential.value,{apiKey:'browser-openai-api-key'});
+        assert.equal(await credentialForm.locator('[name="secret"]').inputValue(),'');
+        await page.locator('[data-close="credentials"]').click();
+        assert.equal(await page.locator('[data-field="credentialId"]').inputValue(),'credential-5');
+        await page.locator('[data-field="model"]').fill('gpt-6-sol');
+        await savePaletteGraph();
+        const openAiNode=workflow.definition.nodes.find(n=>n.type==='ai-summary');
+        assert.equal(openAiNode.config.provider,'openai'); assert.equal(openAiNode.config.model,'gpt-6-sol'); assert.equal(openAiNode.config.credentialId,'credential-5');
+        assert.ok(!JSON.stringify(workflow.definition).includes('browser-openai-api-key'));
+        await page.locator('[data-field="provider"]').scrollIntoViewIfNeeded();
+        await page.screenshot({path:'/private/tmp/leon-workflow-openai-summary.png',fullPage:false});
+        await page.getByRole('button',{name:'编辑所选凭据',exact:true}).click();
+        await page.getByRole('button',{name:'保存修改',exact:true}).waitFor();
+        assert.equal(await credentialForm.locator('[name="secret"]').inputValue(),'');
+        assert.equal(await credentialForm.locator('[name="secret"]').getAttribute('required'),null);
+        await page.getByRole('button',{name:'保存修改',exact:true}).click();
+        await page.waitForFunction(()=>document.querySelector('[data-credential-title]').textContent==='新增凭据');
+        assert.equal(lastCredential.value.apiKey,''); assert.equal(credentialValues.get('credential-5').apiKey,'browser-openai-api-key');
+        await page.locator('[data-close="credentials"]').click();
+        await page.getByRole('combobox',{name:'模型服务',exact:true}).selectOption('deepseek');
+        assert.equal(await page.locator('[data-field="model"]').inputValue(),'deepseek-flash');
+        assert.equal(await page.locator('[data-field="credentialId"]').count(),0);
+        await savePaletteGraph();
+        assert.equal(workflow.definition.nodes.find(n=>n.id===openAiNode.id).config.credentialId,undefined);
+        await page.getByRole('combobox',{name:'模型服务',exact:true}).selectOption('openai');
+        assert.equal(await page.locator('[data-field="credentialId"]').inputValue(),'credential-5');
+        await page.locator('[data-add="tech-weekly"]').click();
+        await page.getByRole('combobox',{name:'模型服务',exact:true}).selectOption('openai');
+        assert.equal(await page.locator('[data-field="credentialId"]').inputValue(),'credential-5');
+        await page.locator('[data-field="model"]').fill('gpt-6-sol');
+        await savePaletteGraph();
+        const weeklyAi=workflow.definition.nodes.find(n=>n.type==='tech-weekly');
+        assert.deepEqual(weeklyAi.config,{timeoutMs:180000,provider:'openai',model:'gpt-6-sol',credentialId:'credential-5'});
+        await page.screenshot({path:'/private/tmp/leon-workflow-openai-weekly.png',fullPage:false});
         await page.getByRole('button',{name:'← 返回列表',exact:true}).click();
         await page.locator('[data-workflow-row="workflow-1"]').waitFor();
         await page.getByRole('button',{name:'删除 未保存草稿',exact:true}).click();
@@ -979,7 +1027,7 @@ const server = http.createServer(async (req, res) => {
         assert.equal(workflow,null,'删除最后一个工作流应回到空列表');
         assert.equal(await page.locator('[data-editor]').isVisible(),false);
         assert.equal(await page.getByRole('button',{name:'＋ 新建工作流',exact:true}).isEnabled(),true);
-        assert.equal(credentials.length,4,'删除工作流不应删除已有凭据');
+        assert.equal(credentials.length,5,'删除工作流不应删除已有凭据');
         assert.deepEqual(errors, []);
         console.log('Workflow browser checks passed: workflow list/editor routing, creation/deletion, history and draft retention, library drag/drop, credential editing and secret retention, Feishu/email configuration, RSS/AI settings and node dialogs, canvas, scheduling, instances, navigation and mobile.');
     } finally { await browser.close(); server.close(); }

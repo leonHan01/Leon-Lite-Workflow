@@ -73,4 +73,16 @@ class WorkflowCredentialsTest {
         assertEquals(404, assertThrows(ResponseStatusException.class, () -> credentials.update("missing", Map.of("name", "missing"))).getStatusCode().value());
         assertThrows(IllegalArgumentException.class, () -> new WorkflowCredentials(jdbc, "").update(id, Map.of("name", "拒绝")));
     }
+    @Test void openAiKeysAreEncryptedNeverReturnedAndBlankEditsRetainTheSameSecret() {
+        String id=create("openai",Map.of("apiKey","test-openai-secret"));
+        assertEquals(Map.of(),credentials.get(id).get("value")); assertFalse(write(credentials.list()).contains("test-openai-secret"));
+        assertFalse(jdbc.queryForObject("SELECT encrypted FROM automation_credential WHERE id=?",String.class,id).contains("test-openai-secret"));
+        credentials.update(id,Map.of("name","修改后的 OpenAI","value",Map.of("apiKey","")));
+        var privacy=new WorkflowPrivacy(); assertEquals("test-openai-secret",credentials.openai(id,privacy)); assertEquals("[已隐藏]",privacy.message("test-openai-secret"));
+        credentials.update(id,Map.of("value",Map.of("apiKey","test-new-openai-secret"))); assertEquals("test-new-openai-secret",credentials.openai(id,new WorkflowPrivacy()));
+        assertThrows(IllegalArgumentException.class,()->credentials.headers(id,new WorkflowPrivacy()));
+        String other=create("bearer",Map.of("token","http-only-token")); assertThrows(IllegalArgumentException.class,()->credentials.openai(other,new WorkflowPrivacy()));
+        assertThrows(IllegalArgumentException.class,()->create("openai",Map.of("apiKey","bad\nkey")));
+        assertEquals(2,jdbc.queryForObject("SELECT COUNT(*) FROM automation_credential",Integer.class));
+    }
 }
