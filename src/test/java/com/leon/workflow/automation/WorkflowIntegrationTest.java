@@ -130,6 +130,23 @@ class WorkflowIntegrationTest {
         assertEquals(published.get("definition"), published.get("publishedDefinition"));
         assertEquals(read(write(initial)), read(write(store.version(id,1))));
     }
+    @Test void workflowListIncludesPersistedScheduleTimesAndPausedStateWithoutInputData() throws Exception {
+        var workflow = createPublished(WorkflowGraph.initial()); String id = text(workflow.get("id"));
+        var metadata = object(store.get(id).get("schedule"));
+        assertEquals(false,metadata.get("configured")); assertEquals(false,metadata.get("enabled")); assertNull(metadata.get("nextRunAt"));
+        var body = new LinkedHashMap<String,Object>(Map.of("enabled",true,"cron","0 0 9 * * *","timeZone","Asia/Shanghai","revision",0,
+                "input",Map.of("items",List.of(Map.of("json",Map.of("data","private-scheduled-business-content"))))));
+        var saved = schedules.save(id,body,java.time.Instant.parse("2026-11-17T00:00:00Z"));
+        var row = store.list().stream().filter(w -> id.equals(w.get("id"))).findFirst().orElseThrow();
+        metadata = object(row.get("schedule"));
+        assertEquals(true,metadata.get("configured")); assertEquals(true,metadata.get("enabled")); assertEquals("0 0 9 * * *",metadata.get("cron"));
+        assertEquals("Asia/Shanghai",metadata.get("timeZone")); assertEquals(saved.get("nextRunAt"),metadata.get("nextRunAt"));
+        assertEquals("2026-11-17T01:00:00Z",metadata.get("nextRunAt"));
+        assertFalse(write(row).contains("private-scheduled-business-content")); assertEquals(metadata,store.get(id).get("schedule"));
+        body.put("enabled",false); body.put("revision",saved.get("revision")); schedules.save(id,body,java.time.Instant.parse("2026-11-17T00:10:00Z"));
+        metadata = object(store.list().stream().filter(w -> id.equals(w.get("id"))).findFirst().orElseThrow().get("schedule"));
+        assertEquals(true,metadata.get("configured")); assertEquals(false,metadata.get("enabled")); assertNull(metadata.get("nextRunAt")); assertEquals("0 0 9 * * *",metadata.get("cron"));
+    }
     @Test void fanOutExecutesEverySuccessorWithIndependentInputsAndFinishesTheEndOnce() throws Exception {
         var graph = new WorkflowGraph(List.of(node("start", "start", Map.of()),
                 script("left", "javascript", "function main(i,c){i.items[0].json.value=7;return i;}"),

@@ -11,6 +11,7 @@ const cancelledQqBindings = [];
 let extraWorkflows = [];
 const credentialValues = new Map();
 let schedule = { enabled: false, cron: '0 0 9 * * *', timeZone: 'Asia/Shanghai', input: { items: [{ json: {} }] }, revision: 0, nextRunAt: null };
+const workflowView = () => ({...workflow,schedule:{configured:schedule.revision>0,enabled:schedule.enabled,cron:schedule.cron,timeZone:schedule.timeZone,nextRunAt:schedule.nextRunAt}});
 const initial = () => ({ nodes: [{ id: 'start', name: '开始', type: 'start', config: {}, position: { x: 80, y: 140 } }, { id: 'end', name: '结束', type: 'end', config: {}, position: { x: 420, y: 140 } }], edges: [{ id: 'start_end', source: 'start', target: 'end', branch: '' }] });
 const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
@@ -76,15 +77,15 @@ const server = http.createServer(async (req, res) => {
             } return reply({ output: ['feishu', 'qq', 'email'].includes(data.node.type) ? data.input : { items: [{ json: { name: 'LEON' } }] }, logs: data.node.type === 'qq' ? 'QQ 平台已接受消息' : data.node.type === 'feishu' ? '飞书消息已发送' : data.node.type === 'email' ? '邮件已提交至 SMTP 服务器' : '调试完成', durationMs: 22, branch: '' }); }
         if (!route) {
             if (req.method === 'POST') workflow = { id: 'workflow-1', name: data.name, definition: initial(), revision: 1, publishedVersion: 0 };
-            return reply(req.method === 'POST' ? workflow : [...(workflow ? [workflow] : []), ...extraWorkflows]);
+            return reply(req.method === 'POST' ? workflowView() : [...(workflow ? [workflowView()] : []), ...extraWorkflows]);
         }
         if (route === '/workflow-extra' && req.method === 'DELETE') { extraWorkflows = []; return reply({deleted:true}); }
         if (route === '/workflow-1') {
             if (req.method === 'PUT') workflow = { ...workflow, ...data, revision: workflow.revision + 1 };
             if (req.method === 'DELETE') { workflow = null; return reply({ deleted: true }); }
-            return reply(workflow);
+            return reply(workflowView());
         }
-        if (route === '/workflow-1/publish') { workflow.publishedVersion++; workflow.publishedDefinition=structuredClone(workflow.definition); versions.unshift({ version: workflow.publishedVersion, definition: structuredClone(workflow.definition), runtimes: { javascript: 'GraalJS', groovy: 'Groovy' }, createdAt: new Date().toISOString() }); return reply(workflow); }
+        if (route === '/workflow-1/publish') { workflow.publishedVersion++; workflow.publishedDefinition=structuredClone(workflow.definition); versions.unshift({ version: workflow.publishedVersion, definition: structuredClone(workflow.definition), runtimes: { javascript: 'GraalJS', groovy: 'Groovy' }, createdAt: new Date().toISOString() }); return reply(workflowView()); }
         if (route === '/workflow-1/versions') return reply(versions);
         if (route === '/workflow-1/runs') {
             if (req.method === 'POST') {
@@ -129,17 +130,30 @@ const server = http.createServer(async (req, res) => {
         await page.waitForSelector('[data-node="start"]');
         await page.waitForURL('**/workflows.html?id=workflow-1');
         assert.equal(await page.locator('[data-workflow-list]').isVisible(),false,'创建完成后应进入编辑页');
-        extraWorkflows = [{id:'workflow-extra',name:'另一个工作流',publishedVersion:2,updatedAt:new Date().toISOString()}];
+        extraWorkflows = [{id:'workflow-extra',name:'另一个工作流',publishedVersion:2,updatedAt:new Date().toISOString(),schedule:{configured:true,enabled:true,cron:'0 0 9 * * *',timeZone:'Asia/Shanghai',nextRunAt:'2026-11-18T01:00:00Z'}}];
         await page.getByRole('button',{name:'← 返回列表',exact:true}).click();
         await page.waitForURL('**/workflows.html');
         await page.locator('[data-workflow-row="workflow-extra"]').waitFor();
         assert.equal(await page.locator('[data-editor]').isVisible(),false);
         assert.equal(await page.locator('[data-workflow-row]').count(),2);
         assert.equal(await page.locator('.wf-list-name').first().textContent(),'双语言演示 <安全>','工作流名称应作为文本显示');
+        assert.equal(await page.getByRole('columnheader',{name:'定时执行',exact:true}).isVisible(),true);
+        assert.equal(await page.getByRole('columnheader',{name:'下一次执行时间',exact:true}).isVisible(),true);
+        const scheduledRow=page.locator('[data-workflow-row="workflow-extra"]');
+        assert.ok((await scheduledRow.locator('.wf-list-schedule').textContent()).includes('每天 09:00'));
+        assert.ok((await scheduledRow.locator('.wf-list-next').textContent()).includes('2026/11/18 09:00:00'));
+        assert.ok((await page.locator('[data-workflow-row="workflow-1"] .wf-list-schedule').textContent()).includes('未设置'));
         await page.reload({waitUntil:'networkidle'});
         await page.locator('[data-workflow-row="workflow-extra"]').waitFor();
         assert.equal(await page.locator('[data-editor]').isVisible(),false,'已有工作流时刷新列表也不能自动打开编辑页');
+        extraWorkflows[0].schedule.nextRunAt='2026-11-19T01:00:00Z';
+        await page.waitForFunction(()=>document.querySelector('[data-workflow-row="workflow-extra"] .wf-list-next')?.textContent.includes('2026/11/19 09:00:00'),null,{timeout:20000});
         await page.screenshot({path:'/private/tmp/leon-workflow-list-desktop.png',fullPage:false});
+        extraWorkflows[0].schedule.enabled=false;
+        await page.getByRole('button',{name:'重新加载',exact:true}).click();
+        await page.waitForFunction(()=>document.querySelector('[data-workflow-row="workflow-extra"] .wf-list-next')?.textContent==='已暂停');
+        assert.ok((await scheduledRow.locator('.wf-list-schedule').textContent()).includes('每天 09:00'));
+        assert.equal(await scheduledRow.locator('.wf-list-next time').count(),0,'暂停后不能展示旧的下次时间');
         await page.getByRole('button',{name:'删除 另一个工作流',exact:true}).click();
         await page.locator('[data-workflow-row="workflow-extra"]').waitFor({state:'detached'});
         assert.equal(workflow.id,'workflow-1','删除其他流程不应影响当前草稿');
@@ -821,10 +835,13 @@ const server = http.createServer(async (req, res) => {
         await page.setViewportSize({ width: 390, height: 844 });
         await page.screenshot({ path: '/private/tmp/leon-workflow-runs-mobile.png', fullPage: true });
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 2), false, '移动端出现页面横向溢出');
+        schedule={...schedule,enabled:true,nextRunAt:'2026-11-18T01:00:00Z'};
         await page.locator('.lw-sidebar').getByRole('link',{name:'工作流编排',exact:true}).click();
         await page.locator('[data-workflow-list]:not([hidden])').waitFor();
         await page.screenshot({path:'/private/tmp/leon-workflow-list-mobile.png',fullPage:false});
         assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+2),false,'手机工作流列表横向溢出');
+        assert.ok((await page.locator('[data-workflow-row="workflow-1"] .wf-list-timing-inline').textContent()).includes('2026/11/18 09:00:00'));
+        assert.equal(await page.locator('[data-workflow-row="workflow-1"] .wf-list-timing-inline').isVisible(),true,'手机仍需展示定时规则和下次时间');
         await page.getByRole('link',{name:'编辑 未保存草稿',exact:true}).click();
         await page.getByRole('button',{name:'全屏编辑',exact:true}).click();
         if(await page.getByRole('button',{name:'展开节点库',exact:true}).count()) await page.getByRole('button',{name:'展开节点库',exact:true}).click();

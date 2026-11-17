@@ -80,18 +80,26 @@ public class WorkflowStore {
         jdbc.update("DELETE FROM automation_rss_pending WHERE run_id IN (SELECT id FROM automation_run WHERE status NOT IN ('QUEUED','RUNNING'))");
     }
     public List<Map<String, Object>> list() {
-        return jdbc.query("SELECT id,name,revision,published_version,created_at,updated_at FROM automation_workflow WHERE deleted=FALSE ORDER BY updated_at DESC",
+        return jdbc.query("SELECT w.id,w.name,w.revision,w.published_version,w.created_at,w.updated_at," + scheduleColumns()
+                        + " FROM automation_workflow w LEFT JOIN automation_schedule s ON s.workflow_id=w.id WHERE w.deleted=FALSE ORDER BY w.updated_at DESC",
                 (rs, i) -> summary(rs));
+    }
+    private String scheduleColumns() {
+        return "s.workflow_id schedule_id,s.enabled schedule_enabled,s.cron schedule_cron,s.time_zone schedule_time_zone,s.next_run_at schedule_next_run_at";
     }
     private Map<String, Object> summary(java.sql.ResultSet rs) throws java.sql.SQLException {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("id", rs.getString("id")); result.put("name", rs.getString("name"));
         result.put("revision", rs.getLong("revision")); result.put("publishedVersion", rs.getInt("published_version"));
         result.put("createdAt", time(rs.getObject("created_at"))); result.put("updatedAt", time(rs.getObject("updated_at")));
+        var schedule = new LinkedHashMap<String, Object>();
+        schedule.put("configured", rs.getString("schedule_id") != null); schedule.put("enabled", rs.getBoolean("schedule_enabled"));
+        schedule.put("cron", rs.getString("schedule_cron")); schedule.put("timeZone", rs.getString("schedule_time_zone"));
+        schedule.put("nextRunAt", time(rs.getObject("schedule_next_run_at"))); result.put("schedule", schedule);
         return result;
     }
     public Map<String, Object> get(String id) {
-        var rows = jdbc.query("SELECT * FROM automation_workflow WHERE id=? AND deleted=FALSE", (rs, i) -> {
+        var rows = jdbc.query("SELECT w.*," + scheduleColumns() + " FROM automation_workflow w LEFT JOIN automation_schedule s ON s.workflow_id=w.id WHERE w.id=? AND w.deleted=FALSE", (rs, i) -> {
             Map<String, Object> result = summary(rs); result.put("definition", read(write(WorkflowGraph.stored(read(rs.getString("draft")))))); return result;
         }, id);
         if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "工作流不存在");

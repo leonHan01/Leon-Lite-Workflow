@@ -97,11 +97,11 @@ class WorkflowAiSummaryTest {
         var request = ArgumentCaptor.forClass(Map.class); verify(http).executeResolved(request.capture(), any(), eq(240000));
         String body = write(request.getValue().get("body")); assertTrue(body.contains("highlight")); assertTrue(body.contains("rank"));
     }
-    @Test void digestRejectsIncompleteDuplicateAndInvalidRanksAndMissingHighlights() throws Exception {
+    @Test void digestRejectsIncompleteOrInvalidRanksAndMissingHighlights() throws Exception {
         var bad = new ArrayList<Map<String, Object>>();
         for (String key : List.of("rank", "index", "highlight", "summary")) {
             var analysis = digestAnalysis(12); var entries = (List<?>)analysis.get("entries");
-            object(entries.getLast()).put(key, key.equals("rank") ? 2 : key.equals("index") ? 999 : ""); bad.add(analysis);
+            object(entries.getLast()).put(key, key.equals("rank") ? 11 : key.equals("index") ? 999 : ""); bad.add(analysis);
         }
         var fewer = digestAnalysis(12); object(((List<?>)fewer.get("entries")).getLast()).put("rank", 0); bad.add(fewer);
         for (var analysis : bad) {
@@ -109,6 +109,24 @@ class WorkflowAiSummaryTest {
             assertThrows(IllegalArgumentException.class, () -> ai.execute(Map.of("mode", "top10"), digestInput(12), new WorkflowPrivacy(), log -> {}));
         }
         assertThrows(IllegalArgumentException.class, () -> WorkflowAiSummary.validateConfig(Map.of("mode", "unknown")));
+    }
+    @Test void tiedRanksKeepEveryPickAndGenerateAllNotificationFormatsInStableInputOrder() throws Exception {
+        var analysis = digestAnalysis(12);
+        for (Object value : (List<?>)analysis.get("entries")) {
+            var entry = object(value); if ((int)entry.get("rank") > 0) entry.put("rank", 1);
+        }
+        when(http.executeResolved(anyMap(), any(), eq(240000))).thenReturn(result(write(analysis), "stop"));
+        var output = json(ai.execute(Map.of("mode", "top10"), digestInput(12), new WorkflowPrivacy(), log -> {}));
+        assertEquals(10, output.get("selectedCount")); assertEquals(2, output.get("briefCount")); assertEquals(12, output.get("articleCount"));
+        var articles = ((List<?>)output.get("articles")).stream().map(WorkflowJson::object).toList();
+        assertEquals(java.util.stream.IntStream.rangeClosed(3,12).boxed().toList(), articles.subList(0,10).stream().map(a -> a.get("index")).toList());
+        assertTrue(articles.subList(0,10).stream().allMatch(a -> Integer.valueOf(1).equals(a.get("rank"))));
+        String qq = String.join("\n", ((List<?>)output.get("qqMessages")).stream().map(WorkflowJson::text).toList());
+        for (int i=1;i<=12;i++) {
+            String url="https://example.com/"+i;
+            assertTrue(text(output.get("feishuMarkdown")).contains(url+")")); assertTrue(text(output.get("emailHtml")).contains(url+"\"")); assertTrue(qq.contains(url+")"));
+        }
+        verify(http).executeResolved(anyMap(), any(), eq(240000));
     }
     @Test void smallDigestSelectsEveryArticleAndKeepsSourceLinksOverModelLinks() throws Exception {
         var analysis = digestAnalysis(2); object(((List<?>)analysis.get("entries")).getFirst()).put("url", "https://invented.invalid");

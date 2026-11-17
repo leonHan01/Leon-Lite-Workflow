@@ -32,6 +32,25 @@ const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;
 const pretty = value => JSON.stringify(value, null, 2);
 const canonical = value => JSON.stringify(value, (_, item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item);
 const date = value => value ? new Date(value).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false }) : '—';
+function scheduleRule(cron) {
+    const value = String(cron || '').trim().replace(/\s+/g, ' '), parts = value.split(' ');
+    if (value === '0 * * * * *') return '每分钟';
+    if (value === '0 0 * * * *') return '每小时';
+    if (parts.length !== 6) return value || '未设置';
+    const [second, minute, hour, day, month, week] = parts;
+    if (second === '0' && /^\*\/[1-9]\d*$/.test(minute) && [hour,day,month,week].every(v => v === '*')) return `每 ${minute.slice(2)} 分钟`;
+    if (![second,minute,hour].every(v => /^\d+$/.test(v))) return `Cron：${value}`;
+    const clock = `${hour.padStart(2,'0')}:${minute.padStart(2,'0')}${Number(second) ? ':' + second.padStart(2,'0') : ''}`;
+    if (day === '*' && month === '*') {
+        if (week === '*') return `每天 ${clock}`;
+        if (['MON-FRI','1-5'].includes(week.toUpperCase())) return `工作日 ${clock}`;
+        const weekdays = {'0':'日','7':'日','1':'一','2':'二','3':'三','4':'四','5':'五','6':'六',SUN:'日',MON:'一',TUE:'二',WED:'三',THU:'四',FRI:'五',SAT:'六'};
+        if (weekdays[week.toUpperCase()]) return `每周${weekdays[week.toUpperCase()]} ${clock}`;
+    }
+    if (/^\d+$/.test(day) && month === '*' && week === '*') return `每月 ${Number(day)} 日 ${clock}`;
+    if (/^\d+$/.test(day) && /^\d+$/.test(month) && week === '*') return `每年 ${Number(month)} 月 ${Number(day)} 日 ${clock}`;
+    return `Cron：${value}`;
+}
 const badge = value => `<span class="wf-badge ${esc(value)}">${esc(statuses[value] || value)}</span>`;
 const select = (name, value, choices) => `<select data-field="${name}">${choices.map(([id, label]) => `<option value="${esc(id)}" ${String(value) === id ? 'selected' : ''}>${esc(label)}</option>`).join('')}</select>`;
 const field = (title, content) => `<label>${title}${content}</label>`;
@@ -101,11 +120,20 @@ export function mount(pane, workspace) {
     function needsPublish() { return !!workflow && (!workflow.publishedVersion || (workflow.publishedDefinition ? canonical(graph) !== canonical(workflow.publishedDefinition) : dirty)); }
     function markDirty() { controls(); }
     function inspectorValues() { return JSON.stringify([...pane.querySelectorAll('[data-inspector] [data-field],[data-inspector] [data-feed-field]')].map((field, index) => [field.dataset.field || field.dataset.feedField, index, field.value])); }
+    function listSchedule(item) {
+        const value = item.schedule;
+        if (!value?.configured) return {rule:'未设置', detail:'', next:'—', time:''};
+        const zone = value.timeZone === 'Asia/Shanghai' ? '北京时间' : value.timeZone || '未指定时区';
+        const enabled = value.enabled && capabilities.scheduledExecution !== false;
+        const status = !value.enabled ? '已暂停' : capabilities.scheduledExecution === false ? '调度已停用' : '已启用';
+        const validTime = enabled && value.nextRunAt && Number.isFinite(Date.parse(value.nextRunAt));
+        return {rule:scheduleRule(value.cron), detail:`${zone} · ${status}`, next:enabled ? validTime ? date(value.nextRunAt) : '待计算' : status, time:validTime ? value.nextRunAt : ''};
+    }
     function renderWorkflowList() {
         const query = $('[data-workflow-search]').value.trim().toLocaleLowerCase();
         const visible = workflows.filter(w => (w.id === workflow?.id && dirty ? $('[data-name]').value : w.name).toLocaleLowerCase().includes(query));
         $('[data-workflow-count]').textContent = query ? `匹配 ${visible.length} / ${workflows.length} 个` : `共 ${workflows.length} 个`;
-        $('[data-workflow-rows]').innerHTML = workflows.length ? `<table class="wf-list-table"><thead><tr><th>工作流名称</th><th>发布状态</th><th>运行状态</th><th>操作</th></tr></thead><tbody>${visible.map(w => {
+        $('[data-workflow-rows]').innerHTML = workflows.length ? `<table class="wf-list-table"><thead><tr><th>工作流名称</th><th class="wf-list-published">发布状态</th><th class="wf-list-schedule">定时执行</th><th class="wf-list-next">下一次执行时间</th><th class="wf-list-progress">运行状态</th><th>操作</th></tr></thead><tbody>${visible.map(w => {
             const unsaved = w.id === workflow?.id && dirty;
             const name = unsaved ? $('[data-name]').value : w.name;
             const href = '/workflows.html?id=' + encodeURIComponent(w.id);
@@ -113,7 +141,10 @@ export function mount(pane, workspace) {
             const runningNames = nodes.filter(n => n.status === 'RUNNING').map(n => n.name).filter(Boolean).join('、');
             const progress = run ? `${statuses[run.status] || run.status}${nodes.length ? ` · ${completed}/${nodes.length} 节点` : ''}${runningNames ? ` · 正在执行 ${runningNames}` : ''}` : '暂无运行记录';
             const running = run && ['QUEUED','RUNNING'].includes(run.status);
-            return `<tr data-workflow-row="${esc(w.id)}"><td><a class="wf-list-name" href="${esc(href)}">${esc(name)}</a>${unsaved ? '<small class="wf-list-unsaved">有未保存修改</small>' : ''}</td><td><span class="wf-list-state ${w.publishedVersion ? 'is-published' : ''}">${w.publishedVersion ? '已发布 v' + esc(w.publishedVersion) : '未发布'}</span></td><td class="wf-list-progress" aria-live="polite">${esc(progress)}${run?.error ? `<small class="wf-list-error">${esc(run.error)}</small>` : ''}</td><td><div class="wf-list-actions"><button type="button" data-list-run="${esc(w.id)}" aria-label="运行 ${esc(name)}" ${!w.publishedVersion || running || busy ? 'disabled' : ''} title="${!w.publishedVersion ? '请先发布工作流' : running ? '工作流正在运行' : '运行已发布版本'}">▶ 运行</button><a href="${esc(href)}" aria-label="编辑 ${esc(name)}">编辑</a><button type="button" class="wf-danger" data-delete-workflow="${esc(w.id)}" ${busy ? 'disabled' : ''} aria-label="删除 ${esc(name)}">删除</button></div></td></tr>`;
+            const timing = listSchedule(w);
+            const nextTime = timing.time ? `<time datetime="${esc(timing.time)}">${esc(timing.next)}</time><small>北京时间</small>` : esc(timing.next);
+            const inlineTiming = `<div class="wf-list-timing-inline"><span>定时：${esc(timing.rule)}${timing.detail ? ` · ${esc(timing.detail)}` : ''}</span><span>下次：${esc(timing.next)}${timing.time ? '（北京时间）' : ''}</span></div>`;
+            return `<tr data-workflow-row="${esc(w.id)}"><td><a class="wf-list-name" href="${esc(href)}">${esc(name)}</a>${unsaved ? '<small class="wf-list-unsaved">有未保存修改</small>' : ''}${inlineTiming}</td><td class="wf-list-published"><span class="wf-list-state ${w.publishedVersion ? 'is-published' : ''}">${w.publishedVersion ? '已发布 v' + esc(w.publishedVersion) : '未发布'}</span></td><td class="wf-list-schedule" title="${esc(w.schedule?.cron || '')}"><span>${esc(timing.rule)}</span><small>${esc(timing.detail)}</small></td><td class="wf-list-next">${nextTime}</td><td class="wf-list-progress" aria-live="polite">${esc(progress)}${run?.error ? `<small class="wf-list-error">${esc(run.error)}</small>` : ''}</td><td><div class="wf-list-actions"><button type="button" data-list-run="${esc(w.id)}" aria-label="运行 ${esc(name)}" ${!w.publishedVersion || running || busy ? 'disabled' : ''} title="${!w.publishedVersion ? '请先发布工作流' : running ? '工作流正在运行' : '运行已发布版本'}">▶ 运行</button><a href="${esc(href)}" aria-label="编辑 ${esc(name)}">编辑</a><button type="button" class="wf-danger" data-delete-workflow="${esc(w.id)}" ${busy ? 'disabled' : ''} aria-label="删除 ${esc(name)}">删除</button></div></td></tr>`;
         }).join('')}</tbody></table>${visible.length ? '' : '<div class="wf-list-empty">没有找到匹配的工作流。</div>'}` : '<div class="wf-list-empty"><strong>还没有工作流</strong><p>点击上方“新建工作流”，开始编排你的第一个流程。</p></div>';
     }
     function setEditorVisible(visible) {
@@ -150,14 +181,28 @@ export function mount(pane, workspace) {
     }
     function scheduleListPoll() {
         clearTimeout(listRunTimer);
-        if (!active || editorVisible || ![...listRuns.values()].some(r => ['RUNNING','QUEUED'].includes(r.status))) return;
+        const running = [...listRuns.values()].some(r => ['RUNNING','QUEUED'].includes(r.status));
+        const scheduled = capabilities.scheduledExecution !== false && workflows.some(w => w.schedule?.enabled);
+        if (!active || editorVisible || (!running && !scheduled)) return;
         listRunTimer = setTimeout(async () => {
+            const changedSchedules = [];
+            if (scheduled) {
+                try {
+                    const latest = await api(), previous = new Map(workflows.map(w => [w.id,w.schedule?.nextRunAt]));
+                    if (!active || editorVisible) return;
+                    changedSchedules.push(...latest.filter(w => w.schedule?.enabled && previous.get(w.id) !== w.schedule.nextRunAt)); workflows = latest;
+                } catch { notice('定时信息刷新失败，请稍后重新加载。', true); }
+            }
             await Promise.allSettled([...listRuns.entries()].filter(([, r]) => ['RUNNING','QUEUED'].includes(r.status)).map(async ([id, run]) => {
                 try { listRuns.set(id, await api('/runs/' + encodeURIComponent(run.id))); }
                 catch (error) { notice('运行状态刷新失败：' + error.message, true); }
             }));
+            await Promise.allSettled(changedSchedules.map(async w => {
+                const rows = await api('/' + encodeURIComponent(w.id) + '/runs');
+                if (rows.length) listRuns.set(w.id, await api('/runs/' + encodeURIComponent(rows[0].id)));
+            }));
             if (active && !editorVisible) { renderWorkflowList(); scheduleListPoll(); }
-        }, 1200);
+        }, running ? 1200 : 15000);
     }
 
     async function load(id, push = false) {

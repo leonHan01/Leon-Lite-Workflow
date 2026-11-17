@@ -16,7 +16,7 @@ final class WorkflowAiDigest {
             输出简体中文，仅输出 JSON：
             {"summary":"40–80字整体趋势","entries":[{"index":1,"rank":1,"highlight":"10–25字核心看点","summary":"50–90字说明内容与阅读价值"}]}。
             entries 必须覆盖每个输入 index，保持输入顺序，不遗漏、重复或新增；rank 表示价值排名。
-            精选 rank 为1至精选数量，必须唯一且连续；其余 rank=0、highlight=""、summary 为12–25字的一句话速览。
+            精选 rank 为1至精选数量，表示阅读价值顺序，允许并列；其余 rank=0、highlight=""、summary 为12–25字的一句话速览。
             summary 与 highlight 只写普通文字，不写 Markdown、HTML、前缀标记、链接或内部思考。
             """;
     private WorkflowAiDigest() {}
@@ -28,12 +28,10 @@ final class WorkflowAiDigest {
         if (!(analysis.get("entries") instanceof List<?> entries) || entries.size() != items.size())
             throw new IllegalArgumentException("AI 精选条目与输入不对应，未发送消息");
         var selected = new ArrayList<Map<String, Object>>(); var briefs = new ArrayList<Map<String, Object>>();
-        var ranks = new HashSet<Integer>();
         for (int i = 0; i < entries.size(); i++) {
             var entry = object(entries.get(i));
             if (!String.valueOf(i + 1).equals(text(entry.get("index")))) throw new IllegalArgumentException("AI 精选文章编号或顺序无效，未发送消息");
             int rank = integer(entry.get("rank"), -1, 0, expected);
-            if (rank > 0 && !ranks.add(rank)) throw new IllegalArgumentException("AI 精选排名重复，未发送消息");
             String detail = required(entry.get("summary"), "AI 精选文章摘要为空或过长", 1000);
             String highlight = rank > 0 ? required(entry.get("highlight"), "AI 精选缺少核心看点", 200) : "";
             var original = object(object(items.get(i)).get("json"));
@@ -46,7 +44,7 @@ final class WorkflowAiDigest {
             (rank > 0 ? selected : briefs).add(article);
         }
         if (selected.size() != expected) throw new IllegalArgumentException("AI 需要评选 " + expected + " 篇精选文章，未发送消息");
-        selected.sort(Comparator.comparingInt(a -> (int)a.get("rank")));
+        selected.sort(Comparator.<Map<String,Object>>comparingInt(a -> (int)a.get("rank")).thenComparingInt(a -> (int)a.get("index")));
         var articles = new ArrayList<>(selected); articles.addAll(briefs);
         String title = name + " · " + LocalDate.now(ZoneId.of("Asia/Shanghai"));
         List<?> warnings = input.get("rss") instanceof Map<?,?> rss && rss.get("warnings") instanceof List<?> list ? list : List.of();

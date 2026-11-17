@@ -91,6 +91,19 @@ class WorkflowQqTest {
         for (int i = 0; i < messages.size(); i++) assertEquals(Map.of("msg_type", 2, "markdown", Map.of("content", messages.get(i))), requests.get(i + 1).get("body"));
         assertTrue(write(run.get("nodes")).contains("已确认 2 / 2"));
     }
+    @Test void duplicateDigestRanksDoNotPreventPublishedQqDelivery() throws Exception {
+        var items = new ArrayList<>(); var entries = new ArrayList<>();
+        for (int i=1;i<=12;i++) {
+            items.add(Map.of("json",Map.of("title","文章 "+i,"url","https://example.com/"+i)));
+            entries.add(Map.of("index",i,"rank",i<=10 ? 1 : 0,"highlight",i<=10 ? "核心看点" : "","summary","内容要点与阅读价值"));
+        }
+        var report = WorkflowAiDigest.report(Map.of("summary","整体趋势","entries",entries),Map.of("items",items),"资讯日报",false);
+        var c=config(); c.put("messageMode","list"); c.put("messageType","markdown"); c.put("text","{{ input.items[0].json.qqMessages }}");
+        var run=run(c,report); assertEquals("SUCCEEDED",run.get("status"),text(run.get("error")));
+        var json=object(object(((List<?>)report.get("items")).getFirst()).get("json"));
+        var messages=(List<?>)json.get("qqMessages"); assertEquals(messages.size()+1,requests.size());
+        for(int i=0;i<messages.size();i++) assertEquals(messages.get(i),object(object(requests.get(i+1).get("body")).get("markdown")).get("content"));
+    }
     @Test void validatesWholeListBeforeSendingAndStopsWithoutRetryingAfterPartialFailure() throws Exception {
         var c = config(); c.put("messageMode", "list"); c.put("text", "{{ input.items[0].json.qqMessages }}");
         for (Object messages : List.of(List.of("正常", "中".repeat(1000)), List.of("正常", 7), List.of(), "不是数组")) {
