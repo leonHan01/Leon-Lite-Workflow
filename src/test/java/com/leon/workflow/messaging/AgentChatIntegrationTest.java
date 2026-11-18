@@ -34,7 +34,7 @@ class AgentChatIntegrationTest {
     @MockitoBean AgentModelClient model;
     private static final String AUTH="Bearer integration-test-token", KEY="test-only-model-key-never-real";
     private MockMvc mvc(){return MockMvcBuilders.webAppContextSetup(context).build();}
-    @BeforeEach void clean(){jdbc.update("DELETE FROM chat_context_snapshot");jdbc.update("DELETE FROM chat_context_summary");jdbc.update("DELETE FROM chat_context_policy");jdbc.update("DELETE FROM chat_agent_job");jdbc.update("DELETE FROM device_message");jdbc.update("DELETE FROM chat_conversation WHERE id<>'shared'");jdbc.update("DELETE FROM chat_agent");}
+    @BeforeEach void clean(){jdbc.update("DELETE FROM chat_context_archive");jdbc.update("DELETE FROM chat_context_operation");jdbc.update("DELETE FROM chat_context_snapshot");jdbc.update("DELETE FROM chat_context_summary");jdbc.update("DELETE FROM chat_context_policy");jdbc.update("DELETE FROM chat_agent_job");jdbc.update("DELETE FROM device_message");jdbc.update("DELETE FROM chat_conversation WHERE id<>'shared'");jdbc.update("DELETE FROM chat_agent");}
     private AgentRegistry.Agent agent(String handle){return agents.save(null,new AgentRegistry.Edit(handle,handle,"openai","test-model","角色 "+handle,true,KEY,null));}
     private DeviceMessageStore.Send send(String room,String text,List<String> ids){return new DeviceMessageStore.Send(UUID.randomUUID().toString(),UUID.randomUUID().toString(),"Mac","macos",text,room,ids);}
 
@@ -232,5 +232,115 @@ class AgentChatIntegrationTest {
         assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM chat_context_summary",Integer.class));
         assertTrue(store.page(room.id(),null,null,100).jobs().getFirst().error().contains("AI 摘要为空或过长"));
         assertEquals(11,store.page(room.id(),null,null,100).messages().size());
+    }
+
+    @Test void manualCompressionRunsBelowAutomaticThresholdAndNextReplyUsesMemory() throws Exception {
+        var a=agent("writer");var room=chat.direct(a.id());
+        when(model.complete(any(),anyString(),anyList())).thenReturn("answer");
+        for(int i=0;i<3;i++) { chat.send(send(room.id(),"old-question-"+i,List.of()));engine.runNext(); }
+        var inputs=new ArrayList<List<Map<String,String>>>();
+        doAnswer(call->{
+            List<Map<String,String>> input=call.getArgument(2);inputs.add(input);
+            if(input.getFirst().get("content").contains("你是对话记忆压缩器")) {
+                assertEquals("RUNNING",store.page(room.id(),null,null,100).contextOperations().getFirst().status());
+                assertEquals("COMPRESSING",contexts.info(room.id()).agents().getFirst().phase());
+                assertTrue(input.getLast().get("content").contains("old-question-0"));
+                assertFalse(input.getLast().get("content").contains("old-question-2"));
+                assertFalse(input.getLast().get("content").contains("future-question"));
+                return "手动摘要：记住早期约定 BLUE";
+            }
+            assertTrue(input.stream().anyMatch(m->m.get("content").contains("手动摘要")));
+            assertFalse(input.stream().anyMatch(m->m.get("content").contains("old-question-0")));
+            assertTrue(input.getLast().get("content").contains("future-question"));return "next answer";
+        }).when(model).complete(any(),anyString(),anyList());
+        String id=UUID.randomUUID().toString();
+        var op=contexts.enqueueCompression(room.id(),a.id(),id);assertEquals("PENDING",op.status());
+        assertEquals(op,contexts.enqueueCompression(room.id(),a.id(),id));assertTrue(inputs.isEmpty());
+        // New questions wait behind a queued manual operation without entering its frozen history.
+        chat.send(send(room.id(),"future-question",List.of()));assertNull(store.claim());
+        assertTrue(engine.runNext());assertEquals(1,inputs.size());
+        assertEquals(7,store.page(room.id(),null,null,100).messages().size());
+        assertEquals("SUCCEEDED",store.page(room.id(),null,null,100).contextOperations().getFirst().status());
+        assertEquals(10,contexts.info(room.id()).recentRounds());
+        assertTrue(engine.runNext());assertEquals(2,inputs.size());assertEquals(8,store.page(room.id(),null,null,100).messages().size());
+        assertFalse(engine.runNext());
+    }
+    @Test void compactApiRequiresAuthOriginAndRejectsConcurrentOperations() throws Exception {
+        var a=agent("writer");var b=agent("outsider");var room=chat.group("test",List.of(a.id()));
+        String id=UUID.randomUUID().toString();String body=json.writeValueAsString(Map.of("conversationId",room.id(),"agentId",a.id(),"requestId",id));
+        mvc().perform(post("/api/conversations/context/compact").contentType("application/json").content(body)).andExpect(status().isUnauthorized());
+        Cookie cookie=new Cookie(BrowserSessionService.COOKIE_NAME,sessions.create(false,auth.fingerprint()));
+        mvc().perform(post("/api/conversations/context/compact").cookie(cookie).contentType("application/json").content(body)).andExpect(status().isForbidden());
+        mvc().perform(post("/api/conversations/context/compact").header("Authorization",AUTH).contentType("application/json").content(body)).andExpect(status().isAccepted()).andExpect(jsonPath("$.status").value("PENDING"));
+        mvc().perform(post("/api/conversations/context/compact").header("Authorization",AUTH).contentType("application/json").content(body)).andExpect(status().isAccepted()).andExpect(jsonPath("$.id").value(id));
+        assertThrows(Exception.class,()->contexts.enqueueCompression(room.id(),a.id(),UUID.randomUUID().toString()));
+        assertThrows(Exception.class,()->contexts.enqueueCompression(room.id(),b.id(),UUID.randomUUID().toString()));
+        assertThrows(Exception.class,()->contexts.configure(room.id(),10,true));
+        assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM chat_context_operation",Integer.class));
+        var claimed=contexts.claimCompression();assertNotNull(claimed);assertNull(contexts.claimCompression());
+        contexts.recoverCompressions();assertNull(contexts.claimCompression());
+        assertEquals("FAILED",store.page(room.id(),null,null,100).contextOperations().getFirst().status());
+        verifyNoInteractions(model);
+    }
+    @Test void manualCompressionResumesCompletedBatchesAfterFailure() throws Exception {
+        var a=agent("writer");var room=chat.group("test",List.of(a.id()));
+        for(int i=0;i<10;i++) chat.send(send(room.id(),"history-"+i,List.of()));
+        var calls=new java.util.concurrent.atomic.AtomicInteger();
+        when(model.complete(any(),anyString(),anyList())).thenAnswer(call->{
+            if(calls.incrementAndGet()==2)throw new AgentModelClient.Failure("超时");return "已完成第一批";
+        });
+        contexts.enqueueCompression(room.id(),a.id(),UUID.randomUUID().toString());engine.runNext();
+        assertEquals("FAILED",store.page(room.id(),null,null,100).contextOperations().getFirst().status());
+        assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM chat_context_summary",Integer.class));
+        doAnswer(call->{
+            List<Map<String,String>> input=call.getArgument(2);String text=input.getLast().get("content");
+            assertTrue(text.contains("已完成第一批")||text.contains("已继续压缩"));assertFalse(text.contains("history-0"));return "已继续压缩";
+        }).when(model).complete(any(),anyString(),anyList());
+        contexts.enqueueCompression(room.id(),a.id(),UUID.randomUUID().toString());engine.runNext();
+        assertEquals("SUCCEEDED",store.page(room.id(),null,null,100).contextOperations().getFirst().status());
+        assertEquals(10,store.page(room.id(),null,null,100).messages().size());
+    }
+    @Test void noEarlierHistoryCompletesWithoutPaidModelCall() {
+        var a=agent("writer");var room=chat.group("test",List.of(a.id()));
+        chat.send(send(room.id(),"single turn",List.of()));
+        contexts.enqueueCompression(room.id(),a.id(),UUID.randomUUID().toString());assertTrue(engine.runNext());
+        var op=store.page(room.id(),null,null,100).contextOperations().getFirst();
+        assertEquals("SUCCEEDED",op.status());assertTrue(op.result().contains("暂无可压缩"));verifyNoInteractions(model);
+        assertEquals(1,store.page(room.id(),null,null,100).messages().size());
+    }
+
+    @Test void archiveSummarizesWholeRoundWithoutMutatingLiveMemoryAndFinishesAtomically() throws Exception {
+        var a=agent("writer");var room=chat.group("round",List.of(a.id()));
+        chat.send(send(room.id(),"first original",List.of()));chat.send(send(room.id(),"second original",List.of()));
+        when(model.complete(any(),anyString(),anyList())).thenAnswer(call->{
+            List<Map<String,String>> input=call.getArgument(2);String text=input.getLast().get("content");
+            assertTrue(text.contains("first original")&&text.contains("second original"));return "本轮总结：已确认原始事实。";
+        });
+        String id=UUID.randomUUID().toString();contexts.enqueueArchive(room.id(),a.id(),id);
+        assertThrows(Exception.class,()->contexts.finishArchive(id));
+        assertTrue(engine.runNext());var archive=contexts.archive(id);
+        assertTrue(archive.get("summary").toString().contains("本轮总结"));
+        assertEquals(2,json.valueToTree(archive.get("messages")).size());
+        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM chat_context_summary",Integer.class));
+        var updated=contexts.finishArchive(id);assertTrue(updated.topicStartedAfter()>0);
+        assertEquals(updated.topicStartedAfter(),contexts.finishArchive(id).topicStartedAfter());
+        assertEquals(2,store.page(room.id(),null,null,100).messages().size());
+        chat.send(send(room.id(),"new round",List.of()));
+        doReturn("新一轮总结").when(model).complete(any(),anyString(),anyList());
+        String next=UUID.randomUUID().toString();contexts.enqueueArchive(room.id(),a.id(),next);engine.runNext();
+        var messages=json.valueToTree(contexts.archive(next).get("messages"));assertEquals(1,messages.size());assertEquals("new round",messages.get(0).path("text").asText());
+    }
+    @Test void archiveFinishNeverDropsMessagesArrivingDuringExport() throws Exception {
+        var a=agent("writer");var room=chat.group("round",List.of(a.id()));
+        chat.send(send(room.id(),"archived",List.of()));when(model.complete(any(),anyString(),anyList())).thenReturn("总结");
+        String id=UUID.randomUUID().toString();contexts.enqueueArchive(room.id(),a.id(),id);engine.runNext();
+        chat.send(send(room.id(),"arrived during local export",List.of()));
+        assertThrows(Exception.class,()->contexts.finishArchive(id));assertEquals(0,contexts.info(room.id()).topicStartedAfter());
+        assertEquals(1,json.valueToTree(contexts.archive(id).get("messages")).size());assertEquals(2,store.page(room.id(),null,null,100).messages().size());
+    }
+    @Test void emptyRoundArchiveIsRejectedWithoutQueueOrModelCall() {
+        var a=agent("writer");var room=chat.direct(a.id());
+        assertThrows(Exception.class,()->contexts.enqueueArchive(room.id(),a.id(),UUID.randomUUID().toString()));
+        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM chat_context_operation",Integer.class));verifyNoInteractions(model);
     }
 }

@@ -9,6 +9,19 @@ public class AgentContextController {
     private final AgentContextManager contexts;
     public AgentContextController(AgentContextManager contexts) { this.contexts=contexts; }
     public record Settings(String conversationId,int recentRounds) {}
+    public record Compact(String conversationId,String agentId,String requestId) {}
+    @PostMapping("/api/conversations/context/archive")
+    public ResponseEntity<?> archive(@RequestBody Compact input) {
+        return ResponseEntity.accepted().cacheControl(CacheControl.noStore()).body(contexts.enqueueArchive(input.conversationId(),input.agentId(),input.requestId()));
+    }
+    @GetMapping("/api/conversations/context/archive/{id}")
+    public ResponseEntity<?> archive(@PathVariable String id) { return response(contexts.archive(id)); }
+    @PostMapping("/api/conversations/context/archive/{id}/finish")
+    public ResponseEntity<?> finish(@PathVariable String id) { return response(contexts.finishArchive(id)); }
+    @PostMapping("/api/conversations/context/compact")
+    public ResponseEntity<?> compact(@RequestBody Compact input) {
+        return ResponseEntity.accepted().cacheControl(CacheControl.noStore()).body(contexts.enqueueCompression(input.conversationId(),input.agentId(),input.requestId()));
+    }
     @GetMapping("/api/conversations/context")
     public ResponseEntity<?> info(@RequestParam String conversationId) { return response(contexts.info(conversationId)); }
     @PostMapping("/api/conversations/context/settings")

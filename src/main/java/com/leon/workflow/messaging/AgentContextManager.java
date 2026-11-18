@@ -51,6 +51,7 @@ public class AgentContextManager {
                 var memory=memory(new DeviceMessageStore.Work(Long.MAX_VALUE,agent.id(),room),policy,Long.MAX_VALUE);
                 var snapshots=jdbc.queryForList("SELECT estimated_tokens,retained_rounds FROM chat_context_snapshot WHERE conversation_id=? AND agent_id=? AND epoch=? ORDER BY message_id DESC LIMIT 1",room,agent.id(),policy.epoch());
                 var phases=jdbc.queryForList("SELECT phase FROM chat_agent_job WHERE conversation_id=? AND agent_id=? AND status='RUNNING' ORDER BY message_id LIMIT 1",String.class,room,agent.id());
+                if(phases.isEmpty() && jdbc.queryForObject("SELECT COUNT(*) FROM chat_context_operation WHERE conversation_id=? AND agent_id=? AND status='RUNNING'",Integer.class,room,agent.id())>0) phases=List.of("COMPRESSING");
                 rows.add(new AgentInfo(agent.id(),agent.name(),memory.text(),memory.createdAt(),snapshots.isEmpty()?0:((Number)snapshots.getFirst().get("estimated_tokens")).intValue(),snapshots.isEmpty()?0:((Number)snapshots.getFirst().get("retained_rounds")).intValue(),phases.isEmpty()?"":phases.getFirst()));
             }
             return new Info(room,policy.recentRounds(),budget,policy.afterId(),rows);
@@ -60,7 +61,7 @@ public class AgentContextManager {
         if(rounds<1||rounds>20) throw DeviceMessageStore.failure(HttpStatus.BAD_REQUEST,"保留轮数应为 1–20");
         synchronized(store) {
             store.conversation(room);
-            if(jdbc.queryForObject("SELECT COUNT(*) FROM chat_agent_job WHERE conversation_id=? AND status IN ('PENDING','RUNNING')",Integer.class,room)>0)
+            if(busy(room))
                 throw DeviceMessageStore.failure(HttpStatus.CONFLICT,"请等待当前会话回复完成后再修改上下文");
             var previous=policy(room);long after=previous.afterId(),epoch=previous.epoch();
             if(reset) { after=jdbc.queryForObject("SELECT COALESCE(MAX(id),0) FROM device_message WHERE conversation_id=?",Long.class,room);epoch++; }
@@ -85,15 +86,16 @@ public class AgentContextManager {
         if(current.messages().isEmpty()) throw new AgentModelClient.Failure("当前问题不存在");
         if(tokens(current.messages())+tokens(List.of(head))+80>budget)
             throw new AgentModelClient.Failure("当前问题或 Agent 指令过长，请缩短后重新发送（原消息已保留）");
-        List<Long> anchors;
-        synchronized(store) { anchors=store.contextAnchors(work,policy.afterId(),work.messageId(),policy.recentRounds(),true); }
+        List<Long> anchors; Memory memory;
+        synchronized(store) {
+            memory=memory(work,policy,work.messageId());
+            anchors=store.contextAnchors(work,memory.throughId(),work.messageId(),policy.recentRounds(),true);
+        }
         Collections.reverse(anchors);
         var recent=new ArrayList<Turn>();for(long anchor:anchors) recent.add(turn(work,anchor,agent,key));
         // Reserve summary space before choosing whole turns; never slice a message or half a round.
         while(!recent.isEmpty() && tokens(flatten(recent))+tokens(current.messages())+tokens(List.of(head))+SUMMARY_BUDGET+80>budget) recent.removeFirst();
         long cutoff=recent.isEmpty()?work.messageId():recent.getFirst().anchor();
-        Memory memory;
-        synchronized(store) { memory=memory(work,policy,cutoff); }
         List<Long> old;
         synchronized(store) { old=store.contextAnchors(work,memory.throughId(),cutoff,COMPRESSION_BATCH,false); }
         boolean compress=old.size()>=COMPRESSION_BATCH;
@@ -103,24 +105,7 @@ public class AgentContextManager {
         if(compress) {
             store.phase(work,"COMPRESSING");
             try {
-                while(!old.isEmpty()) {
-                    var chunk=new ArrayList<Turn>();
-                    for(long anchor:old) {
-                        var next=turn(work,anchor,agent,key);var trial=new ArrayList<>(chunk);trial.add(next);
-                        if(tokens(compressionMessages(memory.text(),trial))>budget) break;
-                        chunk.add(next);
-                    }
-                    if(chunk.isEmpty()) throw new AgentModelClient.Failure("较早的单轮对话过长，无法完整压缩；可开启新话题");
-                    String summary=clean(model.complete(agent,key,compressionMessages(memory.text(),chunk)),key).strip();
-                    if(summary.isBlank()||summary.length()>8000||estimate(summary)>SUMMARY_BUDGET)
-                        throw new AgentModelClient.Failure("AI 摘要为空或过长");
-                    memory=new Memory(chunk.getLast().anchor(),summary,System.currentTimeMillis());
-                    synchronized(store) {
-                        checkEpoch(work,policy);
-                        jdbc.update("MERGE INTO chat_context_summary(conversation_id,agent_id,epoch,through_id,summary,created_at) KEY(conversation_id,agent_id,epoch,through_id) VALUES(?,?,?,?,?,?)",work.conversationId(),work.agentId(),policy.epoch(),memory.throughId(),memory.text(),memory.createdAt());
-                        old=store.contextAnchors(work,memory.throughId(),cutoff,COMPRESSION_BATCH,false);
-                    }
-                }
+                memory=compress(work,agent,key,policy,memory,cutoff,budget);
             } catch(InterruptedException interrupted) { throw interrupted; }
             catch(Exception failed) {
                 String reason=failed instanceof AgentModelClient.Failure?clean(failed.getMessage(),key):"请检查模型配置或网络";
@@ -135,6 +120,161 @@ public class AgentContextManager {
             jdbc.update("INSERT INTO chat_context_snapshot(message_id,agent_id,conversation_id,epoch,messages_json,estimated_tokens,retained_rounds,created_at) VALUES(?,?,?,?,?,?,?,?)",work.messageId(),work.agentId(),work.conversationId(),policy.epoch(),json.writeValueAsString(result),tokens(result),recent.size()+buffered.size(),System.currentTimeMillis());
         }
         return result;
+    }
+    record CompressionTask(String id,String agentId,String room,long beforeId,String kind) {}
+    private boolean busy(String room) {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM chat_agent_job WHERE conversation_id=? AND status IN ('PENDING','RUNNING')",Integer.class,room)>0
+            || jdbc.queryForObject("SELECT COUNT(*) FROM chat_context_operation WHERE conversation_id=? AND status IN ('PENDING','RUNNING')",Integer.class,room)>0;
+    }
+    public DeviceMessageStore.ContextOperation enqueueCompression(String room,String agentId,String requestId) {
+        return enqueue(room,agentId,requestId,"COMPACT");
+    }
+    public DeviceMessageStore.ContextOperation enqueueArchive(String room,String agentId,String requestId) {
+        return enqueue(room,agentId,requestId,"ARCHIVE");
+    }
+    private DeviceMessageStore.ContextOperation enqueue(String room,String agentId,String requestId,String kind) {
+        agentId=DeviceMessageStore.uuid(agentId);requestId=DeviceMessageStore.uuid(requestId);
+        synchronized(store) {
+            var conversation=store.conversation(room);var agent=agents.get(agentId);
+            if(!agent.enabled() || (!room.equals("shared")&&!conversation.agentIds().contains(agentId)))
+                throw DeviceMessageStore.failure(HttpStatus.BAD_REQUEST,"请选择当前会话中已启用的 Agent");
+            var existing=jdbc.queryForList("SELECT conversation_id,agent_id,kind FROM chat_context_operation WHERE id=?",requestId);
+            if(!existing.isEmpty()) {
+                var row=existing.getFirst();
+                if(!room.equals(row.get("conversation_id"))||!agentId.equals(row.get("agent_id"))||!kind.equals(row.get("kind"))) throw DeviceMessageStore.failure(HttpStatus.CONFLICT,"相同请求标识不能用于不同会话或 Agent");
+                return operation(requestId);
+            }
+            if(busy(room)) throw DeviceMessageStore.failure(HttpStatus.CONFLICT,"请等待当前会话回复或压缩完成后再压缩上下文");
+            if(jdbc.queryForObject("SELECT COUNT(*) FROM chat_context_operation WHERE status IN ('PENDING','RUNNING')",Integer.class)>=32)
+                throw DeviceMessageStore.failure(HttpStatus.TOO_MANY_REQUESTS,"上下文压缩队列已满，请稍后重试");
+            long before=jdbc.queryForObject("SELECT COALESCE(MAX(id),0)+1 FROM device_message WHERE conversation_id=?",Long.class,room);
+            long created=Math.max(System.currentTimeMillis(),jdbc.queryForObject("SELECT COALESCE(MAX(created_at),0)+1 FROM chat_context_operation WHERE conversation_id=?",Long.class,room));
+            String archiveJson=null;var policy=policy(room);
+            if(kind.equals("ARCHIVE")) {
+                var messages=store.archiveMessages(room,policy.afterId(),before-1);
+                if(messages.isEmpty())throw DeviceMessageStore.failure(HttpStatus.BAD_REQUEST,"本轮还没有可导出的对话");
+                archiveJson=json.writeValueAsString(messages);
+                if(archiveJson.getBytes(java.nio.charset.StandardCharsets.UTF_8).length>16_000_000)throw DeviceMessageStore.failure(HttpStatus.BAD_REQUEST,"本轮对话过大，暂不能一次归档；原记录保留");
+            }
+            final String operationId=requestId,targetAgentId=agentId,snapshotJson=archiveJson;
+            return store.atomic(()-> {
+            jdbc.update("INSERT INTO chat_context_operation(id,conversation_id,agent_id,agent_name,before_id,status,created_at,kind) VALUES(?,?,?,?,?,'PENDING',?,?)",operationId,room,targetAgentId,agent.name(),before,created,kind);
+            if(snapshotJson!=null) {
+                String title=conversation.name()+" · "+java.time.ZonedDateTime.now(java.time.ZoneId.of("Asia/Shanghai")).format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"));
+                jdbc.update("INSERT INTO chat_context_archive(id,conversation_id,agent_id,epoch,after_id,through_id,title,messages_json,created_at) VALUES(?,?,?,?,?,?,?,?,?)",operationId,room,targetAgentId,policy.epoch(),policy.afterId(),before-1,title,snapshotJson,created);
+            }
+            return operation(operationId);
+            });
+        }
+    }
+    private DeviceMessageStore.ContextOperation operation(String id) {
+        return jdbc.query("SELECT * FROM chat_context_operation WHERE id=?",DeviceMessageStore::contextOperation,id).getFirst();
+    }
+    CompressionTask claimCompression() {
+        synchronized(store) {
+            var rows=jdbc.query("""
+                SELECT o.* FROM chat_context_operation o WHERE o.status='PENDING' AND NOT EXISTS (
+                    SELECT 1 FROM chat_agent_job j WHERE j.conversation_id=o.conversation_id AND j.status='RUNNING') AND NOT EXISTS (
+                    SELECT 1 FROM chat_context_operation c WHERE c.conversation_id=o.conversation_id AND c.status='RUNNING')
+                ORDER BY o.created_at,o.id LIMIT 1
+                """,(rs,n)->new CompressionTask(rs.getString("id"),rs.getString("agent_id"),rs.getString("conversation_id"),rs.getLong("before_id"),rs.getString("kind")));
+            if(rows.isEmpty()) return null;var task=rows.getFirst();
+            if(jdbc.update("UPDATE chat_context_operation SET status='RUNNING' WHERE id=? AND status='PENDING'",task.id())!=1)return null;
+            return task;
+        }
+    }
+    void recoverCompressions() {
+        synchronized(store) { jdbc.update("UPDATE chat_context_operation SET status='FAILED',error='服务重启中断了压缩，请手动重试压缩' WHERE status='RUNNING'"); }
+    }
+    void executeCompression(CompressionTask task) {
+        String key="";
+        try {
+            var runtime=agents.runtime(task.agentId());var agent=runtime.agent;key=runtime.key;
+            if(!agent.enabled())throw new AgentModelClient.Failure("Agent 已停用");
+            var work=new DeviceMessageStore.Work(task.beforeId(),task.agentId(),task.room());
+            Policy policy;Memory memory;List<Long> latest;
+            synchronized(store) {
+                policy=policy(task.room());
+                latest=store.contextAnchors(work,policy.afterId(),task.beforeId(),1,true);
+                memory=memory(work,policy,latest.isEmpty()?task.beforeId():latest.getFirst());
+            }
+            if(task.kind().equals("ARCHIVE")) {
+                var initial=new Memory(policy.afterId(),"",0);
+                var summary=compress(work,agent,key,policy,initial,task.beforeId(),inputBudget(agent),false);
+                synchronized(store) {
+                    jdbc.update("UPDATE chat_context_archive SET summary=? WHERE id=?",summary.text(),task.id());
+                    jdbc.update("UPDATE chat_context_operation SET status='SUCCEEDED',result='本轮对话总结已生成，可导出到 LeonBook' WHERE id=? AND status='RUNNING'",task.id());
+                }
+                return;
+            }
+            long cutoff=latest.isEmpty()?task.beforeId():latest.getFirst();
+            List<Long> older;synchronized(store) { older=store.contextAnchors(work,memory.throughId(),cutoff,1,false); }
+            String result="暂无可压缩的较早对话（保留最近一轮原文）";
+            if(!older.isEmpty()) { compress(work,agent,key,policy,memory,cutoff,inputBudget(agent));result="上下文压缩完成，已保留最近一轮原文"; }
+            synchronized(store) { jdbc.update("UPDATE chat_context_operation SET status='SUCCEEDED',result=? WHERE id=? AND status='RUNNING'",result,task.id()); }
+        } catch(Exception failed) {
+            if(failed instanceof InterruptedException)Thread.currentThread().interrupt();
+            String reason=failed instanceof AgentModelClient.Failure?clean(failed.getMessage(),key):failed instanceof InterruptedException?"服务中断":"请检查模型配置或网络";
+            String error="上下文压缩未完成："+reason+"。原记录保留，可重试压缩";
+            synchronized(store) { jdbc.update("UPDATE chat_context_operation SET status='FAILED',error=? WHERE id=? AND status='RUNNING'",error.substring(0,Math.min(300,error.length())),task.id()); }
+        }
+    }
+    private Memory compress(DeviceMessageStore.Work work,AgentRegistry.Agent agent,String key,Policy policy,Memory memory,long cutoff,int budget) throws Exception {
+        return compress(work,agent,key,policy,memory,cutoff,budget,true);
+    }
+    private Memory compress(DeviceMessageStore.Work work,AgentRegistry.Agent agent,String key,Policy policy,Memory memory,long cutoff,int budget,boolean persist) throws Exception {
+        List<Long> old;synchronized(store) { old=store.contextAnchors(work,memory.throughId(),cutoff,COMPRESSION_BATCH,false); }
+        while(!old.isEmpty()) {
+            var chunk=new ArrayList<Turn>();
+            for(long anchor:old) {
+                var next=turn(work,anchor,agent,key);var trial=new ArrayList<>(chunk);trial.add(next);
+                if(tokens(compressionMessages(memory.text(),trial))>budget)break;
+                chunk.add(next);
+            }
+            if(chunk.isEmpty()) throw new AgentModelClient.Failure("较早的单轮对话过长，无法完整压缩；可开启新话题");
+            String summary=clean(model.complete(agent,key,compressionMessages(memory.text(),chunk)),key).strip();
+            if(summary.isBlank()||summary.length()>8000||estimate(summary)>SUMMARY_BUDGET)throw new AgentModelClient.Failure("AI 摘要为空或过长");
+            memory=new Memory(chunk.getLast().anchor(),summary,System.currentTimeMillis());
+            synchronized(store) {
+                checkEpoch(work,policy);
+                if(persist) jdbc.update("MERGE INTO chat_context_summary(conversation_id,agent_id,epoch,through_id,summary,created_at) KEY(conversation_id,agent_id,epoch,through_id) VALUES(?,?,?,?,?,?)",work.conversationId(),work.agentId(),policy.epoch(),memory.throughId(),memory.text(),memory.createdAt());
+                old=store.contextAnchors(work,memory.throughId(),cutoff,COMPRESSION_BATCH,false);
+            }
+        }
+        return memory;
+    }
+    public Map<String,Object> archive(String id) {
+        id=DeviceMessageStore.uuid(id);
+        synchronized(store) {
+            var rows=jdbc.queryForList("SELECT * FROM chat_context_archive WHERE id=?",id);
+            if(rows.isEmpty())throw DeviceMessageStore.failure(HttpStatus.NOT_FOUND,"对话归档不存在");
+            var row=rows.getFirst();var op=operation(id);var result=new LinkedHashMap<String,Object>();
+            result.put("operation",op);result.put("id",id);result.put("title",row.get("title"));result.put("summary",row.get("summary"));
+            result.put("conversationId",row.get("conversation_id"));result.put("throughId",row.get("through_id"));
+            if(op.status().equals("SUCCEEDED"))result.put("messages",json.readTree(jdbc.queryForObject("SELECT messages_json FROM chat_context_archive WHERE id=?",String.class,id)));
+            else result.put("messages",List.of());
+            return result;
+        }
+    }
+    public Info finishArchive(String id) {
+        id=DeviceMessageStore.uuid(id);
+        synchronized(store) {
+            var rows=jdbc.queryForList("SELECT * FROM chat_context_archive WHERE id=?",id);
+            if(rows.isEmpty())throw DeviceMessageStore.failure(HttpStatus.NOT_FOUND,"对话归档不存在");
+            var row=rows.getFirst();String room=(String)row.get("conversation_id");
+            if(((Number)row.get("finished_at")).longValue()>0)return info(room);
+            if(!operation(id).status().equals("SUCCEEDED")||busy(room))throw DeviceMessageStore.failure(HttpStatus.CONFLICT,"请等待当前回复或归档完成");
+            var policy=policy(room);long through=((Number)row.get("through_id")).longValue();
+            long latest=jdbc.queryForObject("SELECT COALESCE(MAX(id),0) FROM device_message WHERE conversation_id=?",Long.class,room);
+            if(policy.epoch()!=((Number)row.get("epoch")).longValue()||latest!=through)
+                throw DeviceMessageStore.failure(HttpStatus.CONFLICT,"归档期间会话已有新消息或话题已切换，文章已保留；当前上下文未重置，请重新结束本轮对话");
+            final String archiveId=id;
+            return store.atomic(()-> {
+                var result=configure(room,policy.recentRounds(),true);
+                jdbc.update("UPDATE chat_context_archive SET finished_at=? WHERE id=?",System.currentTimeMillis(),archiveId);
+                return result;
+            });
+        }
     }
     private void checkEpoch(DeviceMessageStore.Work work,Policy expected) throws AgentModelClient.Failure {
         if(policy(work.conversationId()).epoch()!=expected.epoch()) throw new AgentModelClient.Failure("话题已变更，请重新发送问题");

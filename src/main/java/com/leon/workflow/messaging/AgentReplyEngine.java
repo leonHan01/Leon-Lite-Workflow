@@ -18,18 +18,28 @@ public class AgentReplyEngine {
     public AgentReplyEngine(DeviceMessageStore store,AgentRegistry agents,AgentModelClient model,AgentContextManager contexts,@Value("${leon.agents.dispatch-enabled:true}") boolean enabled) { this.store=store;this.agents=agents;this.model=model;this.contexts=contexts;this.enabled=enabled; }
     @PostConstruct void start() {
         store.recoverInterrupted();
+        contexts.recoverCompressions();
         if(enabled) timer.scheduleWithFixedDelay(this::dispatch,500,500,TimeUnit.MILLISECONDS);
     }
     private void dispatch() {
         try {
             while(running.get()<4) {
+                var compression=contexts.claimCompression();
+                if(compression!=null) {
+                    running.incrementAndGet();
+                    workers.execute(()->{try { contexts.executeCompression(compression); } finally { running.decrementAndGet(); }});
+                    continue;
+                }
                 var work=store.claim(); if(work==null) return; running.incrementAndGet();
                 workers.execute(()->{try { execute(work); } finally { running.decrementAndGet(); }});
             }
         } catch (Exception ignored) { /* Retry dispatch, never log conversation or credential data. */ }
     }
     // Deterministic entry for integration tests; normal operation uses the bounded worker pool.
-    public boolean runNext() { var work=store.claim();if(work==null)return false;execute(work);return true; }
+    public boolean runNext() {
+        var compression=contexts.claimCompression();if(compression!=null) { contexts.executeCompression(compression);return true; }
+        var work=store.claim();if(work==null)return false;execute(work);return true;
+    }
     private void execute(DeviceMessageStore.Work work) {
         try {
             var config=agents.runtime(work.agentId()); var agent=config.agent;

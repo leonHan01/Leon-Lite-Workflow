@@ -27,7 +27,8 @@ public class DeviceMessageStore {
         public Send(String clientMessageId,String deviceId,String sender,String platform,String text) { this(clientMessageId,deviceId,sender,platform,text,"shared",List.of()); }
     }
     public record Job(long messageId,String agentId,String agentName,String status,String error,String phase) {}
-    public record Page(List<Message> messages,boolean hasMore,List<Job> jobs) {}
+    public record ContextOperation(String id,String agentId,String agentName,String status,String error,String result,long createdAt,String kind) {}
+    public record Page(List<Message> messages,boolean hasMore,List<Job> jobs,List<ContextOperation> contextOperations) {}
     public record Conversation(String id,String name,String kind,String agentId,List<String> agentIds) {}
     public record Work(long messageId,String agentId,String conversationId) {}
     private final RowMapper<Message> ROW=(rs,n)->new Message(rs.getLong("id"),rs.getString("client_message_id"),rs.getString("device_id"),rs.getString("sender"),rs.getString("platform"),rs.getString("body"),rs.getLong("created_at"),rs.getString("conversation_id"),rs.getString("message_role"),rs.getString("agent_id"),rs.getObject("reply_to",Long.class),images(rs.getString("image_ids")));
@@ -68,6 +69,10 @@ public class DeviceMessageStore {
         jdbc.execute("CREATE TABLE IF NOT EXISTS chat_context_policy (conversation_id VARCHAR(80) PRIMARY KEY,recent_rounds INT NOT NULL DEFAULT 10,after_id BIGINT NOT NULL DEFAULT 0,epoch BIGINT NOT NULL DEFAULT 0)");
         jdbc.execute("CREATE TABLE IF NOT EXISTS chat_context_summary (conversation_id VARCHAR(80) NOT NULL,agent_id VARCHAR(36) NOT NULL,epoch BIGINT NOT NULL,through_id BIGINT NOT NULL,summary VARCHAR(8000) NOT NULL,created_at BIGINT NOT NULL,PRIMARY KEY(conversation_id,agent_id,epoch,through_id))");
         jdbc.execute("CREATE TABLE IF NOT EXISTS chat_context_snapshot (message_id BIGINT NOT NULL,agent_id VARCHAR(36) NOT NULL,conversation_id VARCHAR(80) NOT NULL,epoch BIGINT NOT NULL,messages_json CLOB NOT NULL,estimated_tokens INT NOT NULL,retained_rounds INT NOT NULL,created_at BIGINT NOT NULL,PRIMARY KEY(message_id,agent_id))");
+        jdbc.execute("CREATE TABLE IF NOT EXISTS chat_context_operation (id VARCHAR(36) PRIMARY KEY,conversation_id VARCHAR(80) NOT NULL,agent_id VARCHAR(36) NOT NULL,agent_name VARCHAR(60) NOT NULL,before_id BIGINT NOT NULL,status VARCHAR(16) NOT NULL,error VARCHAR(300) NOT NULL DEFAULT '',result VARCHAR(200) NOT NULL DEFAULT '',created_at BIGINT NOT NULL)");
+        jdbc.execute("CREATE INDEX IF NOT EXISTS idx_chat_context_operation_queue ON chat_context_operation(status,conversation_id)");
+        jdbc.execute("ALTER TABLE chat_context_operation ADD COLUMN IF NOT EXISTS kind VARCHAR(16) DEFAULT 'COMPACT' NOT NULL");
+        jdbc.execute("CREATE TABLE IF NOT EXISTS chat_context_archive (id VARCHAR(36) PRIMARY KEY,conversation_id VARCHAR(80) NOT NULL,agent_id VARCHAR(36) NOT NULL,epoch BIGINT NOT NULL,after_id BIGINT NOT NULL,through_id BIGINT NOT NULL,title VARCHAR(200) NOT NULL,summary VARCHAR(8000) NOT NULL DEFAULT '',messages_json CLOB NOT NULL,created_at BIGINT NOT NULL,finished_at BIGINT NOT NULL DEFAULT 0)");
     }
     public synchronized List<Conversation> conversations() { return jdbc.query("SELECT * FROM chat_conversation ORDER BY CASE WHEN id='shared' THEN 0 ELSE 1 END,name,id",CONVERSATION); }
     public synchronized Conversation conversation(String id) {
@@ -151,8 +156,18 @@ public class DeviceMessageStore {
         boolean more=rows.size()>limit; var result=new ArrayList<>(rows.subList(0,Math.min(limit,rows.size())));
         if(after==null) Collections.reverse(result);
         var jobs=jdbc.query("SELECT * FROM chat_agent_job WHERE conversation_id=? AND status<>'SUCCEEDED' ORDER BY CASE WHEN status='FAILED' THEN 1 ELSE 0 END,message_id DESC LIMIT 100",(rs,n)->new Job(rs.getLong("message_id"),rs.getString("agent_id"),rs.getString("agent_name"),rs.getString("status"),rs.getString("error"),rs.getString("phase")),conversation);
-        return new Page(List.copyOf(result),more,jobs);
+        return new Page(List.copyOf(result),more,jobs,contextOperations(conversation));
     }
+    synchronized List<ContextOperation> contextOperations(String room) {
+        return jdbc.query("SELECT o.* FROM chat_context_operation o WHERE o.conversation_id=? AND NOT EXISTS (SELECT 1 FROM chat_context_operation newer WHERE newer.conversation_id=o.conversation_id AND newer.agent_id=o.agent_id AND (newer.created_at>o.created_at OR (newer.created_at=o.created_at AND newer.id>o.id))) ORDER BY o.created_at DESC,o.id DESC LIMIT 32",DeviceMessageStore::contextOperation,room);
+    }
+    static ContextOperation contextOperation(java.sql.ResultSet rs,int index) throws java.sql.SQLException {
+        return new ContextOperation(rs.getString("id"),rs.getString("agent_id"),rs.getString("agent_name"),rs.getString("status"),rs.getString("error"),rs.getString("result"),rs.getLong("created_at"),rs.getString("kind"));
+    }
+    synchronized List<Message> archiveMessages(String room,long after,long through) {
+        return jdbc.query("SELECT * FROM device_message WHERE conversation_id=? AND id>? AND id<=? ORDER BY id",ROW,room,after,through);
+    }
+    <T> T atomic(java.util.function.Supplier<T> action) { return transaction.execute(status->action.get()); }
     /** Anchors keep user/assistant pairs together even when later questions were queued first. */
     synchronized List<Long> contextAnchors(Work work,long after,long before,int limit,boolean newest) {
         return jdbc.query("SELECT DISTINCT COALESCE(reply_to,id) turn_id FROM device_message WHERE conversation_id=? AND COALESCE(reply_to,id)>? AND COALESCE(reply_to,id)<? AND ((message_role='user' AND id<=?) OR (message_role='assistant' AND (reply_to<? OR (reply_to IS NULL AND id<?)))) ORDER BY turn_id "+(newest?"DESC":"ASC")+" LIMIT ?",
@@ -167,6 +182,7 @@ public class DeviceMessageStore {
     public synchronized Work claim() {
         var rows=jdbc.query("""
             SELECT j.* FROM chat_agent_job j WHERE j.status='PENDING' AND NOT EXISTS (
+              SELECT 1 FROM chat_context_operation c WHERE c.conversation_id=j.conversation_id AND c.status IN ('PENDING','RUNNING')) AND NOT EXISTS (
               SELECT 1 FROM chat_agent_job p WHERE p.conversation_id=j.conversation_id AND p.status IN ('PENDING','RUNNING')
               AND (p.message_id<j.message_id OR p.message_id=j.message_id AND p.agent_id<j.agent_id OR p.status='RUNNING'))
             ORDER BY j.message_id,j.agent_id LIMIT 1
