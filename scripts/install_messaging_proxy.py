@@ -20,11 +20,16 @@ ANCHOR = '        location / { return 403; }'
 
 def configured(content):
     if ROUTE in content:
-        return content
+        if MARKER not in content:
+            return content
+        start = content.index(MARKER)
+        end = content.index('        }\n', start) + len('        }\n')
+        block = content[start:end]
+        return content[:start] + block.replace('client_max_body_size 3m;', 'client_max_body_size 6m;') + content[end:]
     if MARKER in content or content.count(ANCHOR) != 1:
         raise RuntimeError('unexpected proxy layout; configuration preserved')
     block = MARKER + '''        location ~ ^/api/(device-messages|agents|conversations|agent-avatars|agent-admin)(/|$) {
-            client_max_body_size 3m;
+            client_max_body_size 6m;
             proxy_pass http://127.0.0.1:80;
             proxy_set_header Host $host;
             proxy_set_header X-Forwarded-Proto https;

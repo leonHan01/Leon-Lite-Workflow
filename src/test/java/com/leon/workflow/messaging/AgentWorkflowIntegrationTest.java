@@ -115,6 +115,17 @@ class AgentWorkflowIntegrationTest {
         Thread.currentThread().interrupt();try{assertThrows(InterruptedException.class,()->app.execute(c,input,ctx(),new WorkflowPrivacy(),s->{}));}finally{Thread.interrupted();}
         assertEquals(2,jdbc.queryForObject("SELECT COUNT(*) FROM device_message",Integer.class));verifyNoInteractions(client);
     }
+    @Test void heartbeatRequiresAuthenticationAndDeviceInventoryRequiresAdminCookie() throws Exception {
+        MockMvc mvc=MockMvcBuilders.webAppContextSetup(context).build();String id=UUID.randomUUID().toString();
+        String payload=write(Map.of("deviceId",id,"name","设备在线测试","platform","macos"));
+        mvc.perform(post("/api/device-messages/presence").contentType("application/json").content(payload)).andExpect(status().isUnauthorized());
+        mvc.perform(post("/api/device-messages/presence").header("Authorization",AUTH).contentType("application/json").content(payload)).andExpect(status().isOk());
+        mvc.perform(get("/api/agent-admin/devices").header("Authorization",AUTH)).andExpect(status().isForbidden());
+        Cookie cookie=new Cookie(BrowserSessionService.COOKIE_NAME,sessions.create(false,auth.fingerprint()));
+        mvc.perform(get("/api/agent-admin/devices").cookie(cookie)).andExpect(status().isOk()).andExpect(jsonPath("$.onlineCount").value(1)).andExpect(jsonPath("$.devices[0].name").value("设备在线测试"));
+        mvc.perform(post("/api/device-messages/presence").header("Authorization",AUTH).contentType("application/json").content(payload)).andExpect(status().isOk());
+        mvc.perform(get("/api/agent-admin/devices").cookie(cookie)).andExpect(jsonPath("$.onlineCount").value(1));
+    }
     @Test void publishedWorkflowRunsAgentNotificationAndPreservesUpstreamOutput() throws Exception {
         var a=agent("workflow");var graph=new WorkflowGraph(List.of(new WorkflowGraph.Node("start","start","开始",Map.of(),Map.of()),node(config(a)),new WorkflowGraph.Node("end","end","结束",Map.of(),Map.of())),List.of(new WorkflowGraph.Edge("a","start","notify",""),new WorkflowGraph.Edge("b","notify","end","")));
         var wf=workflows.create("通知流程");String id=text(wf.get("id"));wf=workflows.save(id,"通知流程",graph,((Number)wf.get("revision")).longValue());workflows.publish(id,((Number)wf.get("revision")).longValue(),write(engine.runtimes()));

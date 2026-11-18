@@ -1,7 +1,7 @@
 import './mentions.js';
 export function mount(pane) {
     if (!document.getElementById('agents-css')) { const css = document.createElement('link'); css.id = 'agents-css'; css.rel = 'stylesheet'; css.href = '/workspace/agents.css'; document.head.append(css); }
-    let viewActive = false;
+    let viewActive = false, presenceTimer = null, presenceEpoch = 0;
 const $ = id => pane.querySelector('#' + CSS.escape(id));
 let agents = [], conversations = [], editing = null, current = 'shared', rows = [], more = false, generation = 0, timer, loading = false, activeTab = 'config';
 let avatarCatalog = [], selectedAvatarId = 'alfred', uploadingAvatar = false, models = [];
@@ -53,6 +53,21 @@ $('avatarFile').onchange = async () => {
     } catch (error) { notice(error.message, true); }
     finally { uploadingAvatar = false; $('avatarFile').value = ''; $('saveAgent').disabled = false; $('uploadAvatar').disabled = false; $('newAgent').disabled = false; }
 };
+async function refreshPresence() {
+    clearTimeout(presenceTimer); if (!viewActive || document.hidden) return;
+    const epoch = ++presenceEpoch;
+    try {
+        const state = await api('/api/agent-admin/devices'); if (epoch !== presenceEpoch || !viewActive) return;
+        $('onlineCount').textContent = String(state.onlineCount); $('onlineDevices').replaceChildren();
+        if (!state.devices.length) $('onlineDevices').append(node('p', '暂无在线设备。打开已连接的 App 后自动显示。', 'subtle'));
+        for (const device of state.devices) {
+            const row = node('div', null, 'presence-device');
+            row.append(node('span', '', 'presence-dot'), node('strong', device.name), node('small', (device.platform === 'macos' ? 'macOS' : 'Android') + ' · ' + Math.max(0, Math.floor((Date.now() - device.lastSeenAt) / 1000)) + ' 秒前活跃'));
+            $('onlineDevices').append(row);
+        }
+    } catch (error) { if (epoch === presenceEpoch && viewActive) { $('onlineCount').textContent = '—'; $('onlineDevices').replaceChildren(node('p', '设备状态暂时不可用，下次自动重试。', 'subtle')); } }
+    finally { if (epoch === presenceEpoch && viewActive) presenceTimer = setTimeout(refreshPresence, 5000); }
+}
 function modelOptions(value = '') {
     $('modelId').replaceChildren();
     const legacy = editing && !editing.modelId;
@@ -258,10 +273,9 @@ $('cancelGroup').onclick = () => $('groupDialog').close();
 $('groupForm').onsubmit = async event => {
     event.preventDefault(); try { const agentIds = [...$('groupMembers').querySelectorAll('input:checked')].map(e => e.value); const c = await api('/api/conversations/groups', { method: 'POST', body: JSON.stringify({ name: $('groupName').value, agentIds }) }); $('groupDialog').close(); await refreshConversations(); selectConversation(c.id); } catch (e) { notice(e.message, true); }
 };
-document.addEventListener('visibilitychange', () => { clearTimeout(timer); if (viewActive && !document.hidden && activeTab === 'chat') poll(); });
+document.addEventListener('visibilitychange', () => { clearTimeout(timer); if (viewActive && !document.hidden) { refreshPresence(); if (activeTab === 'chat') poll(); } else clearTimeout(presenceTimer); });
 return {
-    async activate() { viewActive = true; try { await loadAgents(); if (activeTab === 'chat') { await refreshConversations(); poll(); } } catch (error) { notice(error.message, true); } },
-    deactivate() { viewActive = false; generation++; loading = false; clearTimeout(timer); hideMentionCandidates(); for (const id of ['avatarDialog', 'groupDialog']) { if ($(id).open) $(id).close(); } }
+    async activate() { viewActive = true; refreshPresence(); try { await loadAgents(); if (activeTab === 'chat') { await refreshConversations(); poll(); } } catch (error) { notice(error.message, true); } },
+    deactivate() { viewActive = false; presenceEpoch++; clearTimeout(presenceTimer); generation++; loading = false; clearTimeout(timer); hideMentionCandidates(); for (const id of ['avatarDialog', 'groupDialog']) { if ($(id).open) $(id).close(); } }
 };
 }
-

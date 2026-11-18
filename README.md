@@ -372,3 +372,15 @@ Agent 工作台增加头像选择和上传。内置用户提供的 30 张原始 
 补全替换当前光标所在的整个 @片段，保留后面的正文，补齐分隔空白并移动光标，不会自动发送消息或触发模型。前端共享算法位于 `/workspace/mentions.js`，检查使用 `node --test src/test/js/agent-mentions.test.cjs`。Mac / Android 客户端同步更新至 0.4.0。
 
 本次只改动客户端与网页交互，未部署公网服务。
+
+### Agent 统一模型、工作空间与 App 通知
+
+Agent 工作台使用共享侧栏和独立机器人图标；页面按工作空间生命周期激活，隐藏时暂停聊天与设备状态轮询。新 Agent 从已保存模型中选择，`chat_agent.model_id` 保存引用；每次回复读取最新模型与凭据，停用模型会阻止调用，不复制共享 API Key。旧 Agent 保留独立加密凭据，切换到共享模型后不再使用旧 Key。
+
+工作流「消息通知」中增加 `app-message`（Agent 发送 App 消息）：配置 `agentId`、`targetType`（`direct` / `group`）、可选 `conversationId` 和 `text`。正文支持上游模板，最多 8000 UTF-16 单元；空 items 跳过发送，原输入继续传给下游。默认写入此 Agent 的私聊，群聊要求 Agent 为群成员。消息使用 Agent 的名称与头像，不调用模型，不触发其他 Agent；同一个运行实例和节点标识保证本地重入不重复。单节点测试会发送真实消息，重新运行工作流会发送新消息。
+
+0.5.0 客户端在线时约每 10 秒通过 `POST /api/device-messages/presence` 上报设备标识、名称、平台。控制台通过 Cookie 保护的 `GET /api/agent-admin/devices` 每 5 秒刷新数量及列表；45 秒没有心跳视为离线，状态不持久化，服务器重启后由客户端再次上报。普通网页聊天不计入设备，旧客户端需更新才能参与统计。离线消息保存在原会话，下次打开 App 同步；尚未提供系统级离线推送。
+
+HTTPS 代理必须转发消息相关路径并保留应用鉴权。首次启用运行 `python3 scripts/install_messaging_proxy.py`：备份配置、校验后平滑重载，仅增加限定消息路由，保留默认拒绝与服务端 Bearer / Cookie 校验；Agent 管理仍要求管理会话。代理上传上限为 6 MB，允许 5 MB 图片和 multipart 开销。客户端分别提示认证失败（401）、服务器/代理拒绝（403）和服务不可用（502/503/504）。
+
+验证：`mvn -Dtest=AgentWorkflowIntegrationTest,DevicePresenceTest,AgentChatIntegrationTest,AgentAvatarIntegrationTest,WorkflowIntegrationTest,WorkflowParallelExecutionTest test`；`python3 scripts/test_messaging_proxy.py`。

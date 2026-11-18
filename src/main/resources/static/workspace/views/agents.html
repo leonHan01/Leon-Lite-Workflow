@@ -1,6 +1,7 @@
 <div class="agent-main">
 <div class="heading"><div><p class="eyebrow">YOUR AI TEAM</p><h1>让每个 Agent 各司其职。</h1><p>定义角色，连接模型，在私聊和群聊中与它们协作。</p></div><div class="tabs"><button id="configTab" class="active">Agent 配置</button><button id="chatTab">聊天测试</button></div></div>
 <p id="notice" role="status" hidden></p>
+<section class="card presence-card" aria-label="在线设备"><div class="section-title"><h2>在线设备 <span id="onlineCount">—</span></h2><span class="subtle">45 秒未响应视为离线</span></div><div id="onlineDevices" aria-live="polite"><p class="subtle">正在获取在线设备…</p></div></section>
 <section id="configPanel" class="layout">
 <aside class="card"><div class="section-title"><h2>我的 Agents</h2><button id="newAgent">＋ 新建</button></div><div id="agentList"></div><p class="subtle">停用 Agent 会保留历史消息。<br>模型与凭据统一在模型配置中管理，不回显给客户端。</p></aside>
 <article class="card"><form id="agentForm">
