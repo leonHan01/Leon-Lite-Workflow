@@ -42,6 +42,24 @@ class MacExecutorTest(unittest.TestCase):
             self.assertEqual('Bearer private-test-key', request.get_header('Authorization'))
             self.assertEqual(1, factory.return_value.open.call_count)
 
+    def test_image_jobs_can_cross_one_megabyte_without_relaxing_other_responses(self):
+        value = self.job()
+        image = {'type': 'image_url', 'image_url': {'url': 'data:image/jpeg;base64,' + 'A' * 1_100_000}}
+        value['body']['messages'][0]['content'] = [{'type': 'text', 'text': '看图'}, image]
+        payload = json.dumps(value).encode()
+        client = unittest.mock.Mock()
+        client.open.return_value = Response(payload)
+        received = worker.request_json(client, 'https://example.test/api/ai-executor/claim', {})
+        self.assertEqual(value, received)
+        client.open.return_value = Response(payload)
+        with self.assertRaises(ValueError):
+            worker.request_json(client, 'https://example.test/api/ai-executor/heartbeat', {})
+        with patch.object(worker, 'opener') as factory:
+            factory.return_value.open.return_value = Response(b'{"choices": []}')
+            worker.invoke_openai(value)
+            request = factory.return_value.open.call_args.args[0]
+            self.assertEqual(value['body']['messages'], json.loads(request.data)['messages'])
+
     def test_errors_do_not_retain_provider_bodies_and_are_not_retried(self):
         with patch.object(worker, 'opener') as factory:
             error = urllib.error.HTTPError(worker.API, 401, 'denied', {}, Response(b'private-test-key'))

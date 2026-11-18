@@ -50,6 +50,9 @@ public class OfficialAgentModelClient implements AgentModelClient {
             payload=status>=200&&status<300?json.readTree(response.body()):json.createObjectNode();
         }
         if (status<200 || status>=300) throw new AgentModelClient.Failure(switch(status) {
+            case 400 -> messages.stream().anyMatch(m->!m.getOrDefault("imageIds","").isBlank())
+                    ? "模型未接受图片请求，请确认所选 OpenAI 模型支持图片输入，或减少图片后重试"
+                    : "模型服务请求失败（HTTP 400）";
             case 401,403 -> "模型认证失败，请检查 Agent 的 API Key 和模型权限";
             case 429 -> "模型限流或额度不足，请稍后重试";
             default -> "模型服务请求失败（HTTP "+status+"）";

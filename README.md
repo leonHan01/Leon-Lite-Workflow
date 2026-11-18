@@ -394,7 +394,17 @@ HTTPS 代理必须转发消息相关路径并保留应用鉴权。首次启用�
 管理接口 `POST /api/agent-admin/messages` 接收 `{agentId,conversationId?,text,clientMessageId}`，`clientMessageId` 为 UUID。省略会话时打开该 Agent 的私聊；群聊要求 Agent 为成员。接口同时要求管理页 Cookie 及有效写入来源，Bearer 令牌不能代替管理登录；同一消息标识改写内容或会话会返回 409。已有 App 使用原收消息协议即可显示。
 
 
-### OpenAI 在 Mac mini 上执行
+### Agent 对话上下文与 AI 压缩
+
+每次回复由服务端组装 Agent 指令、历史摘要、近期完整轮次和当前问题。同一会话按问题顺序执行；私聊、群聊以及各 Agent 的摘要分别隔离。其他 Agent 的发言保留身份，作为参考资料传入，不冒充当前 Agent 的回答。主动发送到 App 的消息也会进入后续上下文。错误提示不作为聊天内容传给模型。
+
+默认保留最近 10 轮（可设 1–20）；为减少额外调用，较早历史积累 4 轮或接近预算时才压缩，因此压缩前最多暂存额外 3 轮。按完整轮次裁剪近期窗口，较早部分用当前 Agent 所选模型合并为摘要，保留目标、偏好、决定、事实与未完成事项。摘要输入分批限制长度，输出按约 2,000 Token 的估算上限校验，不静默截断消息。常用 OpenAI / DeepSeek 模型的上下文输入预算约 12,000 Token，其他模型保守使用 5,500；另为模型回复预留 2,048 Token。这是长度估算，实际计费以模型返回的 usage 为准，压缩调用同样累计用量。
+
+`chat_context_summary` 保存带历史边界的摘要版本，`chat_context_snapshot` 保存每个回复任务的请求快照，`chat_context_policy` 保存保留轮数和新话题边界；均持久化在现有 H2 中，不删除原消息。失败回复重试复用已有快照；压缩中断时保留已完成批次，手动重试从该边界继续，不能带入原问题之后的消息或摘要。服务重启不自动重放收费调用。新话题不再使用旧摘要，原话题的失败任务不能在新话题下重试。
+
+`GET /api/conversations/context?conversationId=...` 返回该会话的摘要、近期请求估算 Token、原文轮数与压缩进度；`POST /api/conversations/context/settings` 和 `/reset` 接收 `{conversationId,recentRounds}`。沿用设备 Bearer / 管理 Cookie 认证及浏览器写入来源校验。会话有排队或执行中的回复时拒绝修改设置。Mac App 右上角「上下文」提供查看、设置与新话题入口；聊天任务的 `phase=COMPRESSING` 显示「上下文压缩中…」，随后切换至「正在回复…」。压缩失败明确提示并保留原记录。OpenAI 的压缩与回复继续经 Mac 执行器，DeepSeek 继续在服务器执行。
+
+### OpenAI 执行端配置
 
 工作流内置 OpenAI 节点和 Agent 可切换到 Mac 执行器；DeepSeek 仍由服务器直接调用。Mac 主动通过 HTTPS 领取任务，无需开放本机端口。后台执行器随用户登录自动启动，运行时使用 `caffeinate -i` 防止自动闲置睡眠；手动睡眠、退出登录、关机或断网都会使 OpenAI 执行器离线。高级设置显示执行位置与在线状态。
 
