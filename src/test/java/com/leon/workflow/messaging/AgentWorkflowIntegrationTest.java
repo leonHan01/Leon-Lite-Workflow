@@ -133,4 +133,47 @@ class AgentWorkflowIntegrationTest {
         for(int i=0;i<150;i++){run=workflows.run(runId);if(!Set.of("QUEUED","RUNNING").contains(run.get("status")))break;Thread.sleep(20);}
         assertEquals("SUCCEEDED",run.get("status"),write(run));assertEquals("正式执行",messages.page("direct:"+a.id(),null,null,100).messages().getFirst().text());verifyNoInteractions(client);
     }
+    private org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder appSend(Map<String,Object> payload,Cookie cookie) {
+        return post("/api/agent-admin/messages").cookie(cookie).header("Origin","https://example.test").header("X-Requested-With","XMLHttpRequest").contentType("application/json").content(write(payload));
+    }
+    @Test void manualAppSendRequiresManagementSessionAndCorrectWriteOrigin() throws Exception {
+        var a=agent("manual_auth");var body=Map.<String,Object>of("agentId",a.id(),"text","网页消息","clientMessageId",UUID.randomUUID().toString());
+        MockMvc mvc=MockMvcBuilders.webAppContextSetup(context).build();Cookie cookie=new Cookie(BrowserSessionService.COOKIE_NAME,sessions.create(false,auth.fingerprint()));
+        mvc.perform(post("/api/agent-admin/messages").contentType("application/json").content(write(body))).andExpect(status().isUnauthorized());
+        mvc.perform(post("/api/agent-admin/messages").header("Authorization",AUTH).contentType("application/json").content(write(body))).andExpect(status().isForbidden());
+        mvc.perform(post("/api/agent-admin/messages").cookie(cookie).contentType("application/json").content(write(body))).andExpect(status().isForbidden());
+        mvc.perform(post("/api/agent-admin/messages").cookie(cookie).header("Origin","https://evil.test").header("X-Requested-With","XMLHttpRequest").contentType("application/json").content(write(body))).andExpect(status().isForbidden());
+        mvc.perform(post("/api/agent-admin/messages").cookie(cookie).header("Authorization",AUTH).header("Origin","https://evil.test").header("X-Requested-With","XMLHttpRequest").contentType("application/json").content(write(body))).andExpect(status().isForbidden());
+        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM device_message",Integer.class));verifyNoInteractions(client);
+    }
+    @Test void manualAppSendUsesAgentIdentityAndRetriesExactlyOnceWithoutInvokingModel() throws Exception {
+        var a=agent("manual_send");var body=new LinkedHashMap<String,Object>(Map.of("agentId",a.id(),"text","从网页发给 App 😀\n第二行","clientMessageId",UUID.randomUUID().toString()));
+        MockMvc mvc=MockMvcBuilders.webAppContextSetup(context).build();Cookie cookie=new Cookie(BrowserSessionService.COOKIE_NAME,sessions.create(false,auth.fingerprint()));
+        mvc.perform(appSend(body,cookie)).andExpect(status().isOk()).andExpect(jsonPath("$.role").value("assistant")).andExpect(jsonPath("$.agentId").value(a.id())).andExpect(jsonPath("$.sender").value(a.name()));
+        mvc.perform(appSend(body,cookie)).andExpect(status().isOk());
+        var page=messages.page("direct:"+a.id(),null,null,100);assertEquals(1,page.messages().size());assertTrue(page.jobs().isEmpty());assertNull(page.messages().getFirst().replyTo());
+        mvc.perform(get("/api/device-messages").header("Authorization",AUTH).param("conversationId","direct:"+a.id())).andExpect(status().isOk()).andExpect(jsonPath("$.messages[0].text").value(body.get("text")));
+        assertTrue(messages.page(null,null,100).messages().isEmpty());
+        body.put("text","修改后的内容");mvc.perform(appSend(body,cookie)).andExpect(status().isConflict());
+        assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM device_message",Integer.class));verifyNoInteractions(client);
+    }
+    @Test void manualAppSendChecksGroupMembershipAndDisabledAgents() throws Exception {
+        var a=agent("manual_member");var b=agent("manual_other");var group=chat.group("网页通知群",List.of(a.id()));
+        var body=new LinkedHashMap<String,Object>(Map.of("agentId",a.id(),"conversationId",group.id(),"text","群聊通知","clientMessageId",UUID.randomUUID().toString()));
+        MockMvc mvc=MockMvcBuilders.webAppContextSetup(context).build();Cookie cookie=new Cookie(BrowserSessionService.COOKIE_NAME,sessions.create(false,auth.fingerprint()));
+        mvc.perform(appSend(body,cookie)).andExpect(status().isOk()).andExpect(jsonPath("$.conversationId").value(group.id()));
+        body.put("clientMessageId",UUID.randomUUID().toString());body.put("agentId",b.id());mvc.perform(appSend(body,cookie)).andExpect(status().isBadRequest());
+        body.put("conversationId",chat.direct(a.id()).id());mvc.perform(appSend(body,cookie)).andExpect(status().isBadRequest());
+        agents.save(b.id(),new AgentRegistry.Edit(b.name(),b.handle(),b.provider(),b.model(),b.systemPrompt(),false,null,b.version()));body.remove("conversationId");mvc.perform(appSend(body,cookie)).andExpect(status().isBadRequest());
+        assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM device_message",Integer.class));verifyNoInteractions(client);
+    }
+    @Test void manualAppSendRejectsInvalidIdsAndContentWithoutSavingMessages() throws Exception {
+        var a=agent("manual_invalid");MockMvc mvc=MockMvcBuilders.webAppContextSetup(context).build();Cookie cookie=new Cookie(BrowserSessionService.COOKIE_NAME,sessions.create(false,auth.fingerprint()));
+        var body=new LinkedHashMap<String,Object>(Map.of("agentId",a.id(),"text","合法正文","clientMessageId",UUID.randomUUID().toString()));
+        for(String value:List.of(""," ","x".repeat(8001),"a\0b")){body.put("text",value);mvc.perform(appSend(body,cookie)).andExpect(status().isBadRequest());}
+        body.put("text","合法正文");body.put("clientMessageId","not-a-uuid");mvc.perform(appSend(body,cookie)).andExpect(status().isBadRequest());
+        body.put("clientMessageId",UUID.randomUUID().toString());body.put("agentId","bad");mvc.perform(appSend(body,cookie)).andExpect(status().isBadRequest());
+        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM device_message",Integer.class));verifyNoInteractions(client);
+    }
+
 }

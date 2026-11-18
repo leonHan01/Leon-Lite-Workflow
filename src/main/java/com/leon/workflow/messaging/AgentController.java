@@ -20,6 +20,12 @@ public class AgentController {
     @GetMapping("/api/agent-admin") public ResponseEntity<?> admin(HttpServletRequest request) { adminOnly(request);return response(Map.of("agents",agents.list(),"keyStorageEnabled",agents.keyStorageEnabled(),"avatars",avatars.catalog(),"models",models.list())); }
     @PostMapping("/api/agent-admin") public ResponseEntity<?> create(@RequestBody AgentRegistry.Edit input,HttpServletRequest request) { adminOnly(request);return response(agents.save(null,input)); }
     @PutMapping("/api/agent-admin/{id}") public ResponseEntity<?> update(@PathVariable String id,@RequestBody AgentRegistry.Edit input,HttpServletRequest request) { adminOnly(request);return response(agents.save(id,input)); }
+    public record AppMessage(String agentId,String conversationId,String text,String clientMessageId) {}
+    @PostMapping("/api/agent-admin/messages") public ResponseEntity<?> sendToApp(@RequestBody AppMessage input,HttpServletRequest request) {
+        adminOnly(request);
+        if(auth.enabled()&&!auth.validAdminWrite(request)) throw AgentRegistry.failure(HttpStatus.FORBIDDEN,"请从本站管理页面发送消息");
+        return response(chat.publishAgentMessage(DeviceMessageStore.uuid(input.agentId()),input.conversationId(),input.text(),DeviceMessageStore.uuid(input.clientMessageId())));
+    }
     private void adminOnly(HttpServletRequest request) { if(auth.enabled()&&!auth.validBrowserSession(request)) throw AgentRegistry.failure(HttpStatus.FORBIDDEN,"请使用管理页面登录后配置 Agent"); }
     private ResponseEntity<?> response(Object value) { return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(value); }
 }

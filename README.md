@@ -384,3 +384,11 @@ Agent 工作台使用共享侧栏和独立机器人图标；页面按工作空�
 HTTPS 代理必须转发消息相关路径并保留应用鉴权。首次启用运行 `python3 scripts/install_messaging_proxy.py`：备份配置、校验后平滑重载，仅增加限定消息路由，保留默认拒绝与服务端 Bearer / Cookie 校验；Agent 管理仍要求管理会话。代理上传上限为 6 MB，允许 5 MB 图片和 multipart 开销。客户端分别提示认证失败（401）、服务器/代理拒绝（403）和服务不可用（502/503/504）。
 
 验证：`mvn -Dtest=AgentWorkflowIntegrationTest,DevicePresenceTest,AgentChatIntegrationTest,AgentAvatarIntegrationTest,WorkflowIntegrationTest,WorkflowParallelExecutionTest test`；`python3 scripts/test_messaging_proxy.py`。
+
+### 网页选择 Agent 向 App 发消息
+
+在「Agent 工作台」右上角点击「向 App 发消息」，打开聊天窗口。选择已启用的 Agent，默认发送至与该 Agent 的私聊，也可以选择包含它的群聊。正文按填写内容直接以该 Agent 身份保存，使用其名称和头像，不调用模型、不生成回复任务。已在配置表单选中的 Agent 会默认带入窗口。
+
+窗口显示目标会话最近 100 条消息，并自动同步 App 的回复。正文上限 8000 UTF-16 单元；发送失败保留正文和消息标识，原样重试不会重复保存。消息保存成功代表服务器已接收，在线 App 轮询后显示，离线设备下次打开同步，不代表设备已读。
+
+管理接口 `POST /api/agent-admin/messages` 接收 `{agentId,conversationId?,text,clientMessageId}`，`clientMessageId` 为 UUID。省略会话时打开该 Agent 的私聊；群聊要求 Agent 为成员。接口同时要求管理页 Cookie 及有效写入来源，Bearer 令牌不能代替管理登录；同一消息标识改写内容或会话会返回 409。已有 App 使用原收消息协议即可显示。

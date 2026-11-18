@@ -44,7 +44,7 @@ public class AgentChatService {
             return store.submit(input,targets);
         }
     }
-    /** Publish a local workflow notification as the Agent, without starting a model reply. */
+    /** Publish a management-page or workflow message as the Agent without starting a model reply. */
     public DeviceMessageStore.Message publishAgentMessage(String agentId,String conversationId,String text,String messageId) {
         synchronized(store) {
             var agent=active(agentId);

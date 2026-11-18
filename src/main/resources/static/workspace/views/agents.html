@@ -1,5 +1,5 @@
 <div class="agent-main">
-<div class="heading"><div><p class="eyebrow">YOUR AI TEAM</p><h1>让每个 Agent 各司其职。</h1><p>定义角色，连接模型，在私聊和群聊中与它们协作。</p></div><div class="tabs"><button id="configTab" class="active">Agent 配置</button><button id="chatTab">聊天测试</button></div></div>
+<div class="heading"><div><p class="eyebrow">YOUR AI TEAM</p><h1>让每个 Agent 各司其职。</h1><p>定义角色，连接模型，在私聊和群聊中与它们协作。</p></div><div class="heading-actions"><button id="openAppMessenger" class="primary" type="button"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M20 11V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v12l4-3h5m3 2h7m-3-3 3 3-3 3"/></svg>向 App 发消息</button><div class="tabs"><button id="configTab" class="active">Agent 配置</button><button id="chatTab">聊天测试</button></div></div></div>
 <p id="notice" role="status" hidden></p>
 <section class="card presence-card" aria-label="在线设备"><div class="section-title"><h2>在线设备 <span id="onlineCount">—</span></h2><span class="subtle">45 秒未响应视为离线</span></div><div id="onlineDevices" aria-live="polite"><p class="subtle">正在获取在线设备…</p></div></section>
 <section id="configPanel" class="layout">
@@ -24,3 +24,13 @@
 </div>
 <dialog id="avatarDialog" class="avatar-dialog"><div class="section-title"><div><p class="eyebrow">CHOOSE AN AVATAR</p><h2>选择 Agent 头像</h2></div><button type="button" id="closeAvatars" aria-label="关闭头像选择">关闭</button></div><p class="subtle">选择后，点击「保存 Agent」生效。</p><h3>预设头像 · 30 款</h3><div id="presetAvatars" class="avatar-grid"></div><h3 id="uploadedAvatarTitle" hidden>已上传的头像</h3><div id="uploadedAvatars" class="avatar-grid"></div></dialog>
 <dialog id="groupDialog"><form id="groupForm"><h2>创建群聊</h2><label>群名称<input id="groupName" required maxlength="60" placeholder="例如：产品讨论组"></label><p>选择加入此群聊的 Agent</p><div id="groupMembers"></div><div class="form-footer"><button type="button" id="cancelGroup">取消</button><button type="submit" class="primary">创建群聊</button></div></form></dialog>
+
+<dialog id="appMessenger" class="app-messenger" aria-labelledby="appMessengerTitle">
+<div class="section-title"><div><p class="eyebrow">SEND TO APP</p><h2 id="appMessengerTitle">向 App 发消息</h2></div><button id="closeAppMessenger" type="button" aria-label="关闭聊天窗口">×</button></div>
+<p class="subtle">选择发送身份，在 App 中以该 Agent 的名称和头像显示。离线设备下次打开后同步。</p>
+<div class="fields messenger-targets"><label>发送 Agent<select id="appMessageAgent" required></select></label><label>目标会话<select id="appMessageTarget"><option value="">与此 Agent 的私聊</option></select></label></div>
+<div class="messenger-identity" id="appMessageIdentity"></div>
+<p class="subtle" id="appMessageHistoryStatus" role="status">选择 Agent 后显示会话消息。</p>
+<div id="appMessageHistory" class="messenger-history" role="log" aria-label="App 会话消息" aria-live="polite"></div>
+<form id="appMessageForm"><label class="messenger-composer-label" for="appMessageText">消息正文</label><textarea id="appMessageText" rows="3" maxlength="8000" required placeholder="以所选 Agent 的身份给 App 发一条消息…"></textarea><div class="form-footer"><div><p id="appMessageStatus" class="subtle" role="status"></p><small id="appMessageLength">0 / 8000</small></div><button id="sendAppMessage" class="primary" type="submit">发送到 App ↑</button></div></form>
+</dialog>

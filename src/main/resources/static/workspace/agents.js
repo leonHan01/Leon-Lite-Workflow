@@ -1,4 +1,5 @@
 import './mentions.js';
+import { mountAppMessenger } from './app-messenger.js';
 export function mount(pane) {
     if (!document.getElementById('agents-css')) { const css = document.createElement('link'); css.id = 'agents-css'; css.rel = 'stylesheet'; css.href = '/workspace/agents.css'; document.head.append(css); }
     let viewActive = false, presenceTimer = null, presenceEpoch = 0;
@@ -87,6 +88,8 @@ function modelHint() {
 }
 $('modelId').onchange = modelHint;
 $('reloadModels').onclick = async () => { try { await loadAgents(); notice('模型列表已刷新。'); } catch (error) { notice(error.message, true); } };
+const appMessenger = mountAppMessenger(pane, {api, avatarImage, loadDirectory: async () => { await loadAgents(); await refreshConversations(); return {agents, conversations}; }});
+$('openAppMessenger').onclick = () => appMessenger.open(editing?.id);
 function resetForm(agent = null) {
     if (uploadingAvatar) return;
     editing = agent; $('agentForm').reset();
@@ -273,9 +276,9 @@ $('cancelGroup').onclick = () => $('groupDialog').close();
 $('groupForm').onsubmit = async event => {
     event.preventDefault(); try { const agentIds = [...$('groupMembers').querySelectorAll('input:checked')].map(e => e.value); const c = await api('/api/conversations/groups', { method: 'POST', body: JSON.stringify({ name: $('groupName').value, agentIds }) }); $('groupDialog').close(); await refreshConversations(); selectConversation(c.id); } catch (e) { notice(e.message, true); }
 };
-document.addEventListener('visibilitychange', () => { clearTimeout(timer); if (viewActive && !document.hidden) { refreshPresence(); if (activeTab === 'chat') poll(); } else clearTimeout(presenceTimer); });
+document.addEventListener('visibilitychange', () => { clearTimeout(timer); if (viewActive && !document.hidden) { refreshPresence(); appMessenger.visibilityChanged(); if (activeTab === 'chat') poll(); } else clearTimeout(presenceTimer); });
 return {
     async activate() { viewActive = true; refreshPresence(); try { await loadAgents(); if (activeTab === 'chat') { await refreshConversations(); poll(); } } catch (error) { notice(error.message, true); } },
-    deactivate() { viewActive = false; presenceEpoch++; clearTimeout(presenceTimer); generation++; loading = false; clearTimeout(timer); hideMentionCandidates(); for (const id of ['avatarDialog', 'groupDialog']) { if ($(id).open) $(id).close(); } }
+    deactivate() { appMessenger.deactivate(); viewActive = false; presenceEpoch++; clearTimeout(presenceTimer); generation++; loading = false; clearTimeout(timer); hideMentionCandidates(); for (const id of ['avatarDialog', 'groupDialog']) { if ($(id).open) $(id).close(); } }
 };
 }

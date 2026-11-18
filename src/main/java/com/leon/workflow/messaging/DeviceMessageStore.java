@@ -109,7 +109,7 @@ public class DeviceMessageStore {
         if(!existing.isEmpty()) {
             var saved=existing.getFirst();
             if(!saved.conversationId().equals(room)||!saved.text().equals(text)||!"assistant".equals(saved.role())||!agent.id().equals(saved.agentId()))
-                throw failure(HttpStatus.CONFLICT,"相同工作流消息标识不能发送不同内容或会话");
+                throw failure(HttpStatus.CONFLICT,"相同消息标识不能发送不同内容或会话");
             return saved;
         }
         return transaction.execute(status -> {
