@@ -404,7 +404,17 @@ HTTPS 代理必须转发消息相关路径并保留应用鉴权。首次启用�
 
 `GET /api/conversations/context?conversationId=...` 返回该会话的摘要、近期请求估算 Token、原文轮数与压缩进度；`POST /api/conversations/context/settings` 和 `/reset` 接收 `{conversationId,recentRounds}`。沿用设备 Bearer / 管理 Cookie 认证及浏览器写入来源校验。会话有排队或执行中的回复时拒绝修改设置。Mac App 右上角「上下文」提供查看、设置与新话题入口；聊天任务的 `phase=COMPRESSING` 显示「上下文压缩中…」，随后切换至「正在回复…」。压缩失败明确提示并保留原记录。OpenAI 的压缩与回复继续经 Mac 执行器，DeepSeek 继续在服务器执行。
 
-### OpenAI 执行端配置
+### 主动压缩、结束本轮与 LeonBook 归档
+
+Mac 聊天输入 `/` 呼出命令菜单，支持方向键、Enter/Tab 和 Esc。`/compact`（别名 `/compress`）立即将较早对话用当前 Agent 模型压缩为摘要，保留最近一轮完整原文，无需等待自动阈值；`/context` 查看上下文；`/new` 结束本轮，可选择仅开启全新上下文或先导出再开启；`/export` 导出当前轮次并保留当前上下文。群聊明确选择总结或压缩使用的 Agent，命令不会写成普通消息或触发普通聊天回复。
+
+主动任务持久化在 `chat_context_operation`，按会话与回复互斥，重复请求标识不重复收费。原始对话不删除；重启中断的运行任务标为失败，不自动重放模型调用。`POST /api/conversations/context/compact` 和 `/archive` 接收 `{conversationId,agentId,requestId}`，立即返回 202。分页消息的 `contextOperations` 显示进度和结果。归档冻结当前话题的完整原文边界，使用 AI 对全量历史分批总结，结果由 `GET /api/conversations/context/archive/{id}` 读取，不改变实时上下文。
+
+Mac 经已安装的 `leonbook` CLI 通信：先固定 `workspace.info` 返回的 root/user，调用 `media.upload` 复制图片和完整原文附件，再 `articles.create` 保存草稿并 `articles.get` 读回校验。文章先展示 AI 总结，再展示原始对话；内容过长时原文完整保存在 Markdown 附件中。文章 slug 和归档标识固定，重复导出不覆盖用户改动或重复创建文章；不直接写 LeonBook 内部数据库或文章文件。
+
+仅在本机确认文章保存后调用 `POST /api/conversations/context/archive/{id}/finish` 开启全新上下文。服务器比较冻结边界与当前话题，若期间收到新消息或已切换话题，则保留文章并拒绝重置，防止丢失未归档上下文。归档失败不重置，历史聊天保留。CLI 集成验收只使用临时资料库，不创建真实测试文章。归档与普通对话、主动压缩均沿用已有认证、OpenAI Mac 执行路径及模型用量统计。
+
+### OpenAI 执行端安装
 
 工作流内置 OpenAI 节点和 Agent 可切换到 Mac 执行器；DeepSeek 仍由服务器直接调用。Mac 主动通过 HTTPS 领取任务，无需开放本机端口。后台执行器随用户登录自动启动，运行时使用 `caffeinate -i` 防止自动闲置睡眠；手动睡眠、退出登录、关机或断网都会使 OpenAI 执行器离线。高级设置显示执行位置与在线状态。
 
