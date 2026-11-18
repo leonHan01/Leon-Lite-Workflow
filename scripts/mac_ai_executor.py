@@ -77,8 +77,9 @@ def request_json(client, url, body=None, headers=None, timeout=12, method=None):
     encoded = None if body is None else json.dumps(body, ensure_ascii=False).encode('utf-8')
     request = urllib.request.Request(url, data=encoded, method=method, headers={'Content-Type': 'application/json', **(headers or {})})
     with client.open(request, timeout=timeout) as response:
-        raw = response.read(LIMIT + 1)
-        if len(raw) > LIMIT:
+        limit = 16_000_000 if urllib.parse.urlsplit(url).path.endswith('/claim') else LIMIT
+        raw = response.read(limit + 1)
+        if len(raw) > limit:
             raise ValueError('响应过大')
         return json.loads(raw) if raw else {}
 

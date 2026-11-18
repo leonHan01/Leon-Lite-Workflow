@@ -29,11 +29,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class AgentChatIntegrationTest {
     @Autowired WebApplicationContext context; @Autowired AgentRegistry agents; @Autowired AgentChatService chat;
     @Autowired DeviceMessageStore store; @Autowired AgentReplyEngine engine; @Autowired JdbcTemplate jdbc;
+    @Autowired AgentContextManager contexts;
     @Autowired BrowserSessionService sessions; @Autowired ApiTokenInterceptor auth; @Autowired ObjectMapper json;
     @MockitoBean AgentModelClient model;
     private static final String AUTH="Bearer integration-test-token", KEY="test-only-model-key-never-real";
     private MockMvc mvc(){return MockMvcBuilders.webAppContextSetup(context).build();}
-    @BeforeEach void clean(){jdbc.update("DELETE FROM chat_agent_job");jdbc.update("DELETE FROM device_message");jdbc.update("DELETE FROM chat_conversation WHERE id<>'shared'");jdbc.update("DELETE FROM chat_agent");}
+    @BeforeEach void clean(){jdbc.update("DELETE FROM chat_context_snapshot");jdbc.update("DELETE FROM chat_context_summary");jdbc.update("DELETE FROM chat_context_policy");jdbc.update("DELETE FROM chat_agent_job");jdbc.update("DELETE FROM device_message");jdbc.update("DELETE FROM chat_conversation WHERE id<>'shared'");jdbc.update("DELETE FROM chat_agent");}
     private AgentRegistry.Agent agent(String handle){return agents.save(null,new AgentRegistry.Edit(handle,handle,"openai","test-model","角色 "+handle,true,KEY,null));}
     private DeviceMessageStore.Send send(String room,String text,List<String> ids){return new DeviceMessageStore.Send(UUID.randomUUID().toString(),UUID.randomUUID().toString(),"Mac","macos",text,room,ids);}
 
@@ -106,5 +107,130 @@ class AgentChatIntegrationTest {
     @Test void interruptedJobsFailWithoutAutomaticPaidRetry() {
         var a=agent("writer");var c=chat.direct(a.id());chat.send(send(c.id(),"中断",List.of()));assertNotNull(store.claim());store.recoverInterrupted();
         assertNull(store.claim());assertEquals("FAILED",store.page(c.id(),null,null,100).jobs().getFirst().status());
+    }
+    @Test void aiCompressionKeepsWholeTurnsAndPublishesPhaseAndPersistsMemory() throws Exception {
+        var a=agent("memory");var room=chat.direct(a.id());var compression=new ArrayList<List<Map<String,String>>>();
+        when(model.complete(any(),anyString(),anyList())).thenAnswer(call->{
+            List<Map<String,String>> input=call.getArgument(2);
+            if(input.getFirst().get("content").contains("你是对话记忆压缩器")) {
+                assertEquals("COMPRESSING",store.page(room.id(),null,null,100).jobs().getFirst().phase());
+                compression.add(input);return "已确认：用户希望记住暗号 BLUE。";
+            }
+            return "answer-"+input.getLast().get("content");
+        });
+        for(int i=1;i<=15;i++) { chat.send(send(room.id(),"question-"+i+(i==1?" BLUE":""),List.of()));assertTrue(engine.runNext()); }
+        assertEquals(1,compression.size());
+        String compressed=compression.getFirst().getLast().get("content");
+        for(int i=1;i<=4;i++) { assertTrue(compressed.contains("question-"+i));assertTrue(compressed.contains("answer-[用户 · Mac]：question-"+i)); }
+        assertFalse(compressed.contains("question-5"));
+        var info=contexts.info(room.id());assertEquals(10,info.recentRounds());
+        assertTrue(info.agents().getFirst().summary().contains("BLUE"));assertEquals(10,info.agents().getFirst().retainedRounds());
+        assertTrue(info.agents().getFirst().estimatedInputTokens()>0);
+        assertEquals(30,store.page(room.id(),null,null,100).messages().size());
+        var restarted=new AgentContextManager(store,jdbc,agents,model,json);
+        assertEquals(info.agents().getFirst().summary(),restarted.info(room.id()).agents().getFirst().summary());
+        String snapshot=jdbc.queryForObject("SELECT messages_json FROM chat_context_snapshot ORDER BY message_id DESC LIMIT 1",String.class);
+        assertTrue(snapshot.contains("BLUE"));assertTrue(snapshot.contains("question-5"));assertTrue(snapshot.contains("question-15"));assertFalse(snapshot.contains("question-1 BLUE"));
+    }
+    @Test void compressionFailureRetainsChatAndRetryReusesCompletedSnapshot() throws Exception {
+        var a=agent("memory");var room=chat.direct(a.id());contexts.configure(room.id(),1,false);
+        when(model.complete(any(),anyString(),anyList())).thenReturn("answer");
+        for(int i=0;i<5;i++) { chat.send(send(room.id(),"old-"+i,List.of()));engine.runNext(); }
+        var sent=chat.send(send(room.id(),"compress-me",List.of()));
+        when(model.complete(any(),anyString(),anyList())).thenAnswer(call->{
+            List<Map<String,String>> input=call.getArgument(2);
+            if(input.getFirst().get("content").contains("你是对话记忆压缩器")) throw new AgentModelClient.Failure("模型超时");
+            return "answer";
+        });
+        engine.runNext();var job=store.page(room.id(),null,null,100).jobs().getFirst();
+        assertEquals("FAILED",job.status());assertTrue(job.error().contains("上下文压缩未完成"));
+        assertEquals(11,store.page(room.id(),null,null,100).messages().size());
+        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM chat_context_summary",Integer.class));
+        var compressCalls=new java.util.concurrent.atomic.AtomicInteger();var replyCalls=new java.util.concurrent.atomic.AtomicInteger();
+        doAnswer(call->{
+            List<Map<String,String>> input=call.getArgument(2);
+            if(input.getFirst().get("content").contains("你是对话记忆压缩器")) { compressCalls.incrementAndGet();return "旧历史摘要"; }
+            if(replyCalls.getAndIncrement()==0) throw new AgentModelClient.Failure("回复失败");return "成功";
+        }).when(model).complete(any(),anyString(),anyList());
+        store.retryJob(sent.id(),a.id());engine.runNext();assertEquals(1,compressCalls.get());
+        String original=jdbc.queryForObject("SELECT messages_json FROM chat_context_snapshot WHERE message_id=?",String.class,sent.id());
+        // A future question and its answer must not enter this failed reply's retry.
+        chat.send(send(room.id(),"future-question",List.of()));engine.runNext();
+        store.retryJob(sent.id(),a.id());engine.runNext();assertEquals(1,compressCalls.get());
+        assertEquals(original,jdbc.queryForObject("SELECT messages_json FROM chat_context_snapshot WHERE message_id=?",String.class,sent.id()));
+        assertFalse(original.contains("future-question"));
+    }
+    @Test void summaryNeverLeaksFromFutureIntoEarlierFailedQuestion() throws Exception {
+        var a=agent("memory");var room=chat.direct(a.id());contexts.configure(room.id(),1,false);
+        when(model.complete(any(),anyString(),anyList())).thenReturn("answer");
+        var original=chat.send(send(room.id(),"earlier",List.of()));var work=store.claim();store.fail(work,"failed before preparing");
+        for(int i=0;i<8;i++) { chat.send(send(room.id(),"later-"+i,List.of()));engine.runNext(); }
+        assertFalse(contexts.info(room.id()).agents().getFirst().summary().isEmpty());
+        var inputs=new ArrayList<List<Map<String,String>>>();
+        when(model.complete(any(),anyString(),anyList())).thenAnswer(call->{inputs.add(call.getArgument(2));return "old answer";});
+        store.retryJob(original.id(),a.id());engine.runNext();
+        assertEquals(1,inputs.size());String payload=json.writeValueAsString(inputs.getFirst());assertFalse(payload.contains("later-"));assertFalse(payload.contains("历史对话摘要"));
+    }
+    @Test void contextSettingsRequireAuthAndResetPreservesChatAndIsolatesAgents() throws Exception {
+        var a=agent("writer");var b=agent("coder");var room=chat.direct(a.id());
+        mvc().perform(get("/api/conversations/context").param("conversationId",room.id())).andExpect(status().isUnauthorized());
+        mvc().perform(get("/api/conversations/context").header("Authorization",AUTH).param("conversationId",room.id())).andExpect(status().isOk()).andExpect(jsonPath("$.recentRounds").value(10)).andExpect(jsonPath("$.agents.length()").value(1));
+        Cookie cookie=new Cookie(BrowserSessionService.COOKIE_NAME,sessions.create(false,auth.fingerprint()));
+        String settings=json.writeValueAsString(Map.of("conversationId",room.id(),"recentRounds",3));
+        mvc().perform(post("/api/conversations/context/settings").cookie(cookie).contentType("application/json").content(settings)).andExpect(status().isForbidden());
+        mvc().perform(post("/api/conversations/context/settings").header("Authorization",AUTH).contentType("application/json").content(settings)).andExpect(status().isOk()).andExpect(jsonPath("$.recentRounds").value(3));
+        when(model.complete(any(),anyString(),anyList())).thenReturn("answer");
+        var sent=chat.send(send(room.id(),"old-topic",List.of()));
+        assertThrows(Exception.class,()->contexts.configure(room.id(),3,true));engine.runNext();
+        contexts.configure(room.id(),3,true);assertEquals(2,store.page(room.id(),null,null,100).messages().size());
+        chat.send(send(room.id(),"new-topic",List.of()));engine.runNext();
+        String snapshot=jdbc.queryForObject("SELECT messages_json FROM chat_context_snapshot ORDER BY message_id DESC LIMIT 1",String.class);
+        assertFalse(snapshot.contains("old-topic"));assertTrue(snapshot.contains("new-topic"));
+        assertThrows(Exception.class,()->store.retryJob(sent.id(),a.id()));
+        assertEquals(10,contexts.info(chat.direct(b.id()).id()).recentRounds());
+    }
+    @Test void groupContextIncludesProactiveMessagesAndLabelsOtherAgents() throws Exception {
+        var a=agent("writer");var b=agent("coder");var room=chat.group("讨论",List.of(a.id(),b.id()));
+        chat.publishAgentMessage(b.id(),room.id(),"其他 Agent 主动通知",UUID.randomUUID().toString());
+        when(model.complete(any(),anyString(),anyList())).thenAnswer(call->{
+            List<Map<String,String>> input=call.getArgument(2);
+            assertTrue(input.stream().anyMatch(m->m.get("role").equals("user")&&m.get("content").contains("[其他 Agent · coder]：其他 Agent 主动通知")));
+            return "answer";
+        });
+        chat.send(send(room.id(),"请分析通知",List.of(a.id())));engine.runNext();
+        verify(model).complete(any(),anyString(),anyList());
+    }
+    @Test void oversizedCurrentMessageIsNeverSilentlyCut() throws Exception {
+        var a=agent("writer");var room=chat.direct(a.id());
+        chat.send(send(room.id(),"中".repeat(8000),List.of()));engine.runNext();
+        verifyNoInteractions(model);assertTrue(store.page(room.id(),null,null,100).jobs().getFirst().error().contains("过长"));
+        assertEquals(8000,store.page(room.id(),null,null,100).messages().getFirst().text().length());
+    }
+    @Test void tokenPressureCompressesBeforeRoundThresholdAndNeverSplitsMessages() throws Exception {
+        var a=agent("writer");var room=chat.direct(a.id());
+        var compressionCalls=new java.util.concurrent.atomic.AtomicInteger();
+        when(model.complete(any(),anyString(),anyList())).thenAnswer(call->{
+            List<Map<String,String>> input=call.getArgument(2);
+            assertTrue(AgentContextManager.tokens(input)<=5500);
+            if(input.getFirst().get("content").contains("你是对话记忆压缩器")) {
+                compressionCalls.incrementAndGet();
+                String text=input.getLast().get("content");
+                assertEquals(text.split("BEGIN-",-1).length,text.split("-END",-1).length);
+                return "用户提供了长文本，记住已确认的决定。";
+            }
+            return "answer";
+        });
+        for(int i=0;i<8;i++) { chat.send(send(room.id(),"BEGIN-"+"中".repeat(900)+"-END",List.of()));engine.runNext(); }
+        assertTrue(compressionCalls.get()>0);assertTrue(store.page(room.id(),null,null,100).jobs().isEmpty());
+    }
+    @Test void invalidCompressionDoesNotReplacePreviousMemoryOrRemoveHistory() throws Exception {
+        var a=agent("writer");var room=chat.direct(a.id());contexts.configure(room.id(),1,false);
+        when(model.complete(any(),anyString(),anyList())).thenReturn("answer");
+        for(int i=0;i<5;i++) { chat.send(send(room.id(),"old-"+i,List.of()));engine.runNext(); }
+        when(model.complete(any(),anyString(),anyList())).thenReturn("中".repeat(2000));
+        chat.send(send(room.id(),"current",List.of()));engine.runNext();
+        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM chat_context_summary",Integer.class));
+        assertTrue(store.page(room.id(),null,null,100).jobs().getFirst().error().contains("AI 摘要为空或过长"));
+        assertEquals(11,store.page(room.id(),null,null,100).messages().size());
     }
 }

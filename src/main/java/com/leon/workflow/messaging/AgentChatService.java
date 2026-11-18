@@ -41,6 +41,8 @@ public class AgentChatService {
             }
             if(targetIds.size()>4) throw DeviceMessageStore.failure(HttpStatus.BAD_REQUEST,"每条消息最多 @4 个 Agent");
             var targets=targetIds.stream().map(this::active).toList();
+            if(!DeviceMessageStore.imageIds(input).isEmpty()&&targets.stream().anyMatch(a->!a.provider().equals("openai")))
+                throw DeviceMessageStore.failure(HttpStatus.BAD_REQUEST,"当前 Agent 的模型不支持图片，请选择支持视觉输入的 OpenAI 模型");
             return store.submit(input,targets);
         }
     }

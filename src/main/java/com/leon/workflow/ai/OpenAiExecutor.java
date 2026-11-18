@@ -94,7 +94,7 @@ public class OpenAiExecutor {
         if(!enabled() || !online()) throw new IllegalArgumentException("Mac OpenAI 执行器离线，请先启动执行器后重试");
         String model=required(body.get("model"),"OpenAI 模型无效",100);
         if(!model.matches("[A-Za-z0-9_.:-]{1,100}") || Boolean.TRUE.equals(body.get("stream"))) throw new IllegalArgumentException("执行器仅支持非流式 OpenAI 模型请求");
-        if(timeoutMs<100 || timeoutMs>240000 || write(body).getBytes(StandardCharsets.UTF_8).length>1_000_000) throw new IllegalArgumentException("OpenAI 任务超时或请求大小无效");
+        if(timeoutMs<100 || timeoutMs>240000 || write(body).getBytes(StandardCharsets.UTF_8).length>16_000_000) throw new IllegalArgumentException("OpenAI 任务超时或请求大小无效");
         String id=UUID.randomUUID().toString(); long now=System.currentTimeMillis(),deadline=now+timeoutMs;
         synchronized(this) {
             expire(now);

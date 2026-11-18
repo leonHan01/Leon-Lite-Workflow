@@ -245,7 +245,7 @@ function renderMessages() {
 function renderJobs(jobs) {
     $('jobs').replaceChildren();
     for (const job of jobs) {
-        const item = node('div', `${job.agentName} · ${job.status === 'FAILED' ? job.error : job.status === 'RUNNING' ? '正在回复…' : '等待回复…'}`, 'job');
+        const item = node('div', `${job.agentName} · ${job.status === 'FAILED' ? job.error : job.phase === 'COMPRESSING' ? '上下文压缩中…' : job.status === 'RUNNING' ? '正在回复…' : '等待回复…'}`, 'job');
         if (job.status === 'FAILED') item.append(button('重试回复', async () => {
             try { await api(`/api/device-messages/${job.messageId}/agents/${job.agentId}/retry`, { method: 'POST', body: '{}' }); poll(); } catch (e) { notice(e.message, true); }
         }));

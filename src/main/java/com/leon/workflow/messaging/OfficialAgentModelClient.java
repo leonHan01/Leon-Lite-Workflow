@@ -17,15 +17,17 @@ import java.util.concurrent.Flow;
 
 @Component
 public class OfficialAgentModelClient implements AgentModelClient {
+    private final ChatImageService images;
     private final WorkflowModels models;
     private final OpenAiExecutor executor;
     private final ObjectMapper json;
     private final HttpClient http;
-    @Autowired public OfficialAgentModelClient(ObjectMapper json,WorkflowModels models,OpenAiExecutor executor) { this(json,HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).followRedirects(HttpClient.Redirect.NEVER).build(),models,executor); }
-    OfficialAgentModelClient(ObjectMapper json,HttpClient http,WorkflowModels models,OpenAiExecutor executor) { this.json=json;this.http=http;this.models=models;this.executor=executor; }
+    @Autowired public OfficialAgentModelClient(ObjectMapper json,WorkflowModels models,OpenAiExecutor executor,ChatImageService images) { this(json,HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).followRedirects(HttpClient.Redirect.NEVER).build(),models,executor,images); }
+    OfficialAgentModelClient(ObjectMapper json,HttpClient http,WorkflowModels models,OpenAiExecutor executor) { this(json,http,models,executor,null); }
+    OfficialAgentModelClient(ObjectMapper json,HttpClient http,WorkflowModels models,OpenAiExecutor executor,ChatImageService images) { this.json=json;this.http=http;this.models=models;this.executor=executor;this.images=images; }
     @Override public String complete(AgentRegistry.Agent agent,String key,List<Map<String,String>> messages) throws Exception {
         boolean openai=agent.provider().equals("openai");
-        var body=new LinkedHashMap<String,Object>(); body.put("model",agent.model()); body.put("messages",messages); body.put("stream",false);
+        var body=new LinkedHashMap<String,Object>(); body.put("model",agent.model()); body.put("messages",images==null?messages:images.modelMessages(messages,openai)); body.put("stream",false);
         if (openai) { body.put("max_completion_tokens",2048); body.put("store",false); }
         else { body.put("max_tokens",2048); body.put("thinking",Map.of("type","disabled")); }
         var request=HttpRequest.newBuilder(URI.create(openai ? "https://api.openai.com/v1/chat/completions" : "https://api.deepseek.com/chat/completions"))

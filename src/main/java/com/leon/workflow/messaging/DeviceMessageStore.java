@@ -17,17 +17,33 @@ public class DeviceMessageStore {
         this.jdbc=jdbc; transaction=new TransactionTemplate(new DataSourceTransactionManager(Objects.requireNonNull(jdbc.getDataSource())));
     }
     public record Message(long id,String clientMessageId,String deviceId,String sender,String platform,String text,long createdAt,
-                          String conversationId,String role,String agentId,Long replyTo) {}
+                          String conversationId,String role,String agentId,Long replyTo,List<Image> images) {
+        public Message(long id,String clientMessageId,String deviceId,String sender,String platform,String text,long createdAt,String conversationId,String role,String agentId,Long replyTo){this(id,clientMessageId,deviceId,sender,platform,text,createdAt,conversationId,role,agentId,replyTo,List.of());}
+    }
+    public record Image(String id,String mimeType,int width,int height,int byteCount) {}
     public record Send(String clientMessageId,String deviceId,String sender,String platform,String text,
-                       String conversationId,List<String> mentionAgentIds) {
+                       String conversationId,List<String> mentionAgentIds,List<String> imageIds) {
+        public Send(String clientMessageId,String deviceId,String sender,String platform,String text,String conversationId,List<String> mentionAgentIds){this(clientMessageId,deviceId,sender,platform,text,conversationId,mentionAgentIds,List.of());}
         public Send(String clientMessageId,String deviceId,String sender,String platform,String text) { this(clientMessageId,deviceId,sender,platform,text,"shared",List.of()); }
     }
-    public record Job(long messageId,String agentId,String agentName,String status,String error) {}
+    public record Job(long messageId,String agentId,String agentName,String status,String error,String phase) {}
     public record Page(List<Message> messages,boolean hasMore,List<Job> jobs) {}
     public record Conversation(String id,String name,String kind,String agentId,List<String> agentIds) {}
     public record Work(long messageId,String agentId,String conversationId) {}
-    private static final RowMapper<Message> ROW=(rs,n)->new Message(rs.getLong("id"),rs.getString("client_message_id"),rs.getString("device_id"),rs.getString("sender"),rs.getString("platform"),rs.getString("body"),rs.getLong("created_at"),rs.getString("conversation_id"),rs.getString("message_role"),rs.getString("agent_id"),rs.getObject("reply_to",Long.class));
+    private final RowMapper<Message> ROW=(rs,n)->new Message(rs.getLong("id"),rs.getString("client_message_id"),rs.getString("device_id"),rs.getString("sender"),rs.getString("platform"),rs.getString("body"),rs.getLong("created_at"),rs.getString("conversation_id"),rs.getString("message_role"),rs.getString("agent_id"),rs.getObject("reply_to",Long.class),images(rs.getString("image_ids")));
     private static final RowMapper<Conversation> CONVERSATION=(rs,n)->new Conversation(rs.getString("id"),rs.getString("name"),rs.getString("kind"),rs.getString("agent_id"),split(rs.getString("agent_ids")));
+    private List<Image> images(String ids) {
+        if(ids==null||ids.isBlank())return List.of();
+        var result=new ArrayList<Image>();
+        for(String id:ids.split(","))result.addAll(jdbc.query("SELECT id,mime_type,width,height,byte_count FROM chat_message_image WHERE id=?",(rs,n)->new Image(rs.getString(1),rs.getString(2),rs.getInt(3),rs.getInt(4),rs.getInt(5)),id));
+        return List.copyOf(result);
+    }
+    static List<String> imageIds(Send input){
+        var ids=input.imageIds()==null?List.<String>of():input.imageIds();
+        if(ids.size()>4)throw bad("每条消息最多发送 4 张图片");
+        var normalized=ids.stream().map(DeviceMessageStore::uuid).toList();
+        if(new HashSet<>(normalized).size()!=normalized.size())throw bad("同一图片不能重复添加");return normalized;
+    }
     @PostConstruct void initialize() {
         jdbc.execute("""
             CREATE TABLE IF NOT EXISTS device_message (
@@ -41,12 +57,17 @@ public class DeviceMessageStore {
         jdbc.execute("ALTER TABLE device_message ADD COLUMN IF NOT EXISTS message_role VARCHAR(16) DEFAULT 'user' NOT NULL");
         jdbc.execute("ALTER TABLE device_message ADD COLUMN IF NOT EXISTS agent_id VARCHAR(36)");
         jdbc.execute("ALTER TABLE device_message ADD COLUMN IF NOT EXISTS reply_to BIGINT");
+        jdbc.execute("ALTER TABLE device_message ADD COLUMN IF NOT EXISTS image_ids VARCHAR(200) DEFAULT '' NOT NULL");
         jdbc.execute("ALTER TABLE device_message ADD COLUMN IF NOT EXISTS mention_ids VARCHAR(1500) DEFAULT '' NOT NULL");
         jdbc.execute("CREATE INDEX IF NOT EXISTS idx_device_message_conversation ON device_message(conversation_id,id)");
         jdbc.execute("CREATE TABLE IF NOT EXISTS chat_conversation (id VARCHAR(80) PRIMARY KEY,name VARCHAR(60) NOT NULL,kind VARCHAR(16) NOT NULL,agent_id VARCHAR(36),agent_ids VARCHAR(1500) NOT NULL)");
         jdbc.update("INSERT INTO chat_conversation(id,name,kind,agent_ids) SELECT 'shared','设备群聊','group','' WHERE NOT EXISTS(SELECT 1 FROM chat_conversation WHERE id='shared')");
         jdbc.execute("CREATE TABLE IF NOT EXISTS chat_agent_job (message_id BIGINT NOT NULL,agent_id VARCHAR(36) NOT NULL,conversation_id VARCHAR(80) NOT NULL,agent_name VARCHAR(60) NOT NULL,status VARCHAR(16) NOT NULL,error VARCHAR(300) NOT NULL DEFAULT '',PRIMARY KEY(message_id,agent_id))");
         jdbc.execute("CREATE INDEX IF NOT EXISTS idx_chat_agent_job_queue ON chat_agent_job(status,message_id)");
+        jdbc.execute("ALTER TABLE chat_agent_job ADD COLUMN IF NOT EXISTS phase VARCHAR(24) DEFAULT '' NOT NULL");
+        jdbc.execute("CREATE TABLE IF NOT EXISTS chat_context_policy (conversation_id VARCHAR(80) PRIMARY KEY,recent_rounds INT NOT NULL DEFAULT 10,after_id BIGINT NOT NULL DEFAULT 0,epoch BIGINT NOT NULL DEFAULT 0)");
+        jdbc.execute("CREATE TABLE IF NOT EXISTS chat_context_summary (conversation_id VARCHAR(80) NOT NULL,agent_id VARCHAR(36) NOT NULL,epoch BIGINT NOT NULL,through_id BIGINT NOT NULL,summary VARCHAR(8000) NOT NULL,created_at BIGINT NOT NULL,PRIMARY KEY(conversation_id,agent_id,epoch,through_id))");
+        jdbc.execute("CREATE TABLE IF NOT EXISTS chat_context_snapshot (message_id BIGINT NOT NULL,agent_id VARCHAR(36) NOT NULL,conversation_id VARCHAR(80) NOT NULL,epoch BIGINT NOT NULL,messages_json CLOB NOT NULL,estimated_tokens INT NOT NULL,retained_rounds INT NOT NULL,created_at BIGINT NOT NULL,PRIMARY KEY(message_id,agent_id))");
     }
     public synchronized List<Conversation> conversations() { return jdbc.query("SELECT * FROM chat_conversation ORDER BY CASE WHEN id='shared' THEN 0 ELSE 1 END,name,id",CONVERSATION); }
     public synchronized Conversation conversation(String id) {
@@ -77,7 +98,7 @@ public class DeviceMessageStore {
         String name=input.sender()==null?"":input.sender().strip();
         if(name.isBlank()||name.length()>60||name.codePoints().anyMatch(Character::isISOControl)) throw bad("设备名称应为 1–60 字且不能含控制字符");
         if(!Set.of("macos","android").contains(input.platform()==null?"":input.platform())) throw bad("设备平台无效");
-        if(input.text()==null||input.text().isBlank()||input.text().length()>8000||input.text().indexOf('\0')>=0) throw bad("消息应为 1–8000 字符");
+        if(input.text()==null||(input.text().isBlank()&&imageIds(input).isEmpty())||input.text().length()>8000||input.text().indexOf('\0')>=0) throw bad("消息应为 1–8000 字符");
     }
     public synchronized Message retry(Send input) {
         validate(input);
@@ -85,7 +106,7 @@ public class DeviceMessageStore {
         if(rows.isEmpty()) return null;
         Message saved=rows.getFirst();
         String previous=jdbc.queryForObject("SELECT mention_ids FROM device_message WHERE id=?",String.class,saved.id());
-        if(!saved.text().equals(input.text())||!saved.sender().equals(input.sender().strip())||!saved.platform().equals(input.platform())||!saved.conversationId().equals(conversationId(input))||!Objects.equals(previous,mentions(input)))
+        if(!saved.text().equals(input.text())||!saved.sender().equals(input.sender().strip())||!saved.platform().equals(input.platform())||!saved.conversationId().equals(conversationId(input))||!Objects.equals(previous,mentions(input))||!saved.images().stream().map(Image::id).toList().equals(imageIds(input)))
             throw failure(HttpStatus.CONFLICT,"相同消息标识不能发送不同内容或会话");
         return saved;
     }
@@ -95,8 +116,10 @@ public class DeviceMessageStore {
         String conversation=conversationId(input); conversation(conversation);
         Long queued=jdbc.queryForObject("SELECT COUNT(*) FROM chat_agent_job WHERE status IN ('PENDING','RUNNING')",Long.class);
         if(queued+targets.size()>256) throw failure(HttpStatus.TOO_MANY_REQUESTS,"Agent 队列已满，请稍后发送");
+        var ids=imageIds(input);
+        for(String id:ids)if(jdbc.queryForObject("SELECT COUNT(*) FROM chat_message_image WHERE id=? AND conversation_id=?",Integer.class,id,conversation)!=1)throw bad("图片未上传或不属于当前会话，请重新添加图片");
         return transaction.execute(status -> {
-            jdbc.update("INSERT INTO device_message(client_message_id,device_id,sender,platform,body,created_at,conversation_id,mention_ids) VALUES(?,?,?,?,?,?,?,?)",uuid(input.clientMessageId()),uuid(input.deviceId()),input.sender().strip(),input.platform(),input.text(),System.currentTimeMillis(),conversation,mentions(input));
+            jdbc.update("INSERT INTO device_message(client_message_id,device_id,sender,platform,body,created_at,conversation_id,mention_ids,image_ids) VALUES(?,?,?,?,?,?,?,?,?)",uuid(input.clientMessageId()),uuid(input.deviceId()),input.sender().strip(),input.platform(),input.text(),System.currentTimeMillis(),conversation,mentions(input),String.join(",",ids));
             Message inserted=jdbc.query("SELECT * FROM device_message WHERE device_id=? AND client_message_id=?",ROW,uuid(input.deviceId()),uuid(input.clientMessageId())).getFirst();
             for(var target:targets) jdbc.update("INSERT INTO chat_agent_job(message_id,agent_id,conversation_id,agent_name,status) VALUES(?,?,?,?,'PENDING')",inserted.id(),target.id(),conversation,target.name());
             return inserted;
@@ -127,13 +150,19 @@ public class DeviceMessageStore {
         else rows=jdbc.query("SELECT * FROM device_message WHERE conversation_id=? ORDER BY id DESC LIMIT ?",ROW,conversation,limit+1);
         boolean more=rows.size()>limit; var result=new ArrayList<>(rows.subList(0,Math.min(limit,rows.size())));
         if(after==null) Collections.reverse(result);
-        var jobs=jdbc.query("SELECT * FROM chat_agent_job WHERE conversation_id=? AND status<>'SUCCEEDED' ORDER BY CASE WHEN status='FAILED' THEN 1 ELSE 0 END,message_id DESC LIMIT 100",(rs,n)->new Job(rs.getLong("message_id"),rs.getString("agent_id"),rs.getString("agent_name"),rs.getString("status"),rs.getString("error")),conversation);
+        var jobs=jdbc.query("SELECT * FROM chat_agent_job WHERE conversation_id=? AND status<>'SUCCEEDED' ORDER BY CASE WHEN status='FAILED' THEN 1 ELSE 0 END,message_id DESC LIMIT 100",(rs,n)->new Job(rs.getLong("message_id"),rs.getString("agent_id"),rs.getString("agent_name"),rs.getString("status"),rs.getString("error"),rs.getString("phase")),conversation);
         return new Page(List.copyOf(result),more,jobs);
     }
-    public synchronized List<Message> context(Work work) {
-        var rows=jdbc.query("SELECT * FROM device_message WHERE conversation_id=? AND ((message_role='user' AND id<=?) OR (message_role='assistant' AND reply_to<?)) ORDER BY COALESCE(reply_to,id) DESC,CASE WHEN message_role='user' THEN 0 ELSE 1 END DESC,id DESC LIMIT 30",ROW,work.conversationId(),work.messageId(),work.messageId());
-        Collections.reverse(rows); return rows;
+    /** Anchors keep user/assistant pairs together even when later questions were queued first. */
+    synchronized List<Long> contextAnchors(Work work,long after,long before,int limit,boolean newest) {
+        return jdbc.query("SELECT DISTINCT COALESCE(reply_to,id) turn_id FROM device_message WHERE conversation_id=? AND COALESCE(reply_to,id)>? AND COALESCE(reply_to,id)<? AND ((message_role='user' AND id<=?) OR (message_role='assistant' AND (reply_to<? OR (reply_to IS NULL AND id<?)))) ORDER BY turn_id "+(newest?"DESC":"ASC")+" LIMIT ?",
+                (rs,n)->rs.getLong(1),work.conversationId(),after,before,work.messageId(),work.messageId(),work.messageId(),limit);
     }
+    synchronized List<Message> contextTurn(Work work,long anchor) {
+        return jdbc.query("SELECT * FROM device_message WHERE conversation_id=? AND COALESCE(reply_to,id)=? AND ((message_role='user' AND id<=?) OR (message_role='assistant' AND (reply_to<? OR (reply_to IS NULL AND id<?)))) ORDER BY CASE WHEN message_role='user' THEN 0 ELSE 1 END,id",
+                ROW,work.conversationId(),anchor,work.messageId(),work.messageId(),work.messageId());
+    }
+    synchronized void phase(Work work,String phase) { jdbc.update("UPDATE chat_agent_job SET phase=? WHERE message_id=? AND agent_id=? AND status='RUNNING'",phase,work.messageId(),work.agentId()); }
     public synchronized void recoverInterrupted() { jdbc.update("UPDATE chat_agent_job SET status='FAILED',error='服务重启中断了回复，请确认后手动重试' WHERE status='RUNNING'"); }
     public synchronized Work claim() {
         var rows=jdbc.query("""
@@ -143,7 +172,7 @@ public class DeviceMessageStore {
             ORDER BY j.message_id,j.agent_id LIMIT 1
             """,(rs,n)->new Work(rs.getLong("message_id"),rs.getString("agent_id"),rs.getString("conversation_id")));
         if(rows.isEmpty()) return null; Work work=rows.getFirst();
-        if(jdbc.update("UPDATE chat_agent_job SET status='RUNNING',error='' WHERE message_id=? AND agent_id=? AND status='PENDING'",work.messageId(),work.agentId())!=1) return null;
+        if(jdbc.update("UPDATE chat_agent_job SET status='RUNNING',error='',phase='PREPARING' WHERE message_id=? AND agent_id=? AND status='PENDING'",work.messageId(),work.agentId())!=1) return null;
         return work;
     }
     public synchronized void complete(Work work,AgentRegistry.Agent agent,String text) {
@@ -155,9 +184,12 @@ public class DeviceMessageStore {
     }
     public synchronized void fail(Work work,String error) { jdbc.update("UPDATE chat_agent_job SET status='FAILED',error=? WHERE message_id=? AND agent_id=? AND status='RUNNING'",error,work.messageId(),work.agentId()); }
     public synchronized void retryJob(long messageId,String agentId) {
+        var rooms=jdbc.queryForList("SELECT conversation_id FROM chat_agent_job WHERE message_id=? AND agent_id=?",String.class,messageId,agentId);
+        if(!rooms.isEmpty() && jdbc.queryForObject("SELECT COUNT(*) FROM chat_context_policy WHERE conversation_id=? AND after_id>=?",Integer.class,rooms.getFirst(),messageId)>0)
+            throw failure(HttpStatus.CONFLICT,"此问题属于上一话题，请在当前话题重新发送问题");
         Long queued=jdbc.queryForObject("SELECT COUNT(*) FROM chat_agent_job WHERE status IN ('PENDING','RUNNING')",Long.class);
         if(queued>=256) throw failure(HttpStatus.TOO_MANY_REQUESTS,"Agent 队列已满，请稍后重试");
-        if(jdbc.update("UPDATE chat_agent_job SET status='PENDING',error='' WHERE message_id=? AND agent_id=? AND status='FAILED'",messageId,agentId)!=1) throw failure(HttpStatus.CONFLICT,"此回复未失败或已在重试");
+        if(jdbc.update("UPDATE chat_agent_job SET status='PENDING',error='',phase='' WHERE message_id=? AND agent_id=? AND status='FAILED'",messageId,agentId)!=1) throw failure(HttpStatus.CONFLICT,"此回复未失败或已在重试");
     }
     private static List<String> split(String value) { return value==null||value.isBlank()?List.of():List.of(value.split(",")); }
     static String uuid(String value) {
