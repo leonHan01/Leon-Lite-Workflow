@@ -1,5 +1,7 @@
 package com.leon.workflow.automation;
 
+import com.leon.workflow.ai.OpenAiExecutor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.apache.hc.client5.http.DnsResolver;
 import org.apache.hc.client5.http.classic.methods.HttpUriRequestBase;
 import org.apache.hc.client5.http.config.ConnectionConfig;
@@ -23,9 +25,10 @@ import static com.leon.workflow.automation.WorkflowJson.*;
 public class WorkflowHttp {
     private final Set<String> privateOrigins;
     private final WorkflowCredentials credentials;
+    private final OpenAiExecutor executor;
     private final ScheduledExecutorService deadlines = Executors.newSingleThreadScheduledExecutor(Thread.ofPlatform().daemon().name("workflow-http-deadline").factory());
-    public WorkflowHttp(WorkflowCredentials credentials, @Value("${leon.workflows.http-allowed-origins:}") String origins) {
-        this.credentials = credentials;
+    @Autowired public WorkflowHttp(WorkflowCredentials credentials, @Value("${leon.workflows.http-allowed-origins:}") String origins,OpenAiExecutor executor) {
+        this.credentials = credentials; this.executor=executor;
         privateOrigins = new HashSet<>();
         for (String origin : origins.split(",")) if (!origin.isBlank()) privateOrigins.add(origin(URI.create(origin.trim())));
     }
@@ -47,6 +50,13 @@ public class WorkflowHttp {
         catch (IllegalArgumentException e) { throw new IllegalArgumentException("HTTP 地址格式无效"); }
         if (!Set.of("http", "https").contains(text(uri.getScheme())) || uri.getHost() == null || uri.getUserInfo() != null || uri.getFragment() != null)
             throw new IllegalArgumentException("仅支持不含用户名、密码及片段的 HTTP/HTTPS 地址");
+        if(executor.enabled() && uri.toString().equals("https://api.openai.com/v1/chat/completions") && "POST".equals(config.get("method")) && timeoutCeiling>30000) {
+            var headers=object(config.get("headers"));String authorization=text(headers.get("Authorization"));
+            if(!authorization.startsWith("Bearer ")) throw new IllegalArgumentException("OpenAI 凭据缺失");
+            var result=executor.execute(object(config.get("body")),authorization.substring(7),integer(config.get("timeoutMs"),90000,100,timeoutCeiling));
+            var json=new LinkedHashMap<>(result); json.put("headers",Map.of());json.put("usageRecorded",true);
+            return Map.of("items",List.of(Map.of("json",json)));
+        }
         boolean allowPrivate = privateOrigins.contains(origin(uri));
         DnsResolver dns = new DnsResolver() {
             @Override public InetAddress[] resolve(String host) throws UnknownHostException {

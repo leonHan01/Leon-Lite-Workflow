@@ -2,6 +2,7 @@ package com.leon.workflow.messaging;
 
 import org.springframework.stereotype.Component;
 import com.leon.workflow.automation.WorkflowModels;
+import com.leon.workflow.ai.OpenAiExecutor;
 import org.springframework.beans.factory.annotation.Autowired;
 import tools.jackson.databind.ObjectMapper;
 import java.net.URI;
@@ -17,10 +18,11 @@ import java.util.concurrent.Flow;
 @Component
 public class OfficialAgentModelClient implements AgentModelClient {
     private final WorkflowModels models;
+    private final OpenAiExecutor executor;
     private final ObjectMapper json;
     private final HttpClient http;
-    @Autowired public OfficialAgentModelClient(ObjectMapper json,WorkflowModels models) { this(json,HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).followRedirects(HttpClient.Redirect.NEVER).build(),models); }
-    OfficialAgentModelClient(ObjectMapper json,HttpClient http,WorkflowModels models) { this.json=json;this.http=http;this.models=models; }
+    @Autowired public OfficialAgentModelClient(ObjectMapper json,WorkflowModels models,OpenAiExecutor executor) { this(json,HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).followRedirects(HttpClient.Redirect.NEVER).build(),models,executor); }
+    OfficialAgentModelClient(ObjectMapper json,HttpClient http,WorkflowModels models,OpenAiExecutor executor) { this.json=json;this.http=http;this.models=models;this.executor=executor; }
     @Override public String complete(AgentRegistry.Agent agent,String key,List<Map<String,String>> messages) throws Exception {
         boolean openai=agent.provider().equals("openai");
         var body=new LinkedHashMap<String,Object>(); body.put("model",agent.model()); body.put("messages",messages); body.put("stream",false);
@@ -29,16 +31,28 @@ public class OfficialAgentModelClient implements AgentModelClient {
         var request=HttpRequest.newBuilder(URI.create(openai ? "https://api.openai.com/v1/chat/completions" : "https://api.deepseek.com/chat/completions"))
                 .timeout(Duration.ofSeconds(90)).header("Authorization","Bearer "+key).header("Content-Type","application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(body),StandardCharsets.UTF_8)).build();
-        HttpResponse<byte[]> response;
-        try { response=http.send(request, info -> new LimitedBody()); }
-        catch (HttpTimeoutException e) { throw new AgentModelClient.Failure("模型请求超时，请确认后手动重试"); }
-        if (response.statusCode()<200 || response.statusCode()>=300) throw new AgentModelClient.Failure(switch(response.statusCode()) {
+        boolean mac=openai&&executor.enabled();
+        int status; tools.jackson.databind.JsonNode payload;
+        if(mac) {
+            Map<String,Object> result;
+            try { result=executor.execute(body,key,180000); }
+            catch (IllegalArgumentException unavailable) { throw new AgentModelClient.Failure(unavailable.getMessage()); }
+            status=((Number)result.get("status")).intValue();
+            payload=json.valueToTree(result.get("body"));
+        } else {
+            HttpResponse<byte[]> response;
+            try { response=http.send(request, info -> new LimitedBody()); }
+            catch (HttpConnectTimeoutException e) { throw new AgentModelClient.Failure("连接 "+(openai?"OpenAI":"DeepSeek")+" 超时，请检查服务器到模型服务的网络后手动重试"); }
+            catch (HttpTimeoutException e) { throw new AgentModelClient.Failure("等待 "+(openai?"OpenAI":"DeepSeek")+" 回复超时，请稍后手动重试"); }
+            status=response.statusCode();
+            payload=status>=200&&status<300?json.readTree(response.body()):json.createObjectNode();
+        }
+        if (status<200 || status>=300) throw new AgentModelClient.Failure(switch(status) {
             case 401,403 -> "模型认证失败，请检查 Agent 的 API Key 和模型权限";
             case 429 -> "模型限流或额度不足，请稍后重试";
-            default -> "模型服务请求失败（HTTP "+response.statusCode()+"）";
+            default -> "模型服务请求失败（HTTP "+status+"）";
         });
-        var payload=json.readTree(response.body());
-        models.recordUsage(agent.provider(),agent.model(),payload.has("usage")?json.convertValue(payload.get("usage"),Object.class):null);
+        if(!mac) models.recordUsage(agent.provider(),agent.model(),payload.has("usage")?json.convertValue(payload.get("usage"),Object.class):null);
         var choice=payload.path("choices").path(0);
         if (!"stop".equals(choice.path("finish_reason").asText())) throw new AgentModelClient.Failure("模型未生成完整回复，请缩短问题后重试");
         String result=choice.path("message").path("content").asText("").strip();

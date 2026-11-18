@@ -6,6 +6,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE_PATH || 'playwright')
 const root = path.resolve(__dirname, '../../main/resources/static');
 let workflow = null, versions = [], runs = [], credentials = [], lastCredential = null, lastTest = null;
 let models=[{id:'default-deepseek',name:'DeepSeek Flash',provider:'deepseek',model:'deepseek-flash',credentialId:'',enabled:true}];
+let executorStatus={mode:'mac',workers:[{name:'Mac mini',online:true}]};
 let testFailure = null;
 let qqBinding = null, qqBindingResult = null, qqBindingCount = 0, qqBindingPostDelay = 0;
 const cancelledQqBindings = [];
@@ -17,6 +18,7 @@ const initial = () => ({ nodes: [{ id: 'start', name: '开始', type: 'start', c
 const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
     const reply = (data, status = 200) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(data)); };
+    if (url.pathname === '/api/ai-executor-admin') return reply(executorStatus);
     if (url.pathname === '/api/monitor/page-view') { res.writeHead(204); return res.end(); }
     if (url.pathname.startsWith('/api/workflows')) {
         let body = ''; for await (const part of req) body += part; const data = body ? JSON.parse(body) : {};
@@ -178,10 +180,10 @@ const server = http.createServer(async (req, res) => {
         const library=page.locator('.wf-library'), groups=library.locator('[data-library-group]');
         assert.equal(await groups.count(),4);
         assert.deepEqual(await groups.locator('summary>span').allTextContents(),['数据获取','AI 与分析','脚本与控制','消息通知']);
-        for(const [group,kinds] of Object.entries({sources:['http','rss'],ai:['github-trending','tech-weekly','ai-summary'],logic:['javascript','groovy','if'],notifications:['qq','feishu','email']})) {
+        for(const [group,kinds] of Object.entries({sources:['http','rss'],ai:['github-trending','tech-weekly','ai-summary'],logic:['javascript','groovy','if'],notifications:['app-message','qq','feishu','email']})) {
             assert.deepEqual(await library.locator(`[data-library-group="${group}"] [data-add]`).evaluateAll(nodes=>nodes.map(n=>n.dataset.add)),kinds);
         }
-        assert.equal(await library.locator('[data-add]').count(),11);
+        assert.equal(await library.locator('[data-add]').count(),12);
         const sourceSummary=library.locator('[data-library-group="sources"]>summary');
         await sourceSummary.focus(); await page.keyboard.press('Enter');
         assert.equal(await library.locator('[data-add="http"]').isVisible(),false,'键盘应能折叠分类');
@@ -270,7 +272,7 @@ const server = http.createServer(async (req, res) => {
             assert.equal(await page.locator('.wf-library-preview').count(),0);
             assert.equal(await page.locator('.is-library-drop-target').count(),0);
         }
-        assert.equal(await page.locator('.wf-library-count').textContent(),'11');
+        assert.equal(await page.locator('.wf-library-count').textContent(),'12');
         await page.locator('[data-node="start"]').click();
         await page.locator('[data-add="rss"]').click();
         assert.equal(await page.locator('[data-rss-row]').count(),7);
@@ -987,6 +989,7 @@ const server = http.createServer(async (req, res) => {
         await page.locator('[data-inspector] [data-action="models"]').click();
         await page.getByRole('heading',{name:'模型配置',exact:true}).waitFor();
         const modelForm=page.locator('[data-model-form]');
+        await page.waitForFunction(()=>document.querySelector('[data-openai-executor]')?.textContent.includes('执行器在线'));
         await page.locator('.model-key-settings summary').click();
         const modelKeyForm=page.locator('[data-model-key-form]');
         await modelKeyForm.locator('[name="name"]').fill('OpenAI GPT');
@@ -1029,11 +1032,13 @@ const server = http.createServer(async (req, res) => {
         models[0].usage={inputTokens:12000,outputTokens:345,totalTokens:12345,reportedCalls:4,unreportedCalls:1,firstRecordedAt:'2026-11-18T01:00:00Z',lastRecordedAt:'2026-11-18T02:00:00Z'};
         await modelForm.locator('[name="name"]').fill('刷新时保留的编辑');
         await modelForm.locator('[name="model"]').selectOption('deepseek-v4-pro');
+        executorStatus.workers[0].online=false;
         await page.getByRole('button',{name:'刷新用量',exact:true}).click();
         await page.waitForFunction(()=>document.querySelector('.model-row [data-usage="total"]').textContent==='12,345');
         assert.equal(await page.locator('.model-row').first().locator('[data-usage="input"]').textContent(),'12,000');
         assert.equal(await page.locator('.model-row').first().locator('[data-usage="output"]').textContent(),'345');
         assert.ok((await page.locator('.model-row').first().textContent()).includes('1 次响应未返回完整用量'));
+        assert.ok((await page.locator('[data-openai-executor]').textContent()).includes('执行器离线'));
         assert.equal(await modelForm.locator('[name="name"]').inputValue(),'刷新时保留的编辑');
         assert.equal(await modelForm.locator('[name="model"]').inputValue(),'deepseek-v4-pro');
         await page.getByRole('button',{name:'添加新模型',exact:true}).click();

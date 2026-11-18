@@ -392,3 +392,24 @@ HTTPS 代理必须转发消息相关路径并保留应用鉴权。首次启用�
 窗口显示目标会话最近 100 条消息，并自动同步 App 的回复。正文上限 8000 UTF-16 单元；发送失败保留正文和消息标识，原样重试不会重复保存。消息保存成功代表服务器已接收，在线 App 轮询后显示，离线设备下次打开同步，不代表设备已读。
 
 管理接口 `POST /api/agent-admin/messages` 接收 `{agentId,conversationId?,text,clientMessageId}`，`clientMessageId` 为 UUID。省略会话时打开该 Agent 的私聊；群聊要求 Agent 为成员。接口同时要求管理页 Cookie 及有效写入来源，Bearer 令牌不能代替管理登录；同一消息标识改写内容或会话会返回 409。已有 App 使用原收消息协议即可显示。
+
+
+### OpenAI 在 Mac mini 上执行
+
+工作流内置 OpenAI 节点和 Agent 可切换到 Mac 执行器；DeepSeek 仍由服务器直接调用。Mac 主动通过 HTTPS 领取任务，无需开放本机端口。后台执行器随用户登录自动启动，运行时使用 `caffeinate -i` 防止自动闲置睡眠；手动睡眠、退出登录、关机或断网都会使 OpenAI 执行器离线。高级设置显示执行位置与在线状态。
+
+服务器部署当前版本后，使用经过 SHA-256 校验的 `scripts/install_ai_executor_proxy.py` 配置限定的反向代理路径。Mac 安装命令：
+
+```bash
+python3 scripts/mac_ai_executor.py install --server https://121.40.254.112
+```
+
+安装使用本机已有 `~/.config/leon-workflow/api-token` 临时登录并注册独立执行令牌，保存为 `~/.config/leon-workflow/ai-executor/config.json`（0600），结束时退出管理会话。执行令牌仅能领取、确认和回传 OpenAI 任务，不能管理工作流、Agent 或读取其他凭据。OpenAI API Key 通过已认证 HTTPS 任务在内存中使用，不写入 Mac 配置或日志。服务端任务请求与结果使用既有主密钥 AES-GCM 加密，代理禁止请求和响应落盘缓冲；日志不记录提示词、正文、密钥或令牌。普通 SQL 备份排除执行器令牌、运行租约和执行模式，完整部署 H2 快照仍保留数据库原状。
+
+只有 Mac 完成网络自检并回报在线后，安装才启用持久化的 Mac 执行模式。离线时明确失败，不回退到服务器或其他服务商。未开始的过期领取租约可以重新领取；确认开始后的请求不会自动重放。取消、重启、超时或回传丢失后需要确认再手动重试。结果回传可幂等重试，Token 用量仅入账一次，包括任务超时后迟到的有效响应。Mac 不执行脚本或任意 URL，网络目标固定为 OpenAI 官方 Chat Completions API。
+
+停止执行器（不会把 OpenAI 切回服务器）：
+
+```bash
+python3 scripts/mac_ai_executor.py stop
+```

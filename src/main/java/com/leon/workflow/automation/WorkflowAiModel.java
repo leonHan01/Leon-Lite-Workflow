@@ -73,7 +73,7 @@ final class WorkflowAiModel {
                     case 429 -> "请求限流或额度不足，请检查账户后重试";
                     default -> status>=500 ? "模型服务暂不可用，请稍后重试" : "请检查模型名称和账户支持情况";
                 });
-                catalog.recordUsage(openai?"openai":"deepseek",model,json.get("body") instanceof Map<?,?> payload?payload.get("usage"):null);
+                if(!Boolean.TRUE.equals(json.get("usageRecorded"))) catalog.recordUsage(openai?"openai":"deepseek",model,json.get("body") instanceof Map<?,?> payload?payload.get("usage"):null);
                 if (!(json.get("body") instanceof Map<?,?> payload) || !(payload.get("choices") instanceof List<?> choices) || choices.isEmpty())
                     throw new IllegalArgumentException(name()+" 响应缺少总结结果");
                 var choice=object(choices.getFirst());

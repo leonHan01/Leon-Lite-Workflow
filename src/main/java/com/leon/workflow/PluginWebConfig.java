@@ -15,7 +15,7 @@ public class PluginWebConfig implements WebMvcConfigurer {
 
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
-        registry.addInterceptor(tokenInterceptor).addPathPatterns("/api/**", "/alfred/**");
+        registry.addInterceptor(tokenInterceptor).addPathPatterns("/api/**", "/alfred/**").excludePathPatterns("/api/ai-executor/**");
     }
     @Override
     public void addCorsMappings(CorsRegistry registry) {

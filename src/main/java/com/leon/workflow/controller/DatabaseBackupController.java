@@ -34,6 +34,7 @@ public class DatabaseBackupController {
                 String sql = rows.getString(1);
                 // Session identifiers and token fingerprints are authentication material, not business data.
                 if (sql.startsWith("INSERT INTO \"PUBLIC\".\"BROWSER_SESSION\"")) continue;
+                if (sql.startsWith("INSERT INTO \"PUBLIC\".\"AI_EXECUTOR_")) continue;
                 script.append(sql).append('\n');
             }
         }

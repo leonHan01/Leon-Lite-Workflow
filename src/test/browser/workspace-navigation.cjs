@@ -34,6 +34,7 @@ const server = http.createServer((req, res) => {
   res.setHeader('Content-Disposition','attachment; filename=\"test-backup.sql\"');
   return res.end('-- database backup\n');
  }
+ if (url.pathname==='/api/ai-executor-admin') {res.setHeader('Content-Type','application/json');return res.end(JSON.stringify({mode:'mac',workers:[]}));}
  if (url.pathname==='/api/workflows/models' || url.pathname==='/api/workflows/credentials') {
   res.setHeader('Content-Type','application/json'); return res.end('[]');
  }

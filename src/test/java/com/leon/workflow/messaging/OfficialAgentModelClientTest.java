@@ -3,6 +3,7 @@ package com.leon.workflow.messaging;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.ObjectMapper;
 import com.leon.workflow.automation.WorkflowModels;
+import com.leon.workflow.ai.OpenAiExecutor;
 import java.net.http.*;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -32,7 +33,7 @@ class OfficialAgentModelClientTest {
                 else {assertEquals(2048,body.path("max_tokens").asInt());assertEquals("disabled",body.path("thinking").path("type").asText());}
                 return response;
             });
-            var models=mock(WorkflowModels.class); var client=new OfficialAgentModelClient(json,http,models);
+            var models=mock(WorkflowModels.class); var client=new OfficialAgentModelClient(json,http,models,mock(OpenAiExecutor.class));
             var agent=new AgentRegistry.Agent("id","name","handle",provider,"test-model","",true,true,1);
             assertEquals("answer [已隐藏凭据]",client.complete(agent,"test-secret",List.of(Map.of("role","user","content","question"))));
             verify(models).recordUsage(provider,"test-model",Map.of("prompt_tokens",20,"completion_tokens",5,"total_tokens",25));
@@ -43,11 +44,48 @@ class OfficialAgentModelClientTest {
         HttpClient http=mock(HttpClient.class);HttpResponse<byte[]> response=mock(HttpResponse.class);
         when(http.send(any(HttpRequest.class),any(HttpResponse.BodyHandler.class))).thenReturn(response);
         when(response.statusCode()).thenReturn(401);when(response.body()).thenReturn("echo test-secret".getBytes(StandardCharsets.UTF_8));
-        var models=mock(WorkflowModels.class); var client=new OfficialAgentModelClient(json,http,models);var agent=new AgentRegistry.Agent("id","name","handle","openai","test-model","",true,true,1);
+        var models=mock(WorkflowModels.class); var client=new OfficialAgentModelClient(json,http,models,mock(OpenAiExecutor.class));var agent=new AgentRegistry.Agent("id","name","handle","openai","test-model","",true,true,1);
         var error=assertThrows(AgentModelClient.Failure.class,()->client.complete(agent,"test-secret",List.of()));assertFalse(error.getMessage().contains("test-secret"));
         when(response.statusCode()).thenReturn(200);when(response.body()).thenReturn("{\"choices\":[{\"finish_reason\":\"length\",\"message\":{\"content\":\"partial\"}}]}".getBytes(StandardCharsets.UTF_8));
         assertThrows(AgentModelClient.Failure.class,()->client.complete(agent,"test-secret",List.of()));
         verify(models).recordUsage("openai","test-model",null);
+    }
+    @Test void distinguishesConnectionAndReplyTimeoutsWithoutRetryingOrInventingUsage() throws Exception {
+        for(String provider:List.of("openai","deepseek")) {
+            var http=mock(HttpClient.class); var models=mock(WorkflowModels.class);
+            var client=new OfficialAgentModelClient(json,http,models,mock(OpenAiExecutor.class));
+            var agent=new AgentRegistry.Agent("id","name","handle",provider,"test-model","",true,true,1);
+            String name=provider.equals("openai")?"OpenAI":"DeepSeek";
+            when(http.send(any(HttpRequest.class),any(HttpResponse.BodyHandler.class))).thenThrow(new HttpConnectTimeoutException("private transport detail test-secret"));
+            var connection=assertThrows(AgentModelClient.Failure.class,()->client.complete(agent,"test-secret",List.of()));
+            assertTrue(connection.getMessage().startsWith("连接 "+name+" 超时"),connection.getMessage());
+            assertFalse(connection.getMessage().contains("test-secret"));
+            verify(http,times(1)).send(any(HttpRequest.class),any(HttpResponse.BodyHandler.class)); verifyNoInteractions(models);
+            reset(http);
+            when(http.send(any(HttpRequest.class),any(HttpResponse.BodyHandler.class))).thenThrow(new HttpTimeoutException("private transport detail test-secret"));
+            var reply=assertThrows(AgentModelClient.Failure.class,()->client.complete(agent,"test-secret",List.of()));
+            assertTrue(reply.getMessage().startsWith("等待 "+name+" 回复超时"),reply.getMessage());
+            assertFalse(reply.getMessage().contains("test-secret"));
+            verify(http,times(1)).send(any(HttpRequest.class),any(HttpResponse.BodyHandler.class)); verifyNoInteractions(models);
+        }
+    }
+    @Test void onlyOpenAiIsSentToTheMacAndUsageIsNotRecordedTwice() throws Exception {
+        var http=mock(HttpClient.class);var models=mock(WorkflowModels.class);var executor=mock(OpenAiExecutor.class);
+        when(executor.enabled()).thenReturn(true);
+        when(executor.execute(anyMap(),eq("test-secret"),eq(180000))).thenReturn(Map.of("status",200,"body",Map.of("choices",List.of(Map.of("finish_reason","stop","message",Map.of("content","Mac answer"))))));
+        var client=new OfficialAgentModelClient(json,http,models,executor);
+        var agent=new AgentRegistry.Agent("id","name","handle","openai","gpt-6-luna","",true,true,1);
+        assertEquals("Mac answer",client.complete(agent,"test-secret",List.of(Map.of("role","user","content","question"))));
+        verify(executor).execute(anyMap(),eq("test-secret"),eq(180000));verifyNoInteractions(http,models);
+        when(executor.execute(anyMap(),eq("test-secret"),eq(180000))).thenThrow(new IllegalArgumentException("Mac OpenAI 执行器离线，请先启动执行器后重试"));
+        var offline=assertThrows(AgentModelClient.Failure.class,()->client.complete(agent,"test-secret",List.of()));
+        assertTrue(offline.getMessage().contains("Mac OpenAI 执行器离线"));verifyNoInteractions(http);
+        clearInvocations(executor);
+        var response=mock(HttpResponse.class);when(response.statusCode()).thenReturn(200);when(response.body()).thenReturn("{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":\"direct answer\"}}]}".getBytes(StandardCharsets.UTF_8));
+        when(http.send(any(HttpRequest.class),any(HttpResponse.BodyHandler.class))).thenReturn(response);
+        var deepseek=new AgentRegistry.Agent("id","name","handle","deepseek","deepseek-flash","",true,true,1);
+        assertEquals("direct answer",client.complete(deepseek,"test-secret",List.of()));
+        verify(executor,never()).execute(anyMap(),anyString(),anyInt());verify(http).send(any(HttpRequest.class),any(HttpResponse.BodyHandler.class));
     }
     @Test void boundsResponseBody() {
         var subscriber=new OfficialAgentModelClient.LimitedBody();Flow.Subscription subscription=mock(Flow.Subscription.class);
