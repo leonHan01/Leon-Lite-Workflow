@@ -88,7 +88,10 @@ public class ChatBackupService {
             var old=jdbc.queryForList("SELECT * FROM chat_backup_import WHERE request_id=?",request);
             if(!old.isEmpty()){
                 var row=old.getFirst();if(!hash.equals(row.get("source_hash"))||!target.equals(row.get("target_agent")))throw DeviceMessageStore.failure(HttpStatus.CONFLICT,"相同请求不能加载不同备份");
-                return store.conversation((String)row.get("conversation_id"));
+                var existing=store.conversation((String)row.get("conversation_id"));
+                if(!Objects.equals(owner,existing.ownerId())&&!(legacy&&existing.ownerId()==null))
+                    throw DeviceMessageStore.failure(HttpStatus.CONFLICT,"备份加载请求标识已被使用");
+                return existing;
             }
             return store.atomic(()->{
                 var source=backup.conversation();String room="restore:"+request;

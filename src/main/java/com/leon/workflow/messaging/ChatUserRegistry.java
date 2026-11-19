@@ -58,7 +58,7 @@ public class ChatUserRegistry {
     public void logout(String token){if(token!=null&&token.matches("chat_[A-Za-z0-9_-]{43}"))jdbc.update("DELETE FROM chat_user_session WHERE token_hash=?",hash(token));}
     private User find(String key){var rows=jdbc.query("SELECT id,username FROM chat_user WHERE username_key=?",(rs,n)->new User(rs.getString(1),rs.getString(2)),key);return rows.isEmpty()?null:rows.getFirst();}
     private static String normalize(String value){
-        String name=value==null?"":java.text.Normalizer.normalize(value.strip(),java.text.Normalizer.Form.NFKC);
+        String name=value==null?"":java.text.Normalizer.normalize(value,java.text.Normalizer.Form.NFKC).strip();
         if(name.isBlank()||name.length()>60||name.toLowerCase(Locale.ROOT).length()>60
             ||name.contains(",")||name.codePoints().anyMatch(Character::isISOControl))
             throw DeviceMessageStore.failure(HttpStatus.BAD_REQUEST,"用户名需要 1–60 个字符，不能包含逗号或控制字符");

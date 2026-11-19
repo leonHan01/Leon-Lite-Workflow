@@ -80,7 +80,7 @@ class AgentChatIntegrationTest {
                 rows.get(0).propertyNames());
         } finally {
             jdbc.update("DELETE FROM chat_user_model_usage");
-        jdbc.update("DELETE FROM automation_model_usage");
+            jdbc.update("DELETE FROM automation_model_usage");
             jdbc.update("DELETE FROM automation_model WHERE name='usage alias'");
         }
     }
