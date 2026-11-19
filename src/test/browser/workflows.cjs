@@ -989,7 +989,7 @@ const server = http.createServer(async (req, res) => {
         await page.locator('[data-inspector] [data-action="models"]').click();
         await page.getByRole('heading',{name:'模型配置',exact:true}).waitFor();
         const modelForm=page.locator('[data-model-form]');
-        await page.waitForFunction(()=>document.querySelector('[data-openai-executor]')?.textContent.includes('执行器在线'));
+        await page.waitForSelector('.model-row');
         await page.locator('.model-key-settings summary').click();
         const modelKeyForm=page.locator('[data-model-key-form]');
         await modelKeyForm.locator('[name="name"]').fill('OpenAI GPT');
@@ -1032,13 +1032,11 @@ const server = http.createServer(async (req, res) => {
         models[0].usage={inputTokens:12000,outputTokens:345,totalTokens:12345,reportedCalls:4,unreportedCalls:1,firstRecordedAt:'2026-11-18T01:00:00Z',lastRecordedAt:'2026-11-18T02:00:00Z'};
         await modelForm.locator('[name="name"]').fill('刷新时保留的编辑');
         await modelForm.locator('[name="model"]').selectOption('deepseek-v4-pro');
-        executorStatus.workers[0].online=false;
         await page.getByRole('button',{name:'刷新用量',exact:true}).click();
         await page.waitForFunction(()=>document.querySelector('.model-row [data-usage="total"]').textContent==='12,345');
         assert.equal(await page.locator('.model-row').first().locator('[data-usage="input"]').textContent(),'12,000');
         assert.equal(await page.locator('.model-row').first().locator('[data-usage="output"]').textContent(),'345');
         assert.ok((await page.locator('.model-row').first().textContent()).includes('1 次响应未返回完整用量'));
-        assert.ok((await page.locator('[data-openai-executor]').textContent()).includes('执行器离线'));
         assert.equal(await modelForm.locator('[name="name"]').inputValue(),'刷新时保留的编辑');
         assert.equal(await modelForm.locator('[name="model"]').inputValue(),'deepseek-v4-pro');
         await page.getByRole('button',{name:'添加新模型',exact:true}).click();

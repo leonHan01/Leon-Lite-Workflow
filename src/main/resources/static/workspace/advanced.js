@@ -29,14 +29,11 @@ export function mount(pane) {
 
 function mountModels(pane) {
     const $=selector=>pane.querySelector(selector), form=$('[data-model-form]'), keyForm=$('[data-model-key-form]'), status=$('[data-model-status]');
-    let models=[], credentials=[], editing=null, busy=false, executor=null;
+    let models=[], credentials=[], editing=null, busy=false;
     const escape=value=>String(value ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     async function api(path,body,method='GET') {
         const response=await fetch('/api/workflows'+path,{method,cache:'no-store',headers:{'Content-Type':'application/json','X-Requested-With':'XMLHttpRequest'},...(body?{body:JSON.stringify(body)}:{})});
         const value=await response.json(); if(!response.ok) throw new Error(value.message || '模型配置操作失败'); return value;
-    }
-    async function executorStatus() {
-        try { const response=await fetch('/api/ai-executor-admin',{cache:'no-store'}); return response.ok?await response.json():null; } catch { return null; }
     }
     const modelChoices={
         deepseek:[['deepseek-flash','DeepSeek V4.1 Flash'],['deepseek-v4-pro','DeepSeek V4 Pro']],
@@ -66,8 +63,6 @@ function mountModels(pane) {
             + `<small class="model-usage-note">${escape(since)}已统计 ${count(usage.reportedCalls)} 次${usage.unreportedCalls?` · ${count(usage.unreportedCalls)} 次响应未返回完整用量`:''}</small>`;
     }
     function render() {
-        const status=pane.querySelector('[data-openai-executor]');
-        status.textContent=!executor?'OpenAI 执行器状态暂不可用，请稍后刷新。':executor.mode==='mac'?`OpenAI 由 Mac 执行 · ${executor.workers.filter(w=>w.online).length?'执行器在线':'执行器离线，请在 Mac 启动执行器'}；DeepSeek 仍由服务器执行。`:'OpenAI 当前由服务器直连。安装 Mac 执行器后，可将 OpenAI 调用交给 Mac。';
         $('[data-model-list]').innerHTML=models.length?models.map(m=>`<div class="model-row"><div><strong>${escape(m.name)}</strong><small>${m.provider==='openai'?'OpenAI':'DeepSeek'} · ${escape(m.model)} · ${m.enabled?'已启用':'已停用'}</small>${usageMarkup(m.usage)}</div><button type="button" data-model-edit="${escape(m.id)}">编辑</button></div>`).join(''):'<p>尚未配置模型</p>';
         credentialOptions();
     }
@@ -82,7 +77,7 @@ function mountModels(pane) {
         modelOptions(); providerFields();
     });
     $('[data-model-reset]').addEventListener('click',reset);
-    $('[data-model-refresh]').addEventListener('click',()=>perform(async()=>{[models,executor]=await Promise.all([api('/models'),executorStatus()]);render();status.textContent='用量已刷新。';}));
+    $('[data-model-refresh]').addEventListener('click',()=>perform(async()=>{models=await api('/models');render();status.textContent='用量已刷新。';}));
     $('[data-model-list]').addEventListener('click',event=>{
         if(busy) return;
         const button=event.target.closest('[data-model-edit]'); if(!button) return;
@@ -108,5 +103,5 @@ function mountModels(pane) {
         });
     });
     modelOptions(); providerFields();
-    return {activate(){return perform(async()=>{[models,credentials,executor]=await Promise.all([api('/models'),api('/credentials'),executorStatus()]);render();status.textContent='';});},deactivate(){keyForm.elements.apiKey.value='';}};
+    return {activate(){return perform(async()=>{[models,credentials]=await Promise.all([api('/models'),api('/credentials')]);render();status.textContent='';});},deactivate(){keyForm.elements.apiKey.value='';}};
 }
