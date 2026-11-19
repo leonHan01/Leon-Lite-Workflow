@@ -11,6 +11,8 @@ class MessagingProxyTest(unittest.TestCase):
         self.assertIn(ROUTE,fixed)
         self.assertIn(ANCHOR,fixed)
         self.assertIn('client_max_body_size 6m;',fixed)
+        self.assertIn('location = /api/conversations/backups {',fixed)
+        self.assertIn('client_max_body_size 32m;',fixed)
         self.assertNotIn('location /api/',fixed)
         self.assertNotIn('auth_request',fixed)
         self.assertEqual(fixed,configured(fixed))

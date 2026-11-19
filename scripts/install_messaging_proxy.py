@@ -16,9 +16,26 @@ PROXY = pathlib.Path('/etc/leon-plugin-tls/nginx.conf')
 MARKER = '        # Leon authenticated messaging routes\n'
 ROUTE = 'location ~ ^/api/(device-messages|agents|conversations|agent-avatars|agent-admin)(/|$) {'
 ANCHOR = '        location / { return 403; }'
+BACKUP_ROUTE = '''        # Leon authenticated chat backup uploads
+        location = /api/conversations/backups {
+            client_max_body_size 32m;
+            proxy_pass http://127.0.0.1:80;
+            proxy_set_header Host $host;
+            proxy_set_header X-Forwarded-Proto https;
+        }
+'''
 
 
 def configured(content):
+    updated = messaging_routes(content)
+    if 'location = /api/conversations/backups {' not in updated:
+        if updated.count(ANCHOR) != 1:
+            raise RuntimeError('unexpected proxy layout; configuration preserved')
+        updated = updated.replace(ANCHOR, BACKUP_ROUTE + ANCHOR)
+    return updated
+
+
+def messaging_routes(content):
     if ROUTE in content:
         if MARKER not in content:
             return content

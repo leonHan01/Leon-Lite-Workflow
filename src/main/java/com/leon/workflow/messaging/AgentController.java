@@ -18,6 +18,8 @@ public class AgentController {
     public record Group(String name,List<String> agentIds) {}
     @PostMapping("/api/conversations/groups") public ResponseEntity<?> group(@RequestBody Group input) { return response(chat.group(input.name(),input.agentIds())); }
     @PostMapping("/api/conversations/direct/{agentId}") public ResponseEntity<?> direct(@PathVariable String agentId) { return response(chat.direct(agentId)); }
+    public record ThreadRequest(String requestId,String name) {}
+    @PostMapping("/api/conversations/direct/{agentId}/threads") public ResponseEntity<?> thread(@PathVariable String agentId,@RequestBody ThreadRequest input) { return response(chat.createDirect(agentId,input.requestId(),input.name())); }
     @GetMapping("/api/agent-admin") public ResponseEntity<?> admin(HttpServletRequest request) { adminOnly(request);return response(Map.of("agents",agents.list(),"keyStorageEnabled",agents.keyStorageEnabled(),"avatars",avatars.catalog(),"models",models.list())); }
     @PostMapping("/api/agent-admin") public ResponseEntity<?> create(@RequestBody AgentRegistry.Edit input,HttpServletRequest request) { adminOnly(request);return response(agents.save(null,input)); }
     @PutMapping("/api/agent-admin/{id}") public ResponseEntity<?> update(@PathVariable String id,@RequestBody AgentRegistry.Edit input,HttpServletRequest request) { adminOnly(request);return response(agents.save(id,input)); }

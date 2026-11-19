@@ -97,6 +97,19 @@ public class DeviceMessageStore {
         jdbc.update("INSERT INTO chat_conversation(id,name,kind,agent_id,agent_ids) SELECT ?,?,'direct',?,? WHERE NOT EXISTS(SELECT 1 FROM chat_conversation WHERE id=?)",id,agent.name(),agent.id(),agent.id(),id);
         return conversation(id);
     }
+    public synchronized Conversation createDirect(AgentRegistry.Agent agent,String requestId,String name) {
+        String id="thread:"+uuid(requestId);
+        name=name==null?"":name.strip();
+        if(name.isBlank()||name.length()>60||name.codePoints().anyMatch(Character::isISOControl))throw bad("对话名称应为 1–60 字");
+        var existing=jdbc.query("SELECT * FROM chat_conversation WHERE id=?",CONVERSATION,id);
+        if(!existing.isEmpty()) {
+            var room=existing.getFirst();
+            if(!agent.id().equals(room.agentId())||!name.equals(room.name()))throw failure(HttpStatus.CONFLICT,"相同请求标识不能创建不同对话");
+            return room;
+        }
+        jdbc.update("INSERT INTO chat_conversation(id,name,kind,agent_id,agent_ids) VALUES(?,?,'direct',?,?)",id,name,agent.id(),agent.id());
+        return conversation(id);
+    }
     static String conversationId(Send input) { return input.conversationId()==null||input.conversationId().isBlank()?"shared":input.conversationId(); }
     private static String mentions(Send input) {
         if(input.mentionAgentIds()==null) return "";

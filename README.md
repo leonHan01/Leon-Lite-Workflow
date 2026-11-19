@@ -381,7 +381,7 @@ Agent 工作台使用共享侧栏和独立机器人图标；页面按工作空�
 
 0.5.0 客户端在线时约每 10 秒通过 `POST /api/device-messages/presence` 上报设备标识、名称、平台。控制台通过 Cookie 保护的 `GET /api/agent-admin/devices` 每 5 秒刷新数量及列表；45 秒没有心跳视为离线，状态不持久化，服务器重启后由客户端再次上报。普通网页聊天不计入设备，旧客户端需更新才能参与统计。离线消息保存在原会话，下次打开 App 同步；尚未提供系统级离线推送。
 
-HTTPS 代理必须转发消息相关路径并保留应用鉴权。首次启用运行 `python3 scripts/install_messaging_proxy.py`：备份配置、校验后平滑重载，仅增加限定消息路由，保留默认拒绝与服务端 Bearer / Cookie 校验；Agent 管理仍要求管理会话。代理上传上限为 6 MB，允许 5 MB 图片和 multipart 开销。客户端分别提示认证失败（401）、服务器/代理拒绝（403）和服务不可用（502/503/504）。
+HTTPS 代理必须转发消息相关路径并保留应用鉴权。首次启用运行 `python3 scripts/install_messaging_proxy.py`：备份配置、校验后平滑重载，仅增加限定消息路由，保留默认拒绝与服务端 Bearer / Cookie 校验；Agent 管理仍要求管理会话。普通消息及图片路径上传上限为 6 MB；聊天备份的准确路径 `/api/conversations/backups` 单独允许 32 MB。客户端分别提示认证失败（401）、服务器/代理拒绝（403）和服务不可用（502/503/504）。
 
 验证：`mvn -Dtest=AgentWorkflowIntegrationTest,DevicePresenceTest,AgentChatIntegrationTest,AgentAvatarIntegrationTest,WorkflowIntegrationTest,WorkflowParallelExecutionTest test`；`python3 scripts/test_messaging_proxy.py`。
 
@@ -441,3 +441,15 @@ Mac 输入 `/clear` 后先读取会话状态，展示消息数量和永久删除
 `GET /api/conversations/context/clear-preview?conversationId=...` 返回 `messageCount/latestMessageId/historyRevision/hasActiveWork`。`POST /api/conversations/context/clear` 接收 `{conversationId,requestId,expectedLatestMessageId,expectedHistoryRevision,confirm:true}`，在事务内清空并增加历史修订号，同一 requestId 的重复请求不会再次删除新消息。消息分页返回 `historyRevision`，新版 Mac 和网页在修订变化时丢弃旧历史缓存；旧版客户端重新打开会话后刷新。沿用现有 Bearer / Cookie 认证和浏览器写入来源校验。
 
 客户端显示“服务端尚未支持 /clear”时，需要先部署本次服务端代码。服务端默认由用户自行部署，功能开发不会自动部署或重启线上服务。
+
+### Android 快捷命令、独立对话与聊天备份（0.10.0）
+
+聊天输入区「＋」提供相册、压缩上下文、查看上下文、对话列表、备份记录、加载备份及清理记录。压缩使用当前 Agent（群聊先选择），显示后台进度；上下文页可查看摘要和最近请求的估算用量，并修改保留轮数。清理前读取消息数量及历史修订并要求明确确认；有进行中的任务或确认后收到新消息时拒绝清理。
+
+点击 Agent 列表或聊天气泡中的头像可查看该 Agent 的独立私聊列表，切换已有对话或新建命名对话。原有固定私聊及 ID 保留。`POST /api/conversations/direct/{agentId}/threads` 接收 `{requestId,name}`，按请求 UUID 幂等创建 `thread:<UUID>`；每个对话独立保存消息、上下文和调度队列，不触发模型调用。
+
+`GET /api/conversations/backups?conversationId=...` 返回 ZIP，包含版本化 `manifest.json`、当前会话的全部原始消息与时间、回复关联、原始 JPEG 图片、当前话题边界、保留轮数和各 Agent 最新压缩摘要；不导出模型配置、凭据、任务或请求快照。最多 10,000 条消息、32 MB ZIP、16 MB manifest。超过限制明确报错，不静默省略历史或图片。Android 使用系统文件选择器保存和读取，备份文件包含聊天内容，需妥善保存。
+
+`POST /api/conversations/backups?requestId=<UUID>&agentId=<可选目标Agent>` 接收 `application/zip`。确认后事务性恢复为 `restore:<UUID>` 独立会话，保留原会话；为消息和图片生成新 ID，映射回复、图片与上下文边界，不重放模型任务。失败时不保留部分导入，相同请求及文件重试返回原导入结果，不重复插入。私聊可指定当前 Agent；群聊保留成员，需要对应 Agent 仍存在。格式版本、路径、重复条目、展开体积、图片尺寸及消息关联均校验，不解压到文件系统。
+
+接口沿用 Bearer / 管理 Cookie 及浏览器写入来源校验。上线需部署本次服务端代码，并使用更新后的 `scripts/install_messaging_proxy.py` 安装备份路径的 32 MB 限制；本次开发不自动部署或重启正式服务。Android 收到历史修订变化后丢弃旧缓存与待发记录，避免其他设备清理后重新显示旧消息。

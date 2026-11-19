@@ -13,7 +13,7 @@ public class AgentChatService {
     public AgentChatService(DeviceMessageStore store,AgentRegistry agents) { this.store=store; this.agents=agents; }
     public List<DeviceMessageStore.Conversation> conversations() {
         return store.conversations().stream().map(c -> {
-            if(c.kind().equals("direct")) {
+            if(c.kind().equals("direct")&&c.id().equals("direct:"+c.agentId())) {
                 var agent=agents.get(c.agentId()); return new DeviceMessageStore.Conversation(c.id(),agent.name(),c.kind(),c.agentId(),c.agentIds());
             }
             if(c.id().equals("shared")) return new DeviceMessageStore.Conversation(c.id(),c.name(),c.kind(),null,agents.summaries().stream().filter(AgentRegistry.Summary::enabled).map(AgentRegistry.Summary::id).toList());
@@ -25,6 +25,7 @@ public class AgentChatService {
         for(String id:members) active(id); return store.createGroup(name,members);
     }
     public DeviceMessageStore.Conversation direct(String id) { return store.direct(active(id)); }
+    public DeviceMessageStore.Conversation createDirect(String id,String requestId,String name) { return store.createDirect(active(id),requestId,name); }
     public DeviceMessageStore.Message send(DeviceMessageStore.Send input) {
         synchronized(store) {
             var retry=store.retry(input); if(retry!=null) return retry;
