@@ -52,6 +52,35 @@ class AgentChatIntegrationTest {
         assertFalse(publicResponse.contains(KEY));
         assertFalse(jdbc.queryForObject("SELECT encrypted_key FROM chat_agent",String.class).contains(KEY));
     }
+    @Test void clientUsageRequiresAuthAndIncludesUniqueHistoricalModelsWithoutCredentials() throws Exception {
+        var models=context.getBean(com.leon.workflow.automation.WorkflowModels.class);
+        jdbc.update("DELETE FROM automation_model_usage");
+        try {
+            mvc().perform(get("/api/agents/usage")).andExpect(status().isUnauthorized());
+            mvc().perform(get("/api/agents/usage").header("Authorization",AUTH))
+                .andExpect(status().isOk()).andExpect(content().json("[]"));
+            models.recordUsage("deepseek","deepseek-flash",Map.of("prompt_tokens",3_000_000_000L,"completion_tokens",20));
+            models.recordUsage("deepseek","deepseek-flash",null);
+            // Multiple profiles for the same model must not multiply usage.
+            models.save(null,Map.of("name","usage alias","provider","deepseek","model","deepseek-flash"));
+            models.recordUsage("openai","retired-model",Map.of("prompt_tokens",5,"completion_tokens",2));
+            String result=mvc().perform(get("/api/agents/usage").header("Authorization",AUTH))
+                .andExpect(status().isOk()).andExpect(header().string("Cache-Control","no-store"))
+                .andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[0].inputTokens").value(3_000_000_000L))
+                .andExpect(jsonPath("$[0].totalTokens").value(3_000_000_020L))
+                .andExpect(jsonPath("$[0].reportedCalls").value(1)).andExpect(jsonPath("$[0].unreportedCalls").value(1))
+                .andExpect(jsonPath("$[1].model").value("retired-model"))
+                .andExpect(jsonPath("$[1].totalTokens").value(7))
+                .andExpect(jsonPath("$[0].lastRecordedAt").isString()).andReturn().getResponse().getContentAsString();
+            var rows=json.readTree(result);
+            assertEquals(Set.of("provider","model","inputTokens","outputTokens","totalTokens","reportedCalls","unreportedCalls","firstRecordedAt","lastRecordedAt"),
+                rows.get(0).propertyNames());
+        } finally {
+            jdbc.update("DELETE FROM automation_model_usage");
+            jdbc.update("DELETE FROM automation_model WHERE name='usage alias'");
+        }
+    }
     @Test void directConversationRepliesAndIsolatesContext() throws Exception {
         var a=agent("writer");var b=agent("coder");var ca=chat.direct(a.id());var cb=chat.direct(b.id());
         when(model.complete(any(),anyString(),anyList())).thenReturn("只给 writer 的回复");

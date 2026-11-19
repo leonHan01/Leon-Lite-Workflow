@@ -13,6 +13,7 @@ public class AgentController {
     private final AgentRegistry agents; private final AgentChatService chat; private final ApiTokenInterceptor auth; private final AgentAvatarService avatars;
     public AgentController(AgentRegistry agents,AgentChatService chat,ApiTokenInterceptor auth,AgentAvatarService avatars,WorkflowModels models) { this.models=models;this.agents=agents;this.chat=chat;this.auth=auth;this.avatars=avatars; }
     @GetMapping("/api/agents") public ResponseEntity<?> agents() { return response(agents.summaries()); }
+    @GetMapping("/api/agents/usage") public ResponseEntity<?> usage() { return response(models.usageSummaries()); }
     @GetMapping("/api/conversations") public ResponseEntity<?> conversations() { return response(chat.conversations()); }
     public record Group(String name,List<String> agentIds) {}
     @PostMapping("/api/conversations/groups") public ResponseEntity<?> group(@RequestBody Group input) { return response(chat.group(input.name(),input.agentIds())); }

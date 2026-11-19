@@ -36,6 +36,19 @@ public class WorkflowModels {
             row.put("usage",usage); return row;
         });
     }
+    /** One row per provider/model, including legacy models no longer present in the catalog. No credentials. */
+    public List<Map<String,Object>> usageSummaries() {
+        return jdbc.query("SELECT * FROM automation_model_usage ORDER BY provider,model", (rs,i) -> {
+            var row=new LinkedHashMap<String,Object>();
+            row.put("provider",rs.getString("provider")); row.put("model",rs.getString("model"));
+            row.put("inputTokens",rs.getLong("input_tokens")); row.put("outputTokens",rs.getLong("output_tokens"));
+            row.put("totalTokens",rs.getLong("total_tokens")); row.put("reportedCalls",rs.getLong("reported_calls"));
+            row.put("unreportedCalls",rs.getLong("unreported_calls"));
+            row.put("firstRecordedAt",Instant.ofEpochMilli(rs.getLong("first_recorded_at")).toString());
+            row.put("lastRecordedAt",Instant.ofEpochMilli(rs.getLong("last_recorded_at")).toString());
+            return row;
+        });
+    }
     /** Account each HTTP response before content validation; cached/reasoning details are already in the totals. */
     public void recordUsage(String provider, String model, Object rawUsage) {
         if (!Set.of("deepseek","openai").contains(provider) || !model.matches("[A-Za-z0-9_.:-]{1,100}")) throw new IllegalArgumentException("模型用量标识无效");
