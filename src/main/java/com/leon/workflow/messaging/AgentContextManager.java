@@ -57,7 +57,7 @@ public class AgentContextManager {
                 // Content-free tombstones stop an old outbox/workflow retry from recreating deleted history.
                 jdbc.update("INSERT INTO chat_cleared_message(device_id,client_message_id) SELECT device_id,client_message_id FROM device_message WHERE conversation_id=?",room);
                 jdbc.update("INSERT INTO chat_cleared_image(id) SELECT id FROM chat_message_image WHERE conversation_id=?",room);
-                for(String table:List.of("chat_context_archive","chat_context_snapshot","chat_context_summary","chat_context_operation","chat_agent_job","device_message","chat_message_image"))
+                for(String table:List.of("chat_helper_memory","chat_context_archive","chat_context_snapshot","chat_context_summary","chat_context_operation","chat_agent_job","device_message","chat_message_image"))
                     jdbc.update("DELETE FROM "+table+" WHERE conversation_id=?",room);
                 jdbc.update("MERGE INTO chat_context_policy(conversation_id,recent_rounds,after_id,epoch) KEY(conversation_id) VALUES(?,?,0,?)",room,policy.recentRounds(),policy.epoch()+1);
                 jdbc.update("UPDATE chat_conversation SET history_revision=history_revision+1,last_clear_request_id=?,last_clear_count=? WHERE id=?",id,preview.messageCount(),room);

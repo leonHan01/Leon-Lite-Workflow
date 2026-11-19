@@ -88,6 +88,9 @@ public class DeviceMessageStore {
         jdbc.execute("CREATE INDEX IF NOT EXISTS idx_chat_context_operation_queue ON chat_context_operation(status,conversation_id)");
         jdbc.execute("ALTER TABLE chat_context_operation ADD COLUMN IF NOT EXISTS kind VARCHAR(16) DEFAULT 'COMPACT' NOT NULL");
         jdbc.execute("CREATE TABLE IF NOT EXISTS chat_context_archive (id VARCHAR(36) PRIMARY KEY,conversation_id VARCHAR(80) NOT NULL,agent_id VARCHAR(36) NOT NULL,epoch BIGINT NOT NULL,after_id BIGINT NOT NULL,through_id BIGINT NOT NULL,title VARCHAR(200) NOT NULL,summary VARCHAR(8000) NOT NULL DEFAULT '',messages_json CLOB NOT NULL,created_at BIGINT NOT NULL,finished_at BIGINT NOT NULL DEFAULT 0)");
+        jdbc.execute("CREATE TABLE IF NOT EXISTS chat_helper_memory (conversation_id VARCHAR(80) PRIMARY KEY,history_revision BIGINT NOT NULL,epoch BIGINT NOT NULL,after_id BIGINT NOT NULL,through_id BIGINT NOT NULL,summary VARCHAR(1200) NOT NULL)");
+        jdbc.execute("CREATE TABLE IF NOT EXISTS chat_helper_outreach (user_id VARCHAR(36) NOT NULL,local_date VARCHAR(10) NOT NULL,slot INT NOT NULL,agent_id VARCHAR(36) NOT NULL,due_at BIGINT NOT NULL,message_id VARCHAR(36) NOT NULL,status VARCHAR(16) NOT NULL,PRIMARY KEY(user_id,local_date,slot))");
+        jdbc.execute("CREATE INDEX IF NOT EXISTS idx_chat_helper_outreach_due ON chat_helper_outreach(status,due_at)");
     }
     public synchronized List<Conversation> conversations() { return jdbc.query("SELECT * FROM chat_conversation ORDER BY CASE WHEN id='shared' THEN 0 ELSE 1 END,name,id",CONVERSATION); }
     public synchronized Conversation conversation(String id) {
