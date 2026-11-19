@@ -29,12 +29,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class AgentChatIntegrationTest {
     @Autowired WebApplicationContext context; @Autowired AgentRegistry agents; @Autowired AgentChatService chat;
     @Autowired DeviceMessageStore store; @Autowired AgentReplyEngine engine; @Autowired JdbcTemplate jdbc;
-    @Autowired AgentContextManager contexts;
+    @Autowired AgentContextManager contexts; @Autowired ChatImageService images;
     @Autowired BrowserSessionService sessions; @Autowired ApiTokenInterceptor auth; @Autowired ObjectMapper json;
     @MockitoBean AgentModelClient model;
     private static final String AUTH="Bearer integration-test-token", KEY="test-only-model-key-never-real";
     private MockMvc mvc(){return MockMvcBuilders.webAppContextSetup(context).build();}
-    @BeforeEach void clean(){jdbc.update("DELETE FROM chat_context_archive");jdbc.update("DELETE FROM chat_context_operation");jdbc.update("DELETE FROM chat_context_snapshot");jdbc.update("DELETE FROM chat_context_summary");jdbc.update("DELETE FROM chat_context_policy");jdbc.update("DELETE FROM chat_agent_job");jdbc.update("DELETE FROM device_message");jdbc.update("DELETE FROM chat_conversation WHERE id<>'shared'");jdbc.update("DELETE FROM chat_agent");}
+    @BeforeEach void clean(){jdbc.update("DELETE FROM chat_cleared_message");jdbc.update("DELETE FROM chat_cleared_image");jdbc.update("DELETE FROM chat_context_archive");jdbc.update("DELETE FROM chat_context_operation");jdbc.update("DELETE FROM chat_context_snapshot");jdbc.update("DELETE FROM chat_context_summary");jdbc.update("DELETE FROM chat_context_policy");jdbc.update("DELETE FROM chat_agent_job");jdbc.update("DELETE FROM device_message");jdbc.update("DELETE FROM chat_conversation WHERE id<>'shared'");jdbc.update("DELETE FROM chat_agent");}
     private AgentRegistry.Agent agent(String handle){return agents.save(null,new AgentRegistry.Edit(handle,handle,"openai","test-model","角色 "+handle,true,KEY,null));}
     private DeviceMessageStore.Send send(String room,String text,List<String> ids){return new DeviceMessageStore.Send(UUID.randomUUID().toString(),UUID.randomUUID().toString(),"Mac","macos",text,room,ids);}
 
@@ -342,5 +342,55 @@ class AgentChatIntegrationTest {
         var a=agent("writer");var room=chat.direct(a.id());
         assertThrows(Exception.class,()->contexts.enqueueArchive(room.id(),a.id(),UUID.randomUUID().toString()));
         assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM chat_context_operation",Integer.class));verifyNoInteractions(model);
+    }
+
+    @Test void clearDeletesOnlyTargetHistoryAndContextAndBlocksOldRetries() throws Exception {
+        var a=agent("writer");var room=chat.group("clear test",List.of(a.id()));var other=chat.group("other",List.of(a.id()));
+        var photo=new java.awt.image.BufferedImage(2,2,java.awt.image.BufferedImage.TYPE_INT_RGB);var bytes=new java.io.ByteArrayOutputStream();javax.imageio.ImageIO.write(photo,"png",bytes);
+        String imageId=UUID.randomUUID().toString();images.upload(imageId,room.id(),bytes.toByteArray());
+        var input=new DeviceMessageStore.Send(UUID.randomUUID().toString(),UUID.randomUUID().toString(),"Mac","macos","with image",room.id(),List.of(),List.of(imageId));
+        var first=chat.send(input);var kept=chat.send(send(other.id(),"keep this",List.of()));
+        String proactive=UUID.randomUUID().toString();chat.publishAgentMessage(a.id(),room.id(),"proactive",proactive);
+        when(model.complete(any(),anyString(),anyList())).thenReturn("summary");
+        chat.send(send(room.id(),"question",List.of(a.id())));engine.runNext();
+        contexts.enqueueCompression(room.id(),a.id(),UUID.randomUUID().toString());engine.runNext();
+        String archive=UUID.randomUUID().toString();contexts.enqueueArchive(room.id(),a.id(),archive);engine.runNext();
+        var preview=contexts.clearPreview(room.id());assertTrue(preview.messageCount()>0);assertFalse(preview.hasActiveWork());
+        String clearId=UUID.randomUUID().toString();var result=contexts.clear(room.id(),clearId,preview.latestMessageId(),preview.historyRevision(),true);
+        assertEquals(preview.messageCount(),result.clearedMessages());assertEquals(1,result.historyRevision());
+        var page=store.page(room.id(),null,null,100);assertTrue(page.messages().isEmpty()&&page.jobs().isEmpty()&&page.contextOperations().isEmpty());assertEquals(1,page.historyRevision());
+        for(String table:List.of("chat_context_archive","chat_context_summary","chat_context_snapshot","chat_context_operation","chat_agent_job","chat_message_image"))
+            assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM "+table+" WHERE conversation_id=?",Integer.class,room.id()));
+        assertTrue(contexts.info(room.id()).agents().getFirst().summary().isEmpty());assertNotNull(agents.get(a.id()));
+        assertEquals(kept,store.page(other.id(),null,null,100).messages().getFirst());assertEquals(0,store.page(other.id(),null,null,100).historyRevision());
+        assertThrows(Exception.class,()->chat.send(input));assertThrows(Exception.class,()->chat.publishAgentMessage(a.id(),room.id(),"proactive",proactive));
+        assertThrows(Exception.class,()->images.upload(imageId,room.id(),bytes.toByteArray()));assertThrows(Exception.class,()->contexts.archive(archive));
+        var fresh=chat.send(send(room.id(),"fresh message",List.of()));assertTrue(fresh.id()>preview.latestMessageId());
+        assertEquals(result,contexts.clear(room.id(),clearId,preview.latestMessageId(),preview.historyRevision(),true));
+        assertEquals(List.of(fresh),store.page(room.id(),null,null,100).messages());assertTrue(first.id()<fresh.id());
+    }
+    @Test void clearRequiresFreshConfirmationAndRejectsRunningWork() throws Exception {
+        var a=agent("writer");var room=chat.group("clear test",List.of(a.id()));
+        chat.send(send(room.id(),"first",List.of()));var preview=contexts.clearPreview(room.id());
+        assertThrows(Exception.class,()->contexts.clear(room.id(),UUID.randomUUID().toString(),preview.latestMessageId(),preview.historyRevision(),false));
+        chat.send(send(room.id(),"arrived after confirmation",List.of()));
+        assertThrows(Exception.class,()->contexts.clear(room.id(),UUID.randomUUID().toString(),preview.latestMessageId(),preview.historyRevision(),true));
+        var current=contexts.clearPreview(room.id());
+        contexts.enqueueCompression(room.id(),a.id(),UUID.randomUUID().toString());
+        assertTrue(contexts.clearPreview(room.id()).hasActiveWork());
+        assertThrows(Exception.class,()->contexts.clear(room.id(),UUID.randomUUID().toString(),current.latestMessageId(),current.historyRevision(),true));
+        assertEquals(2,store.page(room.id(),null,null,100).messages().size());assertEquals(0,store.page(room.id(),null,null,100).historyRevision());
+    }
+    @Test void clearApiRequiresAuthenticationOriginAndExplicitConfirmation() throws Exception {
+        var a=agent("writer");var room=chat.group("clear api",List.of(a.id()));chat.send(send(room.id(),"original",List.of()));
+        mvc().perform(get("/api/conversations/context/clear-preview").param("conversationId",room.id())).andExpect(status().isUnauthorized());
+        mvc().perform(get("/api/conversations/context/clear-preview").header("Authorization",AUTH).param("conversationId",room.id())).andExpect(status().isOk()).andExpect(jsonPath("$.messageCount").value(1));
+        var preview=contexts.clearPreview(room.id());String id=UUID.randomUUID().toString();
+        var body=new LinkedHashMap<String,Object>(Map.of("conversationId",room.id(),"requestId",id,"expectedLatestMessageId",preview.latestMessageId(),"expectedHistoryRevision",preview.historyRevision()));
+        mvc().perform(post("/api/conversations/context/clear").header("Authorization",AUTH).contentType("application/json").content(json.writeValueAsString(body))).andExpect(status().isBadRequest());
+        body.put("confirm",true);Cookie cookie=new Cookie(BrowserSessionService.COOKIE_NAME,sessions.create(false,auth.fingerprint()));
+        mvc().perform(post("/api/conversations/context/clear").cookie(cookie).contentType("application/json").content(json.writeValueAsString(body))).andExpect(status().isForbidden());
+        mvc().perform(post("/api/conversations/context/clear").cookie(cookie).header("Origin","https://example.test").header("X-Requested-With","XMLHttpRequest").contentType("application/json").content(json.writeValueAsString(body)))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.clearedMessages").value(1)).andExpect(jsonPath("$.historyRevision").value(1));
     }
 }

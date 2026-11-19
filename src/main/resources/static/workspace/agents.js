@@ -4,7 +4,7 @@ export function mount(pane) {
     if (!document.getElementById('agents-css')) { const css = document.createElement('link'); css.id = 'agents-css'; css.rel = 'stylesheet'; css.href = '/workspace/agents.css'; document.head.append(css); }
     let viewActive = false, presenceTimer = null, presenceEpoch = 0;
 const $ = id => pane.querySelector('#' + CSS.escape(id));
-let agents = [], conversations = [], editing = null, current = 'shared', rows = [], more = false, generation = 0, timer, loading = false, activeTab = 'config';
+let agents = [], conversations = [], editing = null, current = 'shared', rows = [], more = false, generation = 0, timer, loading = false, activeTab = 'config', historyRevision = null;
 let avatarCatalog = [], selectedAvatarId = 'alfred', uploadingAvatar = false, models = [];
 const deviceId = (() => { let value = localStorage.getItem('leon-agent-web-device'); if (!value) { value = crypto.randomUUID(); localStorage.setItem('leon-agent-web-device', value); } return value; })();
 function node(tag, text, className) { const element = document.createElement(tag); if (text != null) element.textContent = text; if (className) element.className = className; return element; }
@@ -210,7 +210,7 @@ function renderMentions() {
 }
 function selectConversation(id) {
     hideMentionCandidates(); dismissedMentionKey = ''; mentionKey = '';
-    current = id; generation++; loading = false; rows = []; more = false; $('composer').value = ''; clearTimeout(timer);
+    current = id; generation++; loading = false; rows = []; more = false; historyRevision = null; $('composer').value = ''; clearTimeout(timer);
     const c = conversations.find(c => c.id === id); $('chatTitle').textContent = c?.name || '会话';
     $('chatHint').textContent = c?.kind === 'direct' ? '直接发送消息，Agent 将使用此私聊的上下文回复。' : '只有被 @ 的 Agent 会回复；普通消息只在设备间同步。';
     renderConversations(); renderMentions(); renderMessages(); poll(true);
@@ -223,12 +223,21 @@ async function poll(initial = false) {
         if (!initial) query.set('after', String(rows.at(-1)?.id || 0));
         const page = await api('/api/device-messages?' + query);
         if (epoch !== generation) return;
+        const cleared = acceptHistoryRevision(page.historyRevision);
         if (initial) more = page.hasMore;
+        if (cleared && !page.messages.length) renderMessages();
         if (page.messages.length) { merge(page.messages); renderMessages(); }
         renderJobs(page.jobs || []); $('olderMessages').hidden = !more; $('chatStatus').textContent = '已连接 · 自动同步';
         timer = setTimeout(() => poll(false), !initial && page.hasMore ? 0 : 2000);
     } catch (e) { if (epoch === generation) { $('chatStatus').textContent = e.message; timer = setTimeout(() => poll(initial), 5000); } }
     finally { if (epoch === generation) loading = false; }
+}
+function acceptHistoryRevision(revision) {
+    if (revision == null) return false;
+    const cleared = historyRevision !== revision && (historyRevision !== null || revision > 0);
+    if (cleared) { rows = []; more = false; }
+    historyRevision = revision;
+    return cleared;
 }
 function merge(incoming) { const map = new Map(rows.map(m => [m.id, m])); incoming.forEach(m => map.set(m.id, m)); rows = [...map.values()].sort((a,b) => a.id-b.id); }
 function renderMessages() {
@@ -263,7 +272,7 @@ $('sendForm').onsubmit = async event => {
 };
 $('olderMessages').onclick = async () => {
     if (!rows.length) return; const epoch = generation; $('olderMessages').disabled = true;
-    try { const page = await api('/api/device-messages?' + new URLSearchParams({ conversationId: current, before: String(rows[0].id), limit: '100' })); if (epoch !== generation) return; const height = $('messages').scrollHeight, top = $('messages').scrollTop; merge(page.messages); more = page.hasMore; renderMessages(); $('messages').scrollTop = top + $('messages').scrollHeight - height; $('olderMessages').hidden = !more; }
+    try { const page = await api('/api/device-messages?' + new URLSearchParams({ conversationId: current, before: String(rows[0].id), limit: '100' })); if (epoch !== generation) return; if (acceptHistoryRevision(page.historyRevision)) { renderMessages(); poll(true); return; } const height = $('messages').scrollHeight, top = $('messages').scrollTop; merge(page.messages); more = page.hasMore; renderMessages(); $('messages').scrollTop = top + $('messages').scrollHeight - height; $('olderMessages').hidden = !more; }
     catch (e) { notice(e.message, true); } finally { $('olderMessages').disabled = false; }
 };
 $('refreshChat').onclick = () => poll();

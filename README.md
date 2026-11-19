@@ -433,3 +433,11 @@ python3 scripts/mac_ai_executor.py install --server https://121.40.254.112
 ```bash
 python3 scripts/mac_ai_executor.py stop
 ```
+
+### 清空当前会话（/clear）
+
+Mac 输入 `/clear` 后先读取会话状态，展示消息数量和永久删除确认。确认后删除当前会话全部已保存消息、图片、摘要、上下文快照、服务端归档缓存与任务记录，并清理当前设备该会话的草稿、未发送内容和缓存；保留会话、Agent 配置、模型用量、其他会话及已导出的 LeonBook 文章。运行中的回复、压缩或总结会阻止清空；确认期间收到新消息或发生其他清空时要求重新确认。旧消息和图片标识仅保留无正文的去重标记，防止离线重试重新生成被删记录。此为逻辑删除，不清除既有运维备份。
+
+`GET /api/conversations/context/clear-preview?conversationId=...` 返回 `messageCount/latestMessageId/historyRevision/hasActiveWork`。`POST /api/conversations/context/clear` 接收 `{conversationId,requestId,expectedLatestMessageId,expectedHistoryRevision,confirm:true}`，在事务内清空并增加历史修订号，同一 requestId 的重复请求不会再次删除新消息。消息分页返回 `historyRevision`，新版 Mac 和网页在修订变化时丢弃旧历史缓存；旧版客户端重新打开会话后刷新。沿用现有 Bearer / Cookie 认证和浏览器写入来源校验。
+
+客户端显示“服务端尚未支持 /clear”时，需要先部署本次服务端代码。服务端默认由用户自行部署，功能开发不会自动部署或重启线上服务。

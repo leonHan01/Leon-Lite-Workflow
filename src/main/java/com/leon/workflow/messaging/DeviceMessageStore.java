@@ -28,7 +28,7 @@ public class DeviceMessageStore {
     }
     public record Job(long messageId,String agentId,String agentName,String status,String error,String phase) {}
     public record ContextOperation(String id,String agentId,String agentName,String status,String error,String result,long createdAt,String kind) {}
-    public record Page(List<Message> messages,boolean hasMore,List<Job> jobs,List<ContextOperation> contextOperations) {}
+    public record Page(List<Message> messages,boolean hasMore,List<Job> jobs,List<ContextOperation> contextOperations,long historyRevision) {}
     public record Conversation(String id,String name,String kind,String agentId,List<String> agentIds) {}
     public record Work(long messageId,String agentId,String conversationId) {}
     private final RowMapper<Message> ROW=(rs,n)->new Message(rs.getLong("id"),rs.getString("client_message_id"),rs.getString("device_id"),rs.getString("sender"),rs.getString("platform"),rs.getString("body"),rs.getLong("created_at"),rs.getString("conversation_id"),rs.getString("message_role"),rs.getString("agent_id"),rs.getObject("reply_to",Long.class),images(rs.getString("image_ids")));
@@ -62,6 +62,11 @@ public class DeviceMessageStore {
         jdbc.execute("ALTER TABLE device_message ADD COLUMN IF NOT EXISTS mention_ids VARCHAR(1500) DEFAULT '' NOT NULL");
         jdbc.execute("CREATE INDEX IF NOT EXISTS idx_device_message_conversation ON device_message(conversation_id,id)");
         jdbc.execute("CREATE TABLE IF NOT EXISTS chat_conversation (id VARCHAR(80) PRIMARY KEY,name VARCHAR(60) NOT NULL,kind VARCHAR(16) NOT NULL,agent_id VARCHAR(36),agent_ids VARCHAR(1500) NOT NULL)");
+        jdbc.execute("ALTER TABLE chat_conversation ADD COLUMN IF NOT EXISTS history_revision BIGINT DEFAULT 0 NOT NULL");
+        jdbc.execute("ALTER TABLE chat_conversation ADD COLUMN IF NOT EXISTS last_clear_request_id VARCHAR(36) DEFAULT '' NOT NULL");
+        jdbc.execute("ALTER TABLE chat_conversation ADD COLUMN IF NOT EXISTS last_clear_count BIGINT DEFAULT 0 NOT NULL");
+        jdbc.execute("CREATE TABLE IF NOT EXISTS chat_cleared_message (device_id VARCHAR(36) NOT NULL,client_message_id VARCHAR(36) NOT NULL,PRIMARY KEY(device_id,client_message_id))");
+        jdbc.execute("CREATE TABLE IF NOT EXISTS chat_cleared_image (id VARCHAR(36) PRIMARY KEY)");
         jdbc.update("INSERT INTO chat_conversation(id,name,kind,agent_ids) SELECT 'shared','设备群聊','group','' WHERE NOT EXISTS(SELECT 1 FROM chat_conversation WHERE id='shared')");
         jdbc.execute("CREATE TABLE IF NOT EXISTS chat_agent_job (message_id BIGINT NOT NULL,agent_id VARCHAR(36) NOT NULL,conversation_id VARCHAR(80) NOT NULL,agent_name VARCHAR(60) NOT NULL,status VARCHAR(16) NOT NULL,error VARCHAR(300) NOT NULL DEFAULT '',PRIMARY KEY(message_id,agent_id))");
         jdbc.execute("CREATE INDEX IF NOT EXISTS idx_chat_agent_job_queue ON chat_agent_job(status,message_id)");
@@ -107,6 +112,7 @@ public class DeviceMessageStore {
     }
     public synchronized Message retry(Send input) {
         validate(input);
+        checkNotCleared(uuid(input.deviceId()),uuid(input.clientMessageId()));
         var rows=jdbc.query("SELECT * FROM device_message WHERE device_id=? AND client_message_id=?",ROW,uuid(input.deviceId()),uuid(input.clientMessageId()));
         if(rows.isEmpty()) return null;
         Message saved=rows.getFirst();
@@ -132,6 +138,7 @@ public class DeviceMessageStore {
     }
     synchronized Message publishAgent(AgentRegistry.Agent agent,String room,String text,String messageId) {
         uuid(messageId); conversation(room);
+        checkNotCleared(agent.id(),messageId);
         if(text==null||text.isBlank()||text.length()>8000||text.indexOf('\0')>=0) throw bad("消息应为 1–8000 字符");
         var existing=jdbc.query("SELECT * FROM device_message WHERE device_id=? AND client_message_id=?",ROW,agent.id(),messageId);
         if(!existing.isEmpty()) {
@@ -156,7 +163,12 @@ public class DeviceMessageStore {
         boolean more=rows.size()>limit; var result=new ArrayList<>(rows.subList(0,Math.min(limit,rows.size())));
         if(after==null) Collections.reverse(result);
         var jobs=jdbc.query("SELECT * FROM chat_agent_job WHERE conversation_id=? AND status<>'SUCCEEDED' ORDER BY CASE WHEN status='FAILED' THEN 1 ELSE 0 END,message_id DESC LIMIT 100",(rs,n)->new Job(rs.getLong("message_id"),rs.getString("agent_id"),rs.getString("agent_name"),rs.getString("status"),rs.getString("error"),rs.getString("phase")),conversation);
-        return new Page(List.copyOf(result),more,jobs,contextOperations(conversation));
+        return new Page(List.copyOf(result),more,jobs,contextOperations(conversation),historyRevision(conversation));
+    }
+    synchronized long historyRevision(String room) { return jdbc.queryForObject("SELECT history_revision FROM chat_conversation WHERE id=?",Long.class,room); }
+    private void checkNotCleared(String device,String message) {
+        if(jdbc.queryForObject("SELECT COUNT(*) FROM chat_cleared_message WHERE device_id=? AND client_message_id=?",Integer.class,device,message)>0)
+            throw failure(HttpStatus.CONFLICT,"此消息已随会话清空，不能重试旧消息；请重新发送");
     }
     synchronized List<ContextOperation> contextOperations(String room) {
         return jdbc.query("SELECT o.* FROM chat_context_operation o WHERE o.conversation_id=? AND NOT EXISTS (SELECT 1 FROM chat_context_operation newer WHERE newer.conversation_id=o.conversation_id AND newer.agent_id=o.agent_id AND (newer.created_at>o.created_at OR (newer.created_at=o.created_at AND newer.id>o.id))) ORDER BY o.created_at DESC,o.id DESC LIMIT 32",DeviceMessageStore::contextOperation,room);

@@ -10,6 +10,11 @@ public class AgentContextController {
     public AgentContextController(AgentContextManager contexts) { this.contexts=contexts; }
     public record Settings(String conversationId,int recentRounds) {}
     public record Compact(String conversationId,String agentId,String requestId) {}
+    public record Clear(String conversationId,String requestId,long expectedLatestMessageId,long expectedHistoryRevision,boolean confirm) {}
+    @GetMapping("/api/conversations/context/clear-preview")
+    public ResponseEntity<?> clearPreview(@RequestParam String conversationId) { return response(contexts.clearPreview(conversationId)); }
+    @PostMapping("/api/conversations/context/clear")
+    public ResponseEntity<?> clear(@RequestBody Clear input) { return response(contexts.clear(input.conversationId(),input.requestId(),input.expectedLatestMessageId(),input.expectedHistoryRevision(),input.confirm())); }
     @PostMapping("/api/conversations/context/archive")
     public ResponseEntity<?> archive(@RequestBody Compact input) {
         return ResponseEntity.accepted().cacheControl(CacheControl.noStore()).body(contexts.enqueueArchive(input.conversationId(),input.agentId(),input.requestId()));

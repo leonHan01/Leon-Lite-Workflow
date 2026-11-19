@@ -25,6 +25,8 @@ public class ChatImageService {
 
     public synchronized DeviceMessageStore.Image upload(String id,String room,byte[] input) {
         id=DeviceMessageStore.uuid(id);store.conversation(room);
+        long revision=store.historyRevision(room);
+        checkNotCleared(id);
         if(input.length==0||input.length>MAX_UPLOAD)throw bad("图片不能为空且不能超过 5 MB");
         try {
             String hash=HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(input));
@@ -58,10 +60,17 @@ public class ChatImageService {
                 bytes=output.toByteArray();max=max*3/4;
             }while(bytes.length>MAX_STORED&&max>=256);
             if(bytes.length>MAX_STORED)throw bad("图片压缩后仍过大，请缩小后发送");
-            jdbc.update("INSERT INTO chat_message_image(id,conversation_id,source_hash,mime_type,width,height,byte_count,image_data,created_at) VALUES(?,?,?,'image/jpeg',?,?,?,?,?)",id,room,hash,normalized.getWidth(),normalized.getHeight(),bytes.length,bytes,System.currentTimeMillis());
-            return metadata(id);
+            synchronized(store) {
+                checkNotCleared(id);
+                if(store.historyRevision(room)!=revision)throw DeviceMessageStore.failure(HttpStatus.CONFLICT,"会话已清空，请重新添加图片");
+                jdbc.update("INSERT INTO chat_message_image(id,conversation_id,source_hash,mime_type,width,height,byte_count,image_data,created_at) VALUES(?,?,?,'image/jpeg',?,?,?,?,?)",id,room,hash,normalized.getWidth(),normalized.getHeight(),bytes.length,bytes,System.currentTimeMillis());
+                return metadata(id);
+            }
         }catch(org.springframework.web.server.ResponseStatusException known){throw known;}
         catch(Exception invalid){throw bad("图片损坏或格式不受支持，请重新选择图片");}
+    }
+    private void checkNotCleared(String id) {
+        if(jdbc.queryForObject("SELECT COUNT(*) FROM chat_cleared_image WHERE id=?",Integer.class,id)>0)throw DeviceMessageStore.failure(HttpStatus.CONFLICT,"图片已随会话清空，请重新添加图片");
     }
     public DeviceMessageStore.Image metadata(String id){
         var rows=jdbc.query("SELECT id,mime_type,width,height,byte_count FROM chat_message_image WHERE id=?",(rs,n)->new DeviceMessageStore.Image(rs.getString(1),rs.getString(2),rs.getInt(3),rs.getInt(4),rs.getInt(5)),DeviceMessageStore.uuid(id));

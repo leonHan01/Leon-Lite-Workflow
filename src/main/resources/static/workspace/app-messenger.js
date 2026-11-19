@@ -1,4 +1,5 @@
 export function mountAppMessenger(pane, {api, avatarImage, loadDirectory}) {
+    let historyRevision = null;
     const $ = id => pane.querySelector('#' + id), dialog = $('appMessenger');
     let directory = {agents: [], conversations: []}, room = '', rows = [], cursor = 0, epoch = 0, timer = null, polling = false, sending = false, outgoing = null;
     function element(tag, text, className) { const value = document.createElement(tag); if (text != null) value.textContent = text; if (className) value.className = className; return value; }
@@ -38,6 +39,10 @@ export function mountAppMessenger(pane, {api, avatarImage, loadDirectory}) {
             const query = new URLSearchParams({conversationId: room, limit: '100'}); if (!initial) query.set('after', String(cursor));
             const page = await api('/api/device-messages?' + query);
             if (selectedEpoch !== epoch || !dialog.open) return;
+            if (page.historyRevision != null) {
+                if (historyRevision !== page.historyRevision && (historyRevision !== null || page.historyRevision > 0)) { rows = []; render(); }
+                historyRevision = page.historyRevision;
+            }
             if (page.messages.length) { cursor = page.messages.at(-1).id; merge(page.messages); }
             $('appMessageHistoryStatus').textContent = '与 App 同步 · 显示最近 100 条消息';
             timer = setTimeout(() => poll(), !initial && page.hasMore ? 0 : 2000);
@@ -46,7 +51,7 @@ export function mountAppMessenger(pane, {api, avatarImage, loadDirectory}) {
         } finally { if (selectedEpoch === epoch) polling = false; }
     }
     async function selectRoom() {
-        const selectedEpoch = ++epoch; clearTimeout(timer); polling = false; room = ''; rows = []; cursor = 0; render(); controls();
+        const selectedEpoch = ++epoch; clearTimeout(timer); polling = false; room = ''; rows = []; cursor = 0; historyRevision = null; render(); controls();
         const agentId = $('appMessageAgent').value; if (!agentId) return;
         $('appMessageHistoryStatus').textContent = '正在打开会话…';
         try {

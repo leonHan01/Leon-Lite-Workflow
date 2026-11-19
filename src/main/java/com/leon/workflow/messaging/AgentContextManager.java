@@ -31,6 +31,40 @@ public class AgentContextManager {
     record Turn(long anchor,List<Map<String,String>> messages) {}
     public record AgentInfo(String agentId,String agentName,String summary,long lastCompressedAt,int estimatedInputTokens,int retainedRounds,String phase) {}
     public record Info(String conversationId,int recentRounds,int inputTokenBudget,long topicStartedAfter,List<AgentInfo> agents) {}
+    public record ClearPreview(String conversationId,String conversationName,long messageCount,long latestMessageId,long historyRevision,boolean hasActiveWork) {}
+    public record ClearResult(long clearedMessages,long historyRevision) {}
+
+    public ClearPreview clearPreview(String room) {
+        synchronized(store) {
+            var conversation=store.conversation(room);
+            long count=jdbc.queryForObject("SELECT COUNT(*) FROM device_message WHERE conversation_id=?",Long.class,room);
+            long latest=jdbc.queryForObject("SELECT COALESCE(MAX(id),0) FROM device_message WHERE conversation_id=?",Long.class,room);
+            return new ClearPreview(room,conversation.name(),count,latest,store.historyRevision(room),busy(room));
+        }
+    }
+    public ClearResult clear(String room,String requestId,long expectedLatest,long expectedRevision,boolean confirm) {
+        requestId=DeviceMessageStore.uuid(requestId);
+        if(!confirm||expectedLatest<0||expectedRevision<0)throw DeviceMessageStore.failure(HttpStatus.BAD_REQUEST,"请先确认要永久清空当前会话");
+        synchronized(store) {
+            var preview=clearPreview(room);
+            var last=jdbc.queryForMap("SELECT last_clear_request_id,last_clear_count FROM chat_conversation WHERE id=?",room);
+            if(requestId.equals(last.get("last_clear_request_id"))) return new ClearResult(((Number)last.get("last_clear_count")).longValue(),preview.historyRevision());
+            if(preview.hasActiveWork())throw DeviceMessageStore.failure(HttpStatus.CONFLICT,"请等待当前回复、压缩或总结完成后再清空");
+            if(preview.latestMessageId()!=expectedLatest||preview.historyRevision()!=expectedRevision)
+                throw DeviceMessageStore.failure(HttpStatus.CONFLICT,"会话已有新消息或已在其他设备清空，请刷新后重新确认");
+            var policy=policy(room);final String id=requestId;
+            return store.atomic(()-> {
+                // Content-free tombstones stop an old outbox/workflow retry from recreating deleted history.
+                jdbc.update("INSERT INTO chat_cleared_message(device_id,client_message_id) SELECT device_id,client_message_id FROM device_message WHERE conversation_id=?",room);
+                jdbc.update("INSERT INTO chat_cleared_image(id) SELECT id FROM chat_message_image WHERE conversation_id=?",room);
+                for(String table:List.of("chat_context_archive","chat_context_snapshot","chat_context_summary","chat_context_operation","chat_agent_job","device_message","chat_message_image"))
+                    jdbc.update("DELETE FROM "+table+" WHERE conversation_id=?",room);
+                jdbc.update("MERGE INTO chat_context_policy(conversation_id,recent_rounds,after_id,epoch) KEY(conversation_id) VALUES(?,?,0,?)",room,policy.recentRounds(),policy.epoch()+1);
+                jdbc.update("UPDATE chat_conversation SET history_revision=history_revision+1,last_clear_request_id=?,last_clear_count=? WHERE id=?",id,preview.messageCount(),room);
+                return new ClearResult(preview.messageCount(),preview.historyRevision()+1);
+            });
+        }
+    }
 
     private Policy policy(String room) {
         var rows=jdbc.query("SELECT * FROM chat_context_policy WHERE conversation_id=?",(rs,n)->new Policy(rs.getInt("recent_rounds"),rs.getLong("after_id"),rs.getLong("epoch")),room);
