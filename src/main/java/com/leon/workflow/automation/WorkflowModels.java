@@ -5,6 +5,7 @@ import org.springframework.dao.DuplicateKeyException;
 import java.math.BigDecimal;
 import java.time.Instant;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 import java.util.*;
@@ -38,7 +39,13 @@ public class WorkflowModels {
     }
     /** One row per provider/model, including legacy models no longer present in the catalog. No credentials. */
     public List<Map<String,Object>> usageSummaries() {
-        return jdbc.query("SELECT * FROM automation_model_usage ORDER BY provider,model", (rs,i) -> {
+        return usageRows("SELECT * FROM automation_model_usage ORDER BY provider,model");
+    }
+    public List<Map<String,Object>> userUsageSummaries(String userId){
+        return usageRows("SELECT * FROM chat_user_model_usage WHERE user_id=? ORDER BY provider,model",userId);
+    }
+    private List<Map<String,Object>> usageRows(String sql,Object... args){
+        return jdbc.query(sql, (rs,i) -> {
             var row=new LinkedHashMap<String,Object>();
             row.put("provider",rs.getString("provider")); row.put("model",rs.getString("model"));
             row.put("inputTokens",rs.getLong("input_tokens")); row.put("outputTokens",rs.getLong("output_tokens"));
@@ -47,10 +54,14 @@ public class WorkflowModels {
             row.put("firstRecordedAt",Instant.ofEpochMilli(rs.getLong("first_recorded_at")).toString());
             row.put("lastRecordedAt",Instant.ofEpochMilli(rs.getLong("last_recorded_at")).toString());
             return row;
-        });
+        },args);
     }
     /** Account each HTTP response before content validation; cached/reasoning details are already in the totals. */
-    public void recordUsage(String provider, String model, Object rawUsage) {
+    public void recordUsage(String provider,String model,Object rawUsage){
+        recordUsage(provider,model,rawUsage,null);
+    }
+    @Transactional
+    public void recordUsage(String provider,String model,Object rawUsage,String userId){
         if (!Set.of("deepseek","openai").contains(provider) || !model.matches("[A-Za-z0-9_.:-]{1,100}")) throw new IllegalArgumentException("模型用量标识无效");
         var usage=rawUsage instanceof Map<?,?> map?map:Map.of();
         Long input=tokenCount(usage.get("prompt_tokens")), output=tokenCount(usage.get("completion_tokens"));
@@ -61,18 +72,29 @@ public class WorkflowModels {
             catch (ArithmeticException invalid) { reported=false; }
         }
         long in=reported?input:0, out=reported?output:0, all=reported?total:0, calls=reported?1:0, missing=reported?0:1, now=System.currentTimeMillis();
-        if (incrementUsage(provider,model,in,out,all,calls,missing,now)==0) {
-            try { jdbc.update("INSERT INTO automation_model_usage(provider,model,input_tokens,output_tokens,total_tokens,reported_calls,unreported_calls,first_recorded_at,last_recorded_at) VALUES(?,?,?,?,?,?,?,?,?)",
-                    provider,model,in,out,all,calls,missing,now,now); }
-            catch (DuplicateKeyException concurrentInsert) { incrementUsage(provider,model,in,out,all,calls,missing,now); }
-        }
+        addUsage(null,provider,model,in,out,all,calls,missing,now);
+        if(userId!=null)addUsage(userId,provider,model,in,out,all,calls,missing,now);
     }
-    private int incrementUsage(String provider,String model,long input,long output,long total,long calls,long missing,long now) {
-        return jdbc.update("""
-                UPDATE automation_model_usage SET input_tokens=input_tokens+?,output_tokens=output_tokens+?,total_tokens=total_tokens+?,
-                  reported_calls=reported_calls+?,unreported_calls=unreported_calls+?,
-                  first_recorded_at=LEAST(first_recorded_at,?),last_recorded_at=GREATEST(last_recorded_at,?) WHERE provider=? AND model=?
-                """,input,output,total,calls,missing,now,now,provider,model);
+    private void addUsage(String userId,String provider,String model,long input,long output,long total,long calls,long missing,long now){
+        String table=userId==null?"automation_model_usage":"chat_user_model_usage";
+        String scope=userId==null?"":" AND user_id=?";
+        var update=new ArrayList<Object>(List.of(input,output,total,calls,missing,now,now,provider,model));
+        if(userId!=null)update.add(userId);
+        String increment="""
+                UPDATE %s SET input_tokens=input_tokens+?,output_tokens=output_tokens+?,total_tokens=total_tokens+?,
+                    reported_calls=reported_calls+?,unreported_calls=unreported_calls+?,
+                    first_recorded_at=LEAST(first_recorded_at,?),last_recorded_at=GREATEST(last_recorded_at,?)
+                WHERE provider=? AND model=?%s
+                """.formatted(table,scope);
+        if(jdbc.update(increment,update.toArray())!=0)return;
+        var insert=new ArrayList<Object>(List.of(provider,model,input,output,total,calls,missing,now,now));
+        if(userId!=null)insert.add(userId);
+        try{
+            jdbc.update("INSERT INTO "+table+"(provider,model,input_tokens,output_tokens,total_tokens,reported_calls,unreported_calls,first_recorded_at,last_recorded_at"
+                +(userId==null?") VALUES(?,?,?,?,?,?,?,?,?)":",user_id) VALUES(?,?,?,?,?,?,?,?,?,?)"),insert.toArray());
+        }catch(DuplicateKeyException concurrent){
+            jdbc.update(increment,update.toArray());
+        }
     }
     private static Long tokenCount(Object value) {
         if (!(value instanceof Number number)) return null;

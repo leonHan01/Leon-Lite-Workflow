@@ -13,10 +13,10 @@ public class AgentChatService {
     public AgentChatService(DeviceMessageStore store,AgentRegistry agents) { this.store=store; this.agents=agents; }
     public List<DeviceMessageStore.Conversation> conversations() {
         return store.conversations().stream().map(c -> {
-            if(c.kind().equals("direct")&&c.id().equals("direct:"+c.agentId())) {
-                var agent=agents.get(c.agentId()); return new DeviceMessageStore.Conversation(c.id(),agent.name(),c.kind(),c.agentId(),c.agentIds());
+            if(c.kind().equals("direct")&&(c.id().equals("direct:"+c.agentId())||c.id().startsWith("dm:"))) {
+                var agent=agents.get(c.agentId()); return new DeviceMessageStore.Conversation(c.id(),agent.name(),c.kind(),c.agentId(),c.agentIds(),c.ownerId());
             }
-            if(c.id().equals("shared")) return new DeviceMessageStore.Conversation(c.id(),c.name(),c.kind(),null,agents.summaries().stream().filter(AgentRegistry.Summary::enabled).map(AgentRegistry.Summary::id).toList());
+            if(ChatAccess.personalRoom(c.id())) return new DeviceMessageStore.Conversation(c.id(),c.name(),c.kind(),null,agents.summaries().stream().filter(AgentRegistry.Summary::enabled).map(AgentRegistry.Summary::id).toList(),c.ownerId());
             return c;
         }).toList();
     }
@@ -26,9 +26,10 @@ public class AgentChatService {
     }
     public DeviceMessageStore.Conversation direct(String id) { return store.direct(active(id)); }
     public DeviceMessageStore.Conversation createDirect(String id,String requestId,String name) { return store.createDirect(active(id),requestId,name); }
-    public DeviceMessageStore.Message send(DeviceMessageStore.Send input) {
+    public DeviceMessageStore.Message send(DeviceMessageStore.Send input) { return send(input,null); }
+    DeviceMessageStore.Message send(DeviceMessageStore.Send input,String userId) {
         synchronized(store) {
-            var retry=store.retry(input); if(retry!=null) return retry;
+            var retry=store.retry(input,userId); if(retry!=null) return retry;
             var conversation=store.conversation(DeviceMessageStore.conversationId(input));
             var targetIds=new LinkedHashSet<String>();
             if(conversation.kind().equals("direct")) targetIds.add(conversation.agentId());
@@ -38,13 +39,13 @@ public class AgentChatService {
                 var byHandle=new HashMap<String,String>();
                 for(var agent:agents.summaries()) if(agent.enabled()) byHandle.put(agent.handle(),agent.id());
                 while(matcher.find()) { String id=byHandle.get(matcher.group(1).toLowerCase(Locale.ROOT)); if(id!=null) targetIds.add(id); }
-                if(!conversation.id().equals("shared")&&!conversation.agentIds().containsAll(targetIds)) throw DeviceMessageStore.failure(HttpStatus.BAD_REQUEST,"被 @ 的 Agent 不在此群聊中");
+                if(!ChatAccess.personalRoom(conversation.id())&&!conversation.agentIds().containsAll(targetIds)) throw DeviceMessageStore.failure(HttpStatus.BAD_REQUEST,"被 @ 的 Agent 不在此群聊中");
             }
             if(targetIds.size()>4) throw DeviceMessageStore.failure(HttpStatus.BAD_REQUEST,"每条消息最多 @4 个 Agent");
             var targets=targetIds.stream().map(this::active).toList();
             if(!DeviceMessageStore.imageIds(input).isEmpty()&&targets.stream().anyMatch(a->!a.provider().equals("openai")))
                 throw DeviceMessageStore.failure(HttpStatus.BAD_REQUEST,"当前 Agent 的模型不支持图片，请选择支持视觉输入的 OpenAI 模型");
-            return store.submit(input,targets);
+            return store.submit(input,targets,userId);
         }
     }
     /** Publish a management-page or workflow message as the Agent without starting a model reply. */
@@ -57,7 +58,7 @@ public class AgentChatService {
             return store.publishAgent(agent,room.id(),text,messageId);
         }
     }
-    private AgentRegistry.Agent active(String id) {
+    AgentRegistry.Agent active(String id) {
         var agent=agents.get(id);
         if(!agent.enabled()) throw DeviceMessageStore.failure(HttpStatus.BAD_REQUEST,"Agent 已停用，请选择其他 Agent"); return agent;
     }

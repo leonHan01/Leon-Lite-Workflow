@@ -30,7 +30,7 @@ public class ChatBackupService {
         Backup backup;var files=new LinkedHashMap<String,byte[]>();
         synchronized(store) {
             var conversation=store.conversation(room);
-            if(room.equals("shared"))conversation=new DeviceMessageStore.Conversation(room,conversation.name(),"group",null,agents.list().stream().map(AgentRegistry.Agent::id).toList());
+            if(ChatAccess.personalRoom(room))conversation=new DeviceMessageStore.Conversation(room,conversation.name(),"group",null,agents.list().stream().map(AgentRegistry.Agent::id).toList());
             long count=jdbc.queryForObject("SELECT COUNT(*) FROM device_message WHERE conversation_id=?",Long.class,room);
             if(count>MAX_MESSAGES)throw tooLarge();
             var messages=store.archiveMessages(room,0,Long.MAX_VALUE);
@@ -57,7 +57,12 @@ public class ChatBackupService {
     }
     private static void entry(ZipOutputStream zip,String name,byte[] data)throws IOException {zip.putNextEntry(new ZipEntry(name));zip.write(data);zip.closeEntry();}
     public DeviceMessageStore.Conversation restore(String requestId,String targetAgent,byte[] data) {
-        String request=DeviceMessageStore.uuid(requestId), target=targetAgent==null?"":DeviceMessageStore.uuid(targetAgent);
+        return restore(requestId,targetAgent,data,null,true);
+    }
+    DeviceMessageStore.Conversation restore(String requestId,String targetAgent,byte[] data,String owner,boolean legacy) {
+        String key=DeviceMessageStore.uuid(requestId);
+        String request=legacy?key:UUID.nameUUIDFromBytes((owner+":"+key).getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
+        String target=targetAgent==null?"":DeviceMessageStore.uuid(targetAgent);
         if(data.length==0||data.length>MAX_BYTES)throw tooLarge();
         String hash=hash(data);Backup backup;var files=new LinkedHashMap<String,byte[]>();
         try(var zip=new ZipInputStream(new ByteArrayInputStream(data))){
@@ -90,7 +95,7 @@ public class ChatBackupService {
                 String name=source.name();if(name.length()>53)name=name.substring(0,53);name+=" · 已加载";
                 String directAgent=source.kind().equals("direct")?(target.isEmpty()?source.agentId():target):null;
                 List<String> members=directAgent==null?source.agentIds():List.of(directAgent);
-                jdbc.update("INSERT INTO chat_conversation(id,name,kind,agent_id,agent_ids) VALUES(?,?,?,?,?)",room,name,source.kind(),directAgent,String.join(",",members));
+                jdbc.update("INSERT INTO chat_conversation(id,name,kind,agent_id,agent_ids,owner_id) VALUES(?,?,?,?,?,?)",room,name,source.kind(),directAgent,String.join(",",members),owner);
                 var imageMap=new HashMap<String,String>();
                 for(var file:files.entrySet()){
                     String id=UUID.randomUUID().toString();imageMap.put(file.getKey(),id);var metadata=imageMetadata(file.getValue());
@@ -128,7 +133,7 @@ public class ChatBackupService {
             if(m==null||m.id()<=previous||!Set.of("user","assistant").contains(m.role())||!Set.of("macos","android","agent").contains(m.platform())||!text(m.sender(),60)||m.text()==null||m.text().length()>8000||m.text().indexOf('\0')>=0||m.createdAt()<0||m.images()==null||m.images().size()>4)throw bad("备份消息无效");
             DeviceMessageStore.uuid(m.deviceId());
             if(!Objects.equals(m.conversationId(),room.id()))throw bad("备份消息会话不匹配");
-            if(m.role().equals("assistant")){DeviceMessageStore.uuid(m.agentId());if(!room.agentIds().contains(m.agentId())&&!room.id().equals("shared"))throw bad("备份回复 Agent 无效");}
+            if(m.role().equals("assistant")){DeviceMessageStore.uuid(m.agentId());if(!room.agentIds().contains(m.agentId())&&!ChatAccess.personalRoom(room.id()))throw bad("备份回复 Agent 无效");}
             if(m.replyTo()!=null&&(!ids.containsKey(m.replyTo())||!ids.get(m.replyTo()).role().equals("user")))throw bad("备份回复关联无效");
             var perMessage=new HashSet<String>();
             for(var image:m.images()){
@@ -142,7 +147,7 @@ public class ChatBackupService {
         if(backup.memories().size()>32)throw bad("备份上下文数量无效");
         for(var memory:backup.memories()){
             DeviceMessageStore.uuid(memory.agentId());
-            if(!memoryAgents.add(memory.agentId())||(!room.id().equals("shared")&&!room.agentIds().contains(memory.agentId()))||memory.throughId()<backup.topicStartedAfter()||memory.throughId()>previous||!text(memory.summary(),8000)||memory.createdAt()<0)throw bad("备份上下文无效");
+            if(!memoryAgents.add(memory.agentId())||(!ChatAccess.personalRoom(room.id())&&!room.agentIds().contains(memory.agentId()))||memory.throughId()<backup.topicStartedAfter()||memory.throughId()>previous||!text(memory.summary(),8000)||memory.createdAt()<0)throw bad("备份上下文无效");
         }
         if(backup.topicStartedAfter()>previous)throw bad("备份话题边界无效");
     }

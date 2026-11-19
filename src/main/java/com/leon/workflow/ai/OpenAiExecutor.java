@@ -49,6 +49,7 @@ public class OpenAiExecutor {
                   error_code VARCHAR(32) NOT NULL DEFAULT '',reported BOOLEAN NOT NULL DEFAULT FALSE,
                   created_at BIGINT NOT NULL,deadline_at BIGINT NOT NULL)
                 """);
+        jdbc.execute("ALTER TABLE ai_executor_job ADD COLUMN IF NOT EXISTS chat_user_id VARCHAR(36)");
         jdbc.execute("CREATE INDEX IF NOT EXISTS idx_ai_executor_queue ON ai_executor_job(state,created_at)");
         jdbc.update("UPDATE ai_executor_worker SET ready=FALSE,last_seen=0");
         jdbc.update("UPDATE ai_executor_job SET state='FAILED',error_code='RESTART',request_encrypted='',result_encrypted='' WHERE state IN ('QUEUED','LEASED','RUNNING')");
@@ -90,6 +91,9 @@ public class OpenAiExecutor {
     }
     private boolean online() { return jdbc.queryForObject("SELECT COUNT(*) FROM ai_executor_worker WHERE enabled=TRUE AND ready=TRUE AND last_seen>?",Integer.class,System.currentTimeMillis()-20000)>0; }
     public Map<String,Object> execute(Map<String,Object> body,String apiKey,int timeoutMs) throws InterruptedException {
+        return execute(body,apiKey,timeoutMs,null);
+    }
+    public Map<String,Object> execute(Map<String,Object> body,String apiKey,int timeoutMs,String userId) throws InterruptedException {
         requireKey();
         if(!enabled() || !online()) throw new IllegalArgumentException("Mac OpenAI 执行器离线，请先启动执行器后重试");
         String model=required(body.get("model"),"OpenAI 模型无效",100);
@@ -99,7 +103,7 @@ public class OpenAiExecutor {
         synchronized(this) {
             expire(now);
             if(jdbc.queryForObject("SELECT COUNT(*) FROM ai_executor_job WHERE state IN ('QUEUED','LEASED','RUNNING')",Integer.class)>=32) throw new IllegalArgumentException("Mac 执行器队列已满，请稍后重试");
-            jdbc.update("INSERT INTO ai_executor_job(id,model,state,request_encrypted,created_at,deadline_at) VALUES(?,?,'QUEUED',?,?,?)",id,model,encrypt(id+":request",write(Map.of("body",body,"apiKey",apiKey))),now,deadline);
+            jdbc.update("INSERT INTO ai_executor_job(id,model,state,request_encrypted,created_at,deadline_at,chat_user_id) VALUES(?,?,'QUEUED',?,?,?,?)",id,model,encrypt(id+":request",write(Map.of("body",body,"apiKey",apiKey))),now,deadline,userId);
         }
         try {
             while(System.currentTimeMillis()<deadline) {
@@ -147,7 +151,12 @@ public class OpenAiExecutor {
                 jdbc.update("UPDATE ai_executor_job SET reported=TRUE,state=?,error_code=?,request_encrypted='',result_encrypted='' WHERE id=?",active?"FAILED":row.get("state"),code,id); return;
             }
             int httpStatus=integer(result.get("status"),200,100,599); var body=object(result.get("body"));
-            if(httpStatus>=200 && httpStatus<300) models.recordUsage("openai",text(row.get("model")),body.get("usage"));
+            if(httpStatus>=200 && httpStatus<300){
+                String model=text(row.get("model"));
+                String user=(String)row.get("chat_user_id");
+                if(user==null)models.recordUsage("openai",model,body.get("usage"));
+                else models.recordUsage("openai",model,body.get("usage"),user);
+            }
             // Never retain raw provider error bodies, which may echo credentials.
             if(httpStatus<200 || httpStatus>=300) body=Map.of();
             if(active) {

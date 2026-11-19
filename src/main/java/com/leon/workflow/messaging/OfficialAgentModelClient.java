@@ -34,10 +34,11 @@ public class OfficialAgentModelClient implements AgentModelClient {
                 .timeout(Duration.ofSeconds(90)).header("Authorization","Bearer "+key).header("Content-Type","application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(body),StandardCharsets.UTF_8)).build();
         boolean mac=openai&&executor.enabled();
+        String user=AgentUsageContext.user();
         int status; tools.jackson.databind.JsonNode payload;
         if(mac) {
             Map<String,Object> result;
-            try { result=executor.execute(body,key,180000); }
+            try { result=user==null?executor.execute(body,key,180000):executor.execute(body,key,180000,user); }
             catch (IllegalArgumentException unavailable) { throw new AgentModelClient.Failure(unavailable.getMessage()); }
             status=((Number)result.get("status")).intValue();
             payload=json.valueToTree(result.get("body"));
@@ -57,7 +58,11 @@ public class OfficialAgentModelClient implements AgentModelClient {
             case 429 -> "模型限流或额度不足，请稍后重试";
             default -> "模型服务请求失败（HTTP "+status+"）";
         });
-        if(!mac) models.recordUsage(agent.provider(),agent.model(),payload.has("usage")?json.convertValue(payload.get("usage"),Object.class):null);
+        if(!mac){
+            Object usage=payload.has("usage")?json.convertValue(payload.get("usage"),Object.class):null;
+            if(user==null)models.recordUsage(agent.provider(),agent.model(),usage);
+            else models.recordUsage(agent.provider(),agent.model(),usage,user);
+        }
         var choice=payload.path("choices").path(0);
         if (!"stop".equals(choice.path("finish_reason").asText())) throw new AgentModelClient.Failure("模型未生成完整回复，请缩短问题后重试");
         String result=choice.path("message").path("content").asText("").strip();

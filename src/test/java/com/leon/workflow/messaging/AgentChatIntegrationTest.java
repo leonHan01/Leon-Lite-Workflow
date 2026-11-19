@@ -54,16 +54,18 @@ class AgentChatIntegrationTest {
     }
     @Test void clientUsageRequiresAuthAndIncludesUniqueHistoricalModelsWithoutCredentials() throws Exception {
         var models=context.getBean(com.leon.workflow.automation.WorkflowModels.class);
+        jdbc.update("DELETE FROM chat_user_model_usage");
         jdbc.update("DELETE FROM automation_model_usage");
+        String leon=context.getBean(ChatUserRegistry.class).getOrCreate("Leon").id();
         try {
             mvc().perform(get("/api/agents/usage")).andExpect(status().isUnauthorized());
             mvc().perform(get("/api/agents/usage").header("Authorization",AUTH))
                 .andExpect(status().isOk()).andExpect(content().json("[]"));
-            models.recordUsage("deepseek","deepseek-flash",Map.of("prompt_tokens",3_000_000_000L,"completion_tokens",20));
-            models.recordUsage("deepseek","deepseek-flash",null);
+            models.recordUsage("deepseek","deepseek-flash",Map.of("prompt_tokens",3_000_000_000L,"completion_tokens",20),leon);
+            models.recordUsage("deepseek","deepseek-flash",null,leon);
             // Multiple profiles for the same model must not multiply usage.
             models.save(null,Map.of("name","usage alias","provider","deepseek","model","deepseek-flash"));
-            models.recordUsage("openai","retired-model",Map.of("prompt_tokens",5,"completion_tokens",2));
+            models.recordUsage("openai","retired-model",Map.of("prompt_tokens",5,"completion_tokens",2),leon);
             String result=mvc().perform(get("/api/agents/usage").header("Authorization",AUTH))
                 .andExpect(status().isOk()).andExpect(header().string("Cache-Control","no-store"))
                 .andExpect(jsonPath("$.length()").value(2))
@@ -77,7 +79,8 @@ class AgentChatIntegrationTest {
             assertEquals(Set.of("provider","model","inputTokens","outputTokens","totalTokens","reportedCalls","unreportedCalls","firstRecordedAt","lastRecordedAt"),
                 rows.get(0).propertyNames());
         } finally {
-            jdbc.update("DELETE FROM automation_model_usage");
+            jdbc.update("DELETE FROM chat_user_model_usage");
+        jdbc.update("DELETE FROM automation_model_usage");
             jdbc.update("DELETE FROM automation_model WHERE name='usage alias'");
         }
     }

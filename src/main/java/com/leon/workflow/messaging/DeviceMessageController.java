@@ -1,6 +1,7 @@
 package com.leon.workflow.messaging;
 
 import org.springframework.web.bind.annotation.*;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.CacheControl;
 import org.springframework.http.ResponseEntity;
 
@@ -10,19 +11,28 @@ import org.springframework.http.ResponseEntity;
 public class DeviceMessageController {
     private final DeviceMessageStore store;
     private final AgentChatService chat;
-    public DeviceMessageController(DeviceMessageStore store, AgentChatService chat) { this.store = store; this.chat=chat; }
+    private final ChatAccess access;
+    public DeviceMessageController(DeviceMessageStore store,AgentChatService chat,ChatAccess access){
+        this.store=store;this.chat=chat;this.access=access;
+    }
 
     @GetMapping
     public ResponseEntity<DeviceMessageStore.Page> list(@RequestParam(defaultValue="shared") String conversationId, @RequestParam(required = false) Long after,
-            @RequestParam(required = false) Long before, @RequestParam(defaultValue = "100") int limit) {
-        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(store.page(conversationId,after, before, limit));
+            @RequestParam(required = false) Long before, @RequestParam(defaultValue = "100") int limit,HttpServletRequest request) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(store.page(access.room(request,conversationId,false),after,before,limit));
     }
 
     @PostMapping
-    public ResponseEntity<DeviceMessageStore.Message> send(@RequestBody DeviceMessageStore.Send input) {
-        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(chat.send(input));
+    public ResponseEntity<DeviceMessageStore.Message> send(@RequestBody DeviceMessageStore.Send input,HttpServletRequest request) {
+        var user=access.user(request);
+        String room=access.room(request,DeviceMessageStore.conversationId(input),false);
+        String sender=ChatUserRegistry.requestUser(request)==null?input.sender():user.username();
+        var scoped=new DeviceMessageStore.Send(input.clientMessageId(),input.deviceId(),sender,input.platform(),
+            input.text(),room,input.mentionAgentIds(),input.imageIds());
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(chat.send(scoped,user.id()));
     }
-    @PostMapping("/{messageId}/agents/{agentId}/retry") public ResponseEntity<?> retry(@PathVariable long messageId,@PathVariable String agentId) {
+    @PostMapping("/{messageId}/agents/{agentId}/retry") public ResponseEntity<?> retry(@PathVariable long messageId,@PathVariable String agentId,HttpServletRequest request) {
+        access.requireRetry(request,messageId,agentId);
         store.retryJob(messageId,agentId);return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(java.util.Map.of("queued",true));
     }
 }

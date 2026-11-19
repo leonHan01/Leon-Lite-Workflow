@@ -78,7 +78,7 @@ public class AgentContextManager {
     public Info info(String room) {
         synchronized(store) {
             var conversation=store.conversation(room);var policy=policy(room);
-            var members=agents.list().stream().filter(a->conversation.id().equals("shared")||conversation.agentIds().contains(a.id())).toList();
+            var members=agents.list().stream().filter(a->ChatAccess.personalRoom(conversation.id())||conversation.agentIds().contains(a.id())).toList();
             var rows=new ArrayList<AgentInfo>();int budget=12000;
             for(var agent:members) {
                 budget=Math.min(budget,inputBudget(agent));
@@ -155,27 +155,33 @@ public class AgentContextManager {
         }
         return result;
     }
-    record CompressionTask(String id,String agentId,String room,long beforeId,String kind) {}
+    record CompressionTask(String id,String agentId,String room,long beforeId,String kind,String userId) {}
     private boolean busy(String room) {
         return jdbc.queryForObject("SELECT COUNT(*) FROM chat_agent_job WHERE conversation_id=? AND status IN ('PENDING','RUNNING')",Integer.class,room)>0
             || jdbc.queryForObject("SELECT COUNT(*) FROM chat_context_operation WHERE conversation_id=? AND status IN ('PENDING','RUNNING')",Integer.class,room)>0;
     }
     public DeviceMessageStore.ContextOperation enqueueCompression(String room,String agentId,String requestId) {
-        return enqueue(room,agentId,requestId,"COMPACT");
+        return enqueueCompression(room,agentId,requestId,null);
     }
     public DeviceMessageStore.ContextOperation enqueueArchive(String room,String agentId,String requestId) {
-        return enqueue(room,agentId,requestId,"ARCHIVE");
+        return enqueueArchive(room,agentId,requestId,null);
     }
-    private DeviceMessageStore.ContextOperation enqueue(String room,String agentId,String requestId,String kind) {
+    DeviceMessageStore.ContextOperation enqueueCompression(String room,String agentId,String requestId,String userId){
+        return enqueue(room,agentId,requestId,"COMPACT",userId);
+    }
+    DeviceMessageStore.ContextOperation enqueueArchive(String room,String agentId,String requestId,String userId){
+        return enqueue(room,agentId,requestId,"ARCHIVE",userId);
+    }
+    private DeviceMessageStore.ContextOperation enqueue(String room,String agentId,String requestId,String kind,String userId) {
         agentId=DeviceMessageStore.uuid(agentId);requestId=DeviceMessageStore.uuid(requestId);
         synchronized(store) {
             var conversation=store.conversation(room);var agent=agents.get(agentId);
-            if(!agent.enabled() || (!room.equals("shared")&&!conversation.agentIds().contains(agentId)))
+            if(!agent.enabled() || (!ChatAccess.personalRoom(room)&&!conversation.agentIds().contains(agentId)))
                 throw DeviceMessageStore.failure(HttpStatus.BAD_REQUEST,"请选择当前会话中已启用的 Agent");
-            var existing=jdbc.queryForList("SELECT conversation_id,agent_id,kind FROM chat_context_operation WHERE id=?",requestId);
+            var existing=jdbc.queryForList("SELECT conversation_id,agent_id,kind,user_id FROM chat_context_operation WHERE id=?",requestId);
             if(!existing.isEmpty()) {
                 var row=existing.getFirst();
-                if(!room.equals(row.get("conversation_id"))||!agentId.equals(row.get("agent_id"))||!kind.equals(row.get("kind"))) throw DeviceMessageStore.failure(HttpStatus.CONFLICT,"相同请求标识不能用于不同会话或 Agent");
+                if(!room.equals(row.get("conversation_id"))||!agentId.equals(row.get("agent_id"))||!kind.equals(row.get("kind"))||!Objects.equals(userId,row.get("user_id"))) throw DeviceMessageStore.failure(HttpStatus.CONFLICT,"相同请求标识不能用于不同会话或 Agent");
                 return operation(requestId);
             }
             if(busy(room)) throw DeviceMessageStore.failure(HttpStatus.CONFLICT,"请等待当前会话回复或压缩完成后再压缩上下文");
@@ -192,7 +198,7 @@ public class AgentContextManager {
             }
             final String operationId=requestId,targetAgentId=agentId,snapshotJson=archiveJson;
             return store.atomic(()-> {
-            jdbc.update("INSERT INTO chat_context_operation(id,conversation_id,agent_id,agent_name,before_id,status,created_at,kind) VALUES(?,?,?,?,?,'PENDING',?,?)",operationId,room,targetAgentId,agent.name(),before,created,kind);
+            jdbc.update("INSERT INTO chat_context_operation(id,conversation_id,agent_id,agent_name,before_id,status,created_at,kind,user_id) VALUES(?,?,?,?,?,'PENDING',?,?,?)",operationId,room,targetAgentId,agent.name(),before,created,kind,userId);
             if(snapshotJson!=null) {
                 String title=conversation.name()+" · "+java.time.ZonedDateTime.now(java.time.ZoneId.of("Asia/Shanghai")).format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"));
                 jdbc.update("INSERT INTO chat_context_archive(id,conversation_id,agent_id,epoch,after_id,through_id,title,messages_json,created_at) VALUES(?,?,?,?,?,?,?,?,?)",operationId,room,targetAgentId,policy.epoch(),policy.afterId(),before-1,title,snapshotJson,created);
@@ -211,7 +217,7 @@ public class AgentContextManager {
                     SELECT 1 FROM chat_agent_job j WHERE j.conversation_id=o.conversation_id AND j.status='RUNNING') AND NOT EXISTS (
                     SELECT 1 FROM chat_context_operation c WHERE c.conversation_id=o.conversation_id AND c.status='RUNNING')
                 ORDER BY o.created_at,o.id LIMIT 1
-                """,(rs,n)->new CompressionTask(rs.getString("id"),rs.getString("agent_id"),rs.getString("conversation_id"),rs.getLong("before_id"),rs.getString("kind")));
+                """,(rs,n)->new CompressionTask(rs.getString("id"),rs.getString("agent_id"),rs.getString("conversation_id"),rs.getLong("before_id"),rs.getString("kind"),rs.getString("user_id")));
             if(rows.isEmpty()) return null;var task=rows.getFirst();
             if(jdbc.update("UPDATE chat_context_operation SET status='RUNNING' WHERE id=? AND status='PENDING'",task.id())!=1)return null;
             return task;
@@ -221,6 +227,10 @@ public class AgentContextManager {
         synchronized(store) { jdbc.update("UPDATE chat_context_operation SET status='FAILED',error='服务重启中断了压缩，请手动重试压缩' WHERE status='RUNNING'"); }
     }
     void executeCompression(CompressionTask task) {
+        AgentUsageContext.run(task.userId(),()->compressTask(task));
+    }
+
+    private void compressTask(CompressionTask task) {
         String key="";
         try {
             var runtime=agents.runtime(task.agentId());var agent=runtime.agent;key=runtime.key;

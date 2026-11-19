@@ -8,6 +8,7 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
 @Service
+@org.springframework.context.annotation.DependsOn("chatUserMigration")
 public class AgentReplyEngine {
     private final DeviceMessageStore store; private final AgentRegistry agents; private final AgentModelClient model;
     private final AgentContextManager contexts;
@@ -41,6 +42,10 @@ public class AgentReplyEngine {
         var work=store.claim();if(work==null)return false;execute(work);return true;
     }
     private void execute(DeviceMessageStore.Work work) {
+        AgentUsageContext.run(work.userId(),()->reply(work));
+    }
+
+    private void reply(DeviceMessageStore.Work work) {
         try {
             var config=agents.runtime(work.agentId()); var agent=config.agent;
             if(!agent.enabled()) { store.fail(work,"Agent 已停用，请启用后手动重试");return; }
