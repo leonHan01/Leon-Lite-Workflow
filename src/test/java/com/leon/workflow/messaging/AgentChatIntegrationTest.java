@@ -38,6 +38,22 @@ class AgentChatIntegrationTest {
     private AgentRegistry.Agent agent(String handle){return agents.save(null,new AgentRegistry.Edit(handle,handle,"openai","test-model","角色 "+handle,true,KEY,null));}
     private DeviceMessageStore.Send send(String room,String text,List<String> ids){return new DeviceMessageStore.Send(UUID.randomUUID().toString(),UUID.randomUUID().toString(),"Mac","macos",text,room,ids);}
 
+    @Test void agentDescriptionsPersistWithoutExposingPrivatePrompts() throws Exception {
+        var saved=agents.save(null,new AgentRegistry.Edit("写作助手","writer","openai","test-model","私有角色提示词",true,KEY,null,null,null,"帮助梳理思路与润色文字"));
+        assertEquals("帮助梳理思路与润色文字",agents.get(saved.id()).description());
+        mvc().perform(get("/api/agents")).andExpect(status().isUnauthorized());
+        mvc().perform(get("/api/agents").header("Authorization",AUTH))
+            .andExpect(status().isOk()).andExpect(jsonPath("$[0].description").value(saved.description()))
+            .andExpect(jsonPath("$[0].model").value("test-model"))
+            .andExpect(jsonPath("$[0].systemPrompt").doesNotExist()).andExpect(jsonPath("$[0].apiKey").doesNotExist());
+        var legacy=agents.save(saved.id(),new AgentRegistry.Edit(saved.name(),saved.handle(),saved.provider(),saved.model(),saved.systemPrompt(),true,"",saved.version()));
+        assertEquals(saved.description(),legacy.description());
+        assertThrows(Exception.class,()->agents.save(saved.id(),new AgentRegistry.Edit(saved.name(),saved.handle(),saved.provider(),saved.model(),saved.systemPrompt(),true,"",legacy.version(),null,null,"x".repeat(2001))));
+        var cleared=agents.save(saved.id(),new AgentRegistry.Edit(saved.name(),saved.handle(),saved.provider(),saved.model(),saved.systemPrompt(),true,"",legacy.version(),null,null,""));
+        assertEquals("",cleared.description());
+        assertEquals("私有角色提示词",cleared.systemPrompt());
+    }
+
     @Test void adminRequiresCookieAndCsrfAndNeverExposesKeys() throws Exception {
         var input=new AgentRegistry.Edit("写作助手","writer","openai","test-model","私有提示",true,KEY,null);
         String body=json.writeValueAsString(input);

@@ -11,6 +11,7 @@
 <div class="fields"><label>显示名称<input id="name" maxlength="60" required placeholder="例如：写作助手"></label><label>@标识<input id="handle" pattern="[a-z][a-z0-9_-]{1,31}" maxlength="32" required placeholder="例如：writer"><small>2–32 位小写字母、数字、_ 或 -，以字母开头</small></label></div>
 <label>已保存的模型<select id="modelId" required><option value="">请选择模型</option></select><small id="modelHint">复用模型配置中的服务商与凭据。</small></label>
 <div class="actions"><button type="button" id="reloadModels">刷新模型列表</button><a href="/advanced-settings.html" target="_blank" rel="noopener">管理模型 ↗</a></div>
+<label>Agent 介绍<textarea id="description" rows="3" maxlength="2000" placeholder="向用户介绍这个 Agent 的专长和用途，将在 App 详情页展示。"></textarea></label>
 <label>角色与系统提示词<textarea id="systemPrompt" rows="8" maxlength="16000" placeholder="例如：你是一位严谨的写作编辑，先梳理逻辑，再给出具体修改建议。"></textarea></label>
 <div class="form-footer"><p class="subtle">私聊直接回复；群聊仅响应 @标识。<br>每次回复仅使用当前会话的最近上下文。</p><button id="saveAgent" class="primary" type="submit">保存 Agent</button></div>
 </form></article>

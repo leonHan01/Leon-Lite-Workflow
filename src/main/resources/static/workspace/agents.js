@@ -94,7 +94,7 @@ function resetForm(agent = null) {
     if (uploadingAvatar) return;
     editing = agent; $('agentForm').reset();
     selectAvatar(agent?.avatarId || 'alfred');
-    for (const key of ['name', 'handle', 'systemPrompt']) $(key).value = agent?.[key] || '';
+    for (const key of ['name', 'handle', 'description', 'systemPrompt']) $(key).value = agent?.[key] || '';
     modelOptions(agent?.modelId || ''); $('enabled').checked = agent?.enabled ?? true;
     $('formTitle').textContent = agent ? `编辑 ${agent.name}` : '新建 Agent';
     renderAgents();
@@ -121,7 +121,7 @@ async function loadAgents() {
 $('newAgent').onclick = () => { notice(''); resetForm(); $('name').focus(); };
 $('agentForm').onsubmit = async event => {
     event.preventDefault(); $('saveAgent').disabled = true; notice('');
-    const body = Object.fromEntries(['name', 'handle', 'systemPrompt'].map(k => [k, $(k).value]));
+    const body = Object.fromEntries(['name', 'handle', 'description', 'systemPrompt'].map(k => [k, $(k).value]));
     if ($('modelId').value) body.modelId = $('modelId').value;
     if (uploadingAvatar) return; body.avatarId = selectedAvatarId;
     body.enabled = $('enabled').checked; body.version = editing?.version;

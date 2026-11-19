@@ -30,13 +30,15 @@ public class AgentRegistry {
         if (key != null && key.length != 32) throw new IllegalStateException("Agent 凭据加密密钥必须为 32 字节");
     }
     public record Agent(String id, String name, String handle, String provider, String model, String systemPrompt,
-                        boolean enabled, boolean hasApiKey, long version, String avatarId, String modelId) {
+                        boolean enabled, boolean hasApiKey, long version, String avatarId, String modelId, String description) {
+        public Agent(String id,String name,String handle,String provider,String model,String systemPrompt,boolean enabled,boolean hasApiKey,long version,String avatarId,String modelId){this(id,name,handle,provider,model,systemPrompt,enabled,hasApiKey,version,avatarId,modelId,"");}
         public Agent(String id,String name,String handle,String provider,String model,String systemPrompt,boolean enabled,boolean hasApiKey,long version,String avatarId){this(id,name,handle,provider,model,systemPrompt,enabled,hasApiKey,version,avatarId,null);}
         public Agent(String id,String name,String handle,String provider,String model,String systemPrompt,boolean enabled,boolean hasApiKey,long version){this(id,name,handle,provider,model,systemPrompt,enabled,hasApiKey,version,AgentAvatarService.DEFAULT_ID);}
     }
-    public record Summary(String id, String name, String handle, String provider, String model, boolean enabled, String avatarId) {}
+    public record Summary(String id, String name, String handle, String provider, String model, boolean enabled, String avatarId, String description) {}
     public record Edit(String name, String handle, String provider, String model, String systemPrompt,
-                       boolean enabled, String apiKey, Long version, String avatarId, String modelId) {
+                       boolean enabled, String apiKey, Long version, String avatarId, String modelId, String description) {
+        public Edit(String name,String handle,String provider,String model,String systemPrompt,boolean enabled,String apiKey,Long version,String avatarId,String modelId){this(name,handle,provider,model,systemPrompt,enabled,apiKey,version,avatarId,modelId,null);}
         public Edit(String name,String handle,String provider,String model,String systemPrompt,boolean enabled,String apiKey,Long version,String avatarId){this(name,handle,provider,model,systemPrompt,enabled,apiKey,version,avatarId,null);}
         public Edit(String name,String handle,String provider,String model,String systemPrompt,boolean enabled,String apiKey,Long version){this(name,handle,provider,model,systemPrompt,enabled,apiKey,version,null);}
     }
@@ -49,6 +51,7 @@ public class AgentRegistry {
             """);
         jdbc.execute("ALTER TABLE chat_agent ADD COLUMN IF NOT EXISTS avatar_id VARCHAR(80) DEFAULT 'alfred' NOT NULL");
         jdbc.execute("ALTER TABLE chat_agent ADD COLUMN IF NOT EXISTS model_id VARCHAR(36)");
+        jdbc.execute("ALTER TABLE chat_agent ADD COLUMN IF NOT EXISTS description VARCHAR(2000) DEFAULT '' NOT NULL");
     }
     public boolean keyStorageEnabled() { return key != null; }
     static final class RuntimeConfig {
@@ -59,7 +62,7 @@ public class AgentRegistry {
         var agent=get(id);
         if(agent.modelId()==null) return new RuntimeConfig(agent,apiKey(id));
         var profile=models.resolve(Map.of("modelId",agent.modelId()));
-        var resolved=new Agent(agent.id(),agent.name(),agent.handle(),(String)profile.get("provider"),(String)profile.get("model"),agent.systemPrompt(),agent.enabled(),true,agent.version(),agent.avatarId(),agent.modelId());
+        var resolved=new Agent(agent.id(),agent.name(),agent.handle(),(String)profile.get("provider"),(String)profile.get("model"),agent.systemPrompt(),agent.enabled(),true,agent.version(),agent.avatarId(),agent.modelId(),agent.description());
         return new RuntimeConfig(resolved,profileKey(profile));
     }
     private String profileKey(Map<String,Object> profile) {
@@ -72,16 +75,18 @@ public class AgentRegistry {
         for(var profile:models.list()) profiles.put((String)profile.get("id"),profile);
         return jdbc.query("SELECT * FROM chat_agent ORDER BY name,id", (rs,n) -> {
             String modelId=rs.getString("model_id"); var profile=profiles.get(modelId);
-            return new Agent(rs.getString("id"),rs.getString("name"),rs.getString("handle"),profile==null?rs.getString("provider"):(String)profile.get("provider"),profile==null?rs.getString("model"):(String)profile.get("model"),rs.getString("system_prompt"),rs.getBoolean("enabled"),true,rs.getLong("version"),rs.getString("avatar_id"),modelId);
+            return new Agent(rs.getString("id"),rs.getString("name"),rs.getString("handle"),profile==null?rs.getString("provider"):(String)profile.get("provider"),profile==null?rs.getString("model"):(String)profile.get("model"),rs.getString("system_prompt"),rs.getBoolean("enabled"),true,rs.getLong("version"),rs.getString("avatar_id"),modelId,rs.getString("description"));
         });
     }
-    public List<Summary> summaries() { return list().stream().map(a -> new Summary(a.id(),a.name(),a.handle(),a.provider(),a.model(),a.enabled(),a.avatarId())).toList(); }
+    public List<Summary> summaries() { return list().stream().map(a -> new Summary(a.id(),a.name(),a.handle(),a.provider(),a.model(),a.enabled(),a.avatarId(),a.description())).toList(); }
     public Agent get(String id) { return list().stream().filter(a -> a.id().equals(id)).findFirst().orElseThrow(() -> failure(HttpStatus.NOT_FOUND,"Agent 不存在")); }
     public synchronized Agent save(String id, Edit edit) {
         if (key == null) throw failure(HttpStatus.BAD_REQUEST,"请先配置服务器 LEON_WORKFLOW_CREDENTIAL_KEY，启用加密凭据存储");
         if (edit == null) throw failure(HttpStatus.BAD_REQUEST,"Agent 配置不能为空");
         String name = text(edit.name()).strip(), handle = text(edit.handle()).strip().toLowerCase(Locale.ROOT);
         Agent previous = id == null ? null : get(id);
+        String description=edit.description()==null?(previous==null?"":previous.description()):edit.description().strip();
+        if(description.length()>2000) throw failure(HttpStatus.BAD_REQUEST,"Agent 介绍不能超过 2000 字符");
         String modelId=text(edit.modelId()).strip();
         var profile=modelId.isEmpty()?null:models.resolve(Map.of("modelId",modelId));
         String provider=profile==null?(edit.provider()==null&&previous!=null?previous.provider():text(edit.provider())):(String)profile.get("provider");
@@ -101,8 +106,8 @@ public class AgentRegistry {
         if (previous != null && !Objects.equals(edit.version(),previous.version())) throw failure(HttpStatus.CONFLICT,"配置已变更，请刷新后重试");
         String encrypted = profile!=null ? "" : apiKey.isEmpty() ? jdbc.queryForObject("SELECT encrypted_key FROM chat_agent WHERE id=?",String.class,id) : encrypt(agentId,apiKey);
         try {
-            if (previous == null) jdbc.update("INSERT INTO chat_agent(id,name,handle,provider,model,system_prompt,enabled,encrypted_key,avatar_id,model_id,version) VALUES(?,?,?,?,?,?,?,?,?,?,1)",agentId,name,handle,provider,model,prompt,edit.enabled(),encrypted,avatarId,modelId.isEmpty()?null:modelId);
-            else if (jdbc.update("UPDATE chat_agent SET name=?,handle=?,provider=?,model=?,system_prompt=?,enabled=?,encrypted_key=?,avatar_id=?,model_id=?,version=version+1 WHERE id=? AND version=?",name,handle,provider,model,prompt,edit.enabled(),encrypted,avatarId,modelId.isEmpty()?null:modelId,agentId,previous.version()) != 1) throw failure(HttpStatus.CONFLICT,"配置已变更，请刷新后重试");
+            if (previous == null) jdbc.update("INSERT INTO chat_agent(id,name,handle,provider,model,system_prompt,enabled,encrypted_key,avatar_id,model_id,description,version) VALUES(?,?,?,?,?,?,?,?,?,?,?,1)",agentId,name,handle,provider,model,prompt,edit.enabled(),encrypted,avatarId,modelId.isEmpty()?null:modelId,description);
+            else if (jdbc.update("UPDATE chat_agent SET name=?,handle=?,provider=?,model=?,system_prompt=?,enabled=?,encrypted_key=?,avatar_id=?,model_id=?,description=?,version=version+1 WHERE id=? AND version=?",name,handle,provider,model,prompt,edit.enabled(),encrypted,avatarId,modelId.isEmpty()?null:modelId,description,agentId,previous.version()) != 1) throw failure(HttpStatus.CONFLICT,"配置已变更，请刷新后重试");
         } catch (DuplicateKeyException e) { throw failure(HttpStatus.BAD_REQUEST,"@标识已被其他 Agent 使用"); }
         return get(agentId);
     }
