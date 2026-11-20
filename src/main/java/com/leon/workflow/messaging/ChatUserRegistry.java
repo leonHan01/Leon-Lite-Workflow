@@ -25,9 +25,12 @@ public class ChatUserRegistry {
     private final SecureRandom random=new SecureRandom();
     public record User(String id,String username) {}
     public record Login(User user,String sessionToken,long expiresAt) {}
+    public record Background(String background,long version) {}
     public ChatUserRegistry(JdbcTemplate jdbc){this.jdbc=jdbc;}
     @PostConstruct void initialize(){
         jdbc.execute("CREATE TABLE IF NOT EXISTS chat_user (id VARCHAR(36) PRIMARY KEY, username VARCHAR(60) NOT NULL, username_key VARCHAR(60) NOT NULL UNIQUE, created_at BIGINT NOT NULL)");
+        jdbc.execute("ALTER TABLE chat_user ADD COLUMN IF NOT EXISTS background VARCHAR(1000) DEFAULT '' NOT NULL");
+        jdbc.execute("ALTER TABLE chat_user ADD COLUMN IF NOT EXISTS background_version BIGINT DEFAULT 0 NOT NULL");
         jdbc.execute("CREATE TABLE IF NOT EXISTS chat_user_session (id VARCHAR(36) PRIMARY KEY, user_id VARCHAR(36) NOT NULL, token_hash VARCHAR(64) NOT NULL UNIQUE, expires_at BIGINT NOT NULL, created_at BIGINT NOT NULL, FOREIGN KEY(user_id) REFERENCES chat_user(id))");
         // Stable identity for existing records; migrations can reference it without deleting old data.
         getOrCreate("Leon");
@@ -56,6 +59,18 @@ public class ChatUserRegistry {
         if(rows.isEmpty())throw DeviceMessageStore.failure(HttpStatus.UNAUTHORIZED,"登录已过期，请重新登录");return rows.getFirst();
     }
     public void logout(String token){if(token!=null&&token.matches("chat_[A-Za-z0-9_-]{43}"))jdbc.update("DELETE FROM chat_user_session WHERE token_hash=?",hash(token));}
+    public Background background(String userId){
+        var rows=jdbc.query("SELECT background,background_version FROM chat_user WHERE id=?",(rs,n)->new Background(rs.getString(1),rs.getLong(2)),userId);
+        if(rows.isEmpty())throw DeviceMessageStore.failure(HttpStatus.NOT_FOUND,"用户不存在");
+        return rows.getFirst();
+    }
+    public Background updateBackground(String userId,String value,Long version){
+        if(value==null||value.length()>1000||version==null||version<0)
+            throw DeviceMessageStore.failure(HttpStatus.BAD_REQUEST,"背景信息不能超过 1000 个字符，请重新加载后保存");
+        int updated=jdbc.update("UPDATE chat_user SET background=?,background_version=background_version+1 WHERE id=? AND background_version=?",value, userId,version);
+        if(updated==0){background(userId);throw DeviceMessageStore.failure(HttpStatus.CONFLICT,"背景信息已被其他页面修改，请重新加载后保存");}
+        return new Background(value,version+1);
+    }
     private User find(String key){var rows=jdbc.query("SELECT id,username FROM chat_user WHERE username_key=?",(rs,n)->new User(rs.getString(1),rs.getString(2)),key);return rows.isEmpty()?null:rows.getFirst();}
     private static String normalize(String value){
         String name=value==null?"":java.text.Normalizer.normalize(value,java.text.Normalizer.Form.NFKC).strip();

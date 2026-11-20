@@ -1,0 +1,18 @@
+<div class="db-page">
+    <div class="advanced-eyebrow"><span></span> DATABASE</div>
+    <h1>数据库管理<span>.</span></h1>
+    <p class="db-intro">查看数据表和执行只读 SQL 查询。</p>
+    <section class="db-card" aria-labelledby="db-tables-title">
+        <div class="db-heading"><div><h2 id="db-tables-title">数据表</h2><p>大小为字段内容的逻辑字节数，不含索引、压缩和数据库存储开销。统计超时或不支持时显示「—」。</p></div><button type="button" data-db-refresh>刷新</button></div>
+        <p data-db-table-status role="status" aria-live="polite"></p>
+        <div class="db-scroll"><table><thead><tr><th>表名</th><th>行数</th><th>内容大小</th><th></th></tr></thead><tbody data-db-tables></tbody></table></div>
+    </section>
+    <section class="db-card" aria-labelledby="db-query-title">
+        <div class="db-heading"><div><h2 id="db-query-title">SQL 查询</h2><p>支持单条 SELECT 或 WITH 查询，最多显示 200 行。点击表名可填入查询。</p></div></div>
+        <label class="db-label" for="db-sql">SQL 语句</label>
+        <textarea id="db-sql" data-db-sql spellcheck="false">SELECT * FROM INFORMATION_SCHEMA.TABLES</textarea>
+        <div class="db-actions"><button type="button" data-db-run>执行查询</button><span>Ctrl / ⌘ + Enter</span></div>
+        <p data-db-query-status role="status" aria-live="polite"></p>
+        <div class="db-scroll"><table data-db-result hidden><thead></thead><tbody></tbody></table></div>
+    </section>
+</div>

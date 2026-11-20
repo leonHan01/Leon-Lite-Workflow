@@ -1,0 +1,28 @@
+<div class="users-page">
+  <div class="advanced-eyebrow"><span></span> USERS</div>
+  <h1>用户管理<span>.</span></h1>
+  <p class="users-intro">查看用户参与的对话，管理会话并分析用户画像。</p>
+  <div class="users-layout">
+    <section class="users-panel"><div class="users-heading"><h2>用户</h2><button type="button" data-refresh>刷新</button></div><div data-users class="users-list"></div></section>
+    <section class="users-panel"><div class="users-heading"><h2 data-user-title>选择用户</h2></div><div data-rooms class="users-list"></div></section>
+    <section class="users-panel users-content">
+      <div class="users-heading"><h2 data-room-title>选择会话</h2><button type="button" data-delete hidden>删除会话</button></div>
+      <button type="button" data-older hidden>加载更早消息</button><div data-messages class="users-messages"><p>选择会话后查看对话。</p></div>
+    </section>
+  </div>
+  <section class="users-panel users-background">
+    <h2>用户背景信息</h2>
+    <p>填写当前用户的背景、偏好或工作信息。每次该用户向 Agent 发起对话时，这些内容会随对话发送给所选模型服务；群聊中仅带入本轮发言者的背景。</p>
+    <label for="user-background">背景信息（最多 1000 字符）</label>
+    <textarea id="user-background" data-background maxlength="1000" rows="5" disabled placeholder="请先选择用户"></textarea>
+    <div class="users-analysis-actions"><button type="button" data-background-save disabled>保存背景</button><button type="button" data-background-reload disabled>重新加载</button></div>
+    <p data-background-status role="status" aria-live="polite"></p>
+  </section>
+  <section class="users-panel users-analysis">
+    <h2>AI 用户画像</h2>
+    <p>使用所选 Agent 的模型分析该用户最近最多 200 条、3 万字符的文字发言；不包含其他用户发言或图片。发言会发送给所选模型服务，结果仅显示在当前页面。</p>
+    <div class="users-analysis-actions"><label>分析模型 <select data-agent aria-label="分析模型"></select></label><button type="button" data-analyze>分析用户画像</button></div>
+    <p data-analysis-status role="status"></p><div data-analysis-result class="users-analysis-result"></div>
+  </section>
+  <p data-status role="status" aria-live="polite"></p>
+</div>

@@ -2,6 +2,8 @@ const routes = {
     '/workspace/tools-pro.html': ['tools-pro', 'Leon Tools Pro', 'workspace-tools-pro'],
     '/workflow-runs.html': ['workflow-runs', '运行实例', 'workspace-workflow-runs'],
     '/workflows.html': ['workflows', '工作流', 'workspace-workflows'],
+    '/workspace/database.html': ['database', '数据库管理', 'workspace-database'],
+    '/workspace/users.html': ['users', '用户管理', 'workspace-users'],
     '/workspace/agents.html': ['agents', 'Agent 工作台', 'workspace-agents'],
     '/music-statistics.html': ['music-statistics', '歌曲统计', 'workspace-music'],
     '/music.html': ['music', '歌曲管理', 'workspace-music'],
@@ -62,6 +64,15 @@ const agentLink = document.createElement('a');
 agentLink.className = 'lw-nav-link'; agentLink.href = '/workspace/agents.html';
 agentLink.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3" y="6" width="18" height="15" rx="4"/><path d="M12 2v4M8 16h8"/><circle cx="8" cy="11" r="1"/><circle cx="16" cy="11" r="1"/></svg><span>Agent 工作台</span>'; agentLink.setAttribute('aria-label', 'Agent 工作台');
 navigation.append(agentLink);
+const databaseLink = document.createElement('a');
+databaseLink.className = 'lw-nav-link'; databaseLink.href = '/workspace/database.html';
+databaseLink.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg><span>数据库管理</span>';
+databaseLink.setAttribute('aria-label', '数据库管理');
+navigation.append(databaseLink);
+const usersLink = document.createElement('a');
+usersLink.className = 'lw-nav-link'; usersLink.href = '/workspace/users.html';
+usersLink.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3 20v-2a6 6 0 0 1 12 0v2M16 5a3 3 0 0 1 0 6M17 14a5 5 0 0 1 4 5v1"/></svg><span>用户管理</span>';
+usersLink.setAttribute('aria-label', '用户管理'); navigation.append(usersLink);
 const navigationOrderKey = 'leon-workspace-navigation-order';
 const navigationItems = () => Array.from(navigation.children);
 const navigationId = item => item.dataset.navGroup ? 'group:' + item.dataset.navGroup : new URL(item.href).pathname;

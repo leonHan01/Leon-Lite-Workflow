@@ -65,6 +65,15 @@ public class AgentController {
         }
     }
 
+    public record GroupAgents(List<String> agentIds) {}
+    @PostMapping("/api/conversations/{id}/agents") public ResponseEntity<?> addAgents(
+            @PathVariable String id,@RequestBody GroupAgents input,HttpServletRequest request){
+        String roomId=access.room(request,id,true);
+        synchronized(store){
+            return response(store.atomic(()->chat.addAgents(roomId,input.agentIds())));
+        }
+    }
+
     @PostMapping("/api/conversations/direct/{agentId}") public ResponseEntity<?> direct(@PathVariable String agentId,HttpServletRequest request) {
         var user=access.user(request);
         var agent=chat.active(agentId);

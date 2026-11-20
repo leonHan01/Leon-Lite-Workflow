@@ -24,6 +24,13 @@ public class AgentChatService {
         List<String> members=ids==null?List.of():ids.stream().map(DeviceMessageStore::uuid).distinct().toList();
         for(String id:members) active(id); return store.createGroup(name,members);
     }
+    public DeviceMessageStore.Conversation addAgents(String room,List<String> ids) {
+        if(ids==null||ids.isEmpty()||ids.size()>32)
+            throw DeviceMessageStore.failure(HttpStatus.BAD_REQUEST,"请选择 1–32 个 Agent");
+        var incoming=ids.stream().map(DeviceMessageStore::uuid).distinct().toList();
+        for(String id:incoming)active(id);
+        return store.addGroupAgents(room,incoming);
+    }
     public DeviceMessageStore.Conversation direct(String id) { return store.direct(active(id)); }
     public DeviceMessageStore.Conversation createDirect(String id,String requestId,String name) { return store.createDirect(active(id),requestId,name); }
     public DeviceMessageStore.Message send(DeviceMessageStore.Send input) { return send(input,null); }

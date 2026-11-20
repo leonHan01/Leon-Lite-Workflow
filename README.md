@@ -99,6 +99,7 @@ curl -X POST http://127.0.0.1:8080/api/diamond -H 'Content-Type: application/jso
 | `/monitor.html` | 服务器监控 |
 | `/music.html` | 声屿歌曲管理，支持多首上传、搜索、试听和删除 |
 | `/advanced-settings.html` | 高级设置，含数据库 SQL 备份 |
+| `/workspace/database.html` | 数据库管理：表行数、逻辑内容大小与只读 SQL 查询 |
 | `/admin-login.html` | 访问令牌登录 |
 
 **备份。** 高级设置下载的 SQL 包含 H2 表结构和业务数据，可导入空的 H2 数据库。其中不含数据库用户密码、浏览器登录会话、环境变量和服务器配置。备份可能包含私人内容，以及应用数据中的密钥，请单独保管。
@@ -467,3 +468,5 @@ Mac 输入 `/clear` 后先读取会话状态，展示消息数量和永久删除
 `POST /api/conversations/backups?requestId=<UUID>&agentId=<可选目标Agent>` 接收 `application/zip`。确认后事务性恢复为 `restore:<UUID>` 独立会话，保留原会话；为消息和图片生成新 ID，映射回复、图片与上下文边界，不重放模型任务。失败时不保留部分导入，相同请求及文件重试返回原导入结果，不重复插入。私聊可指定当前 Agent；群聊保留成员，需要对应 Agent 仍存在。格式版本、路径、重复条目、展开体积、图片尺寸及消息关联均校验，不解压到文件系统。
 
 接口沿用 Bearer / 管理 Cookie 及浏览器写入来源校验。上线需部署本次服务端代码，并使用更新后的 `scripts/install_messaging_proxy.py` 安装备份路径的 32 MB 限制；本次开发不自动部署或重启正式服务。Android 收到历史修订变化后丢弃旧缓存与待发记录，避免其他设备清理后重新显示旧消息。
+
+数据库管理页面显示各表字段内容的逻辑字节数，不包含 H2 索引、压缩和存储开销；统计超时或类型不支持时显示「—」。SQL 查询仅接受单条 SELECT/WITH，在临时只读账户下执行，最长 5 秒，结果最多 200 行；需要管理会话，查询请求还校验写入来源。页面与接口沿用受保护的 `/workspace/` 和数据库备份代理路由，不记录查询语句或结果。

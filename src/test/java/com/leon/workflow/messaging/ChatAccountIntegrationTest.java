@@ -106,6 +106,61 @@ class ChatAccountIntegrationTest {
         mvc.perform(get("/api/conversations").header("Authorization",eve.authorization())).andExpect(status().isUnauthorized());
     }
 
+    private AgentRegistry.Agent groupAgent(String label){
+        String handle=label+UUID.randomUUID().toString().substring(0,8);
+        return agents.save(null,new AgentRegistry.Edit(label,handle,"openai","test-model","",true,"test-key",null));
+    }
+    @Test void groupOwnerCanAddAgentsWithoutReplacingMembersHistoryOrOwner()throws Exception{
+        var owner=login("GroupOwner");var member=login("GroupMember");var outsider=login("GroupVisitor");
+        var first=groupAgent("first");var second=groupAgent("second");
+        String group=room(owner,"/api/conversations/groups",Map.of("name","可扩展群聊","usernames",List.of("GroupMember"),"agentIds",List.of(first.id())));
+        send(member,message(group,"保留已有群聊记录",List.of()),"GroupMember");
+        String url="/api/conversations/"+group+"/agents",body=json.writeValueAsString(Map.of("agentIds",List.of(second.id(),second.id())));
+        mvc.perform(post(url).contentType("application/json").content(body)).andExpect(status().isUnauthorized());
+        for(var denied:List.of(member,outsider))mvc.perform(post(url).header("Authorization",denied.authorization()).contentType("application/json").content(body)).andExpect(status().isNotFound());
+        for(int i=0;i<2;i++)mvc.perform(post(url).header("Authorization",owner.authorization()).contentType("application/json").content(body))
+            .andExpect(status().isOk()).andExpect(header().string("Cache-Control","no-store"))
+            .andExpect(jsonPath("$.ownerId").value(owner.id())).andExpect(jsonPath("$.agentIds.length()").value(2))
+            .andExpect(jsonPath("$.agentIds[0]").value(first.id())).andExpect(jsonPath("$.agentIds[1]").value(second.id()));
+        mvc.perform(get("/api/conversations/"+group+"/members").header("Authorization",member.authorization())).andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(2));
+        long fixture=send(member,message(group,"让新 Agent 回复",List.of(second.id())),"GroupMember");
+        assertEquals(second.id(),jdbc.queryForObject("SELECT agent_id FROM chat_agent_job WHERE message_id=?",String.class,fixture));
+        // This context also tests the reply worker; do not leave a queued fixture for it.
+        jdbc.update("DELETE FROM chat_agent_job WHERE message_id=?",fixture);
+        mvc.perform(get("/api/device-messages").param("conversationId",group).header("Authorization",member.authorization()))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.messages.length()").value(2)).andExpect(jsonPath("$.messages[0].text").value("保留已有群聊记录"));
+        mvc.perform(get("/api/conversations").header("Authorization",member.authorization())).andExpect(status().isOk())
+            .andExpect(jsonPath("$[?(@.id == '"+group+"')].agentIds[1]").value(org.hamcrest.Matchers.contains(second.id())));
+    }
+    @Test void invalidAgentBatchesLeaveGroupUntouchedAndPersonalChatsCannotBeExpanded()throws Exception{
+        var owner=login("AtomicGroupOwner");var first=groupAgent("atomicfirst");var second=groupAgent("atomicsecond");
+        String group=room(owner,"/api/conversations/groups",Map.of("name","原子验证群","agentIds",List.of(first.id())));
+        for(var ids:List.of(List.<String>of(),List.of(second.id(),"invalid"),List.of(second.id(),UUID.randomUUID().toString()))){
+            mvc.perform(post("/api/conversations/"+group+"/agents").header("Authorization",owner.authorization()).contentType("application/json").content(json.writeValueAsString(Map.of("agentIds",ids)))).andExpect(status().is4xxClientError());
+            assertEquals(first.id(),jdbc.queryForObject("SELECT agent_ids FROM chat_conversation WHERE id=?",String.class,group));
+        }
+        jdbc.update("UPDATE chat_agent SET enabled=FALSE WHERE id=?",second.id());
+        mvc.perform(post("/api/conversations/"+group+"/agents").header("Authorization",owner.authorization()).contentType("application/json").content(json.writeValueAsString(Map.of("agentIds",List.of(second.id()))))).andExpect(status().isBadRequest());
+        String direct=room(owner,"/api/conversations/direct/"+first.id(),Map.of());
+        for(String target:List.of("shared",direct))mvc.perform(post("/api/conversations/"+target+"/agents").header("Authorization",owner.authorization()).contentType("application/json").content(json.writeValueAsString(Map.of("agentIds",List.of(first.id()))))).andExpect(status().isBadRequest());
+        assertEquals(first.id(),jdbc.queryForObject("SELECT agent_ids FROM chat_conversation WHERE id=?",String.class,group));
+    }
+    @Test void groupAgentLimitCountsExistingMembersAndConcurrentAdditionsAreMerged()throws Exception{
+        var owner=login("LimitGroupOwner");var first=groupAgent("limitfirst");var second=groupAgent("limitsecond");var third=groupAgent("limitthird");
+        String group=room(owner,"/api/conversations/groups",Map.of("name","并发群","agentIds",List.of(first.id())));
+        try(var pool=Executors.newFixedThreadPool(2)){
+            var one=pool.submit(()->room(owner,"/api/conversations/"+group+"/agents",Map.of("agentIds",List.of(second.id()))));
+            var two=pool.submit(()->room(owner,"/api/conversations/"+group+"/agents",Map.of("agentIds",List.of(third.id()))));
+            assertEquals(group,one.get(5,TimeUnit.SECONDS));assertEquals(group,two.get(5,TimeUnit.SECONDS));
+        }
+        var batch=new ArrayList<String>();for(int i=0;i<29;i++)batch.add(groupAgent("batch").id());
+        mvc.perform(post("/api/conversations/"+group+"/agents").header("Authorization",owner.authorization()).contentType("application/json").content(json.writeValueAsString(Map.of("agentIds",batch)))).andExpect(status().isOk()).andExpect(jsonPath("$.agentIds.length()").value(32));
+        var extra=groupAgent("extra");
+        mvc.perform(post("/api/conversations/"+group+"/agents").header("Authorization",owner.authorization()).contentType("application/json").content(json.writeValueAsString(Map.of("agentIds",List.of(extra.id()))))).andExpect(status().isBadRequest());
+        var stored=Arrays.asList(jdbc.queryForObject("SELECT agent_ids FROM chat_conversation WHERE id=?",String.class,group).split(","));
+        assertEquals(32,stored.size());assertTrue(stored.containsAll(List.of(first.id(),second.id(),third.id())));assertFalse(stored.contains(extra.id()));
+    }
+
     @Test void countsDirectAndMacResponsesForGroupInitiatorExactlyOnce()throws Exception{
         var owner=login("Owner");var member=login("Member");
         var agent=agents.save(null,new AgentRegistry.Edit("Helper","helperac","openai","test-model","",true,"test-key",null));

@@ -112,6 +112,14 @@ public class DeviceMessageStore {
         jdbc.update("INSERT INTO chat_conversation(id,name,kind,agent_ids) VALUES(?,?,'group',?)",id,name,String.join(",",agentIds));
         return conversation(id);
     }
+    public synchronized Conversation addGroupAgents(String id,List<String> incoming) {
+        var room=conversation(id);
+        if(!room.kind().equals("group")||ChatAccess.personalRoom(id))throw bad("请新建群聊后添加 Agent");
+        var members=new LinkedHashSet<>(room.agentIds());members.addAll(incoming);
+        if(members.size()>32)throw bad("群聊最多加入 32 个 Agent");
+        jdbc.update("UPDATE chat_conversation SET agent_ids=? WHERE id=?",String.join(",",members),id);
+        return conversation(id);
+    }
     public synchronized Conversation direct(AgentRegistry.Agent agent) { return direct(agent,"direct:"+agent.id()); }
     synchronized Conversation direct(AgentRegistry.Agent agent,String id) {
         jdbc.update("INSERT INTO chat_conversation(id,name,kind,agent_id,agent_ids,initial_name) SELECT ?,?,'direct',?,?,? WHERE NOT EXISTS(SELECT 1 FROM chat_conversation WHERE id=?)",id,agent.name(),agent.id(),agent.id(),agent.name(),id);
