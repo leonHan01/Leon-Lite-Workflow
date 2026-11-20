@@ -13,7 +13,7 @@ public class AgentChatService {
     public AgentChatService(DeviceMessageStore store,AgentRegistry agents) { this.store=store; this.agents=agents; }
     public List<DeviceMessageStore.Conversation> conversations() {
         return store.conversations().stream().map(c -> {
-            if(c.kind().equals("direct")&&(c.id().equals("direct:"+c.agentId())||c.id().startsWith("dm:"))) {
+            if(c.kind().equals("direct")&&(c.id().equals("direct:"+c.agentId())||c.id().startsWith("dm:")) && !store.hasAutomaticTitle(c.id())) {
                 var agent=agents.get(c.agentId()); return new DeviceMessageStore.Conversation(c.id(),agent.name(),c.kind(),c.agentId(),c.agentIds(),c.ownerId());
             }
             if(ChatAccess.personalRoom(c.id())) return new DeviceMessageStore.Conversation(c.id(),c.name(),c.kind(),null,agents.summaries().stream().filter(AgentRegistry.Summary::enabled).map(AgentRegistry.Summary::id).toList(),c.ownerId());

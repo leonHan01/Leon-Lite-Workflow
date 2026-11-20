@@ -71,6 +71,9 @@ public class DeviceMessageStore {
         jdbc.execute("CREATE TABLE IF NOT EXISTS chat_conversation (id VARCHAR(80) PRIMARY KEY,name VARCHAR(60) NOT NULL,kind VARCHAR(16) NOT NULL,agent_id VARCHAR(36),agent_ids VARCHAR(1500) NOT NULL)");
         jdbc.execute("ALTER TABLE chat_conversation ADD COLUMN IF NOT EXISTS owner_id VARCHAR(36)");
         jdbc.execute("ALTER TABLE chat_conversation ADD COLUMN IF NOT EXISTS history_revision BIGINT DEFAULT 0 NOT NULL");
+        jdbc.execute("ALTER TABLE chat_conversation ADD COLUMN IF NOT EXISTS initial_name VARCHAR(60)");
+        jdbc.execute("ALTER TABLE chat_conversation ADD COLUMN IF NOT EXISTS auto_titled BOOLEAN DEFAULT FALSE NOT NULL");
+        jdbc.execute("ALTER TABLE chat_conversation ADD COLUMN IF NOT EXISTS title_retry_at BIGINT DEFAULT 0 NOT NULL");
         jdbc.execute("ALTER TABLE chat_conversation ADD COLUMN IF NOT EXISTS last_clear_request_id VARCHAR(36) DEFAULT '' NOT NULL");
         jdbc.execute("ALTER TABLE chat_conversation ADD COLUMN IF NOT EXISTS last_clear_count BIGINT DEFAULT 0 NOT NULL");
         jdbc.execute("CREATE TABLE IF NOT EXISTS chat_cleared_message (device_id VARCHAR(36) NOT NULL,client_message_id VARCHAR(36) NOT NULL,PRIMARY KEY(device_id,client_message_id))");
@@ -93,6 +96,9 @@ public class DeviceMessageStore {
         jdbc.execute("CREATE INDEX IF NOT EXISTS idx_chat_helper_outreach_due ON chat_helper_outreach(status,due_at)");
     }
     public synchronized List<Conversation> conversations() { return jdbc.query("SELECT * FROM chat_conversation ORDER BY CASE WHEN id='shared' THEN 0 ELSE 1 END,name,id",CONVERSATION); }
+    synchronized boolean hasAutomaticTitle(String id) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("SELECT auto_titled FROM chat_conversation WHERE id=?",Boolean.class,id));
+    }
     public synchronized Conversation conversation(String id) {
         var rows=jdbc.query("SELECT * FROM chat_conversation WHERE id=?",CONVERSATION,id);
         if(rows.isEmpty()) throw failure(HttpStatus.NOT_FOUND,"会话不存在"); return rows.getFirst();
@@ -107,7 +113,7 @@ public class DeviceMessageStore {
     }
     public synchronized Conversation direct(AgentRegistry.Agent agent) { return direct(agent,"direct:"+agent.id()); }
     synchronized Conversation direct(AgentRegistry.Agent agent,String id) {
-        jdbc.update("INSERT INTO chat_conversation(id,name,kind,agent_id,agent_ids) SELECT ?,?,'direct',?,? WHERE NOT EXISTS(SELECT 1 FROM chat_conversation WHERE id=?)",id,agent.name(),agent.id(),agent.id(),id);
+        jdbc.update("INSERT INTO chat_conversation(id,name,kind,agent_id,agent_ids,initial_name) SELECT ?,?,'direct',?,?,? WHERE NOT EXISTS(SELECT 1 FROM chat_conversation WHERE id=?)",id,agent.name(),agent.id(),agent.id(),agent.name(),id);
         return conversation(id);
     }
     public synchronized Conversation createDirect(AgentRegistry.Agent agent,String requestId,String name) {
@@ -119,10 +125,11 @@ public class DeviceMessageStore {
         var existing=jdbc.query("SELECT * FROM chat_conversation WHERE id=?",CONVERSATION,id);
         if(!existing.isEmpty()) {
             var room=existing.getFirst();
-            if(!agent.id().equals(room.agentId())||!name.equals(room.name()))throw failure(HttpStatus.CONFLICT,"相同请求标识不能创建不同对话");
+            String initial=jdbc.queryForObject("SELECT COALESCE(initial_name,name) FROM chat_conversation WHERE id=?",String.class,id);
+            if(!agent.id().equals(room.agentId())||!name.equals(initial))throw failure(HttpStatus.CONFLICT,"相同请求标识不能创建不同对话");
             return room;
         }
-        jdbc.update("INSERT INTO chat_conversation(id,name,kind,agent_id,agent_ids) VALUES(?,?,'direct',?,?)",id,name,agent.id(),agent.id());
+        jdbc.update("INSERT INTO chat_conversation(id,name,kind,agent_id,agent_ids,initial_name) VALUES(?,?,'direct',?,?,?)",id,name,agent.id(),agent.id(),name);
         return conversation(id);
     }
     static String conversationId(Send input) { return input.conversationId()==null||input.conversationId().isBlank()?"shared":input.conversationId(); }

@@ -22,14 +22,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 @SpringBootTest(classes=HelloServiceApplication.class,properties={
     "spring.datasource.url=jdbc:h2:mem:agent-chat-test;DB_CLOSE_DELAY=-1","spring.jpa.hibernate.ddl-auto=create-drop",
-    "leon.workflows.scheduling-enabled=false","leon.agents.dispatch-enabled=false",
+    "leon.workflows.scheduling-enabled=false","leon.agents.dispatch-enabled=false","leon.chat.auto-title-enabled=false",
     "leon.workflows.credential-key=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
     "leon.auth.required=true","leon.auth.admin-origin=https://example.test",
     "leon.auth.token-sha256=1723a753ba41b0b19f3f758eb3226c453b086f5e279abe9e745e0e5534504e69"})
 class AgentChatIntegrationTest {
     @Autowired WebApplicationContext context; @Autowired AgentRegistry agents; @Autowired AgentChatService chat;
     @Autowired DeviceMessageStore store; @Autowired AgentReplyEngine engine; @Autowired JdbcTemplate jdbc;
-    @Autowired AgentContextManager contexts; @Autowired ChatImageService images;
+    @Autowired AgentContextManager contexts; @Autowired ChatImageService images; @Autowired ConversationTitleScheduler titles;
     @Autowired BrowserSessionService sessions; @Autowired ApiTokenInterceptor auth; @Autowired ObjectMapper json;
     @MockitoBean AgentModelClient model;
     private static final String AUTH="Bearer integration-test-token", KEY="test-only-model-key-never-real";
@@ -37,6 +37,61 @@ class AgentChatIntegrationTest {
     @BeforeEach void clean(){jdbc.update("DELETE FROM chat_cleared_message");jdbc.update("DELETE FROM chat_cleared_image");jdbc.update("DELETE FROM chat_context_archive");jdbc.update("DELETE FROM chat_context_operation");jdbc.update("DELETE FROM chat_context_snapshot");jdbc.update("DELETE FROM chat_context_summary");jdbc.update("DELETE FROM chat_context_policy");jdbc.update("DELETE FROM chat_agent_job");jdbc.update("DELETE FROM device_message");jdbc.update("DELETE FROM chat_conversation WHERE id<>'shared'");jdbc.update("DELETE FROM chat_agent");}
     private AgentRegistry.Agent agent(String handle){return agents.save(null,new AgentRegistry.Edit(handle,handle,"openai","test-model","角色 "+handle,true,KEY,null));}
     private DeviceMessageStore.Send send(String room,String text,List<String> ids){return new DeviceMessageStore.Send(UUID.randomUUID().toString(),UUID.randomUUID().toString(),"Mac","macos",text,room,ids);}
+
+    @Test void automaticTitlesOnlyRenameDefaultPrivateConversationsAndKeepCreationIdempotent() throws Exception {
+        var a=agent("writer");String request=UUID.randomUUID().toString();
+        var room=chat.createDirect(a.id(),request,"新对话 · 11-20 10:07");
+        var named=chat.createDirect(a.id(),UUID.randomUUID().toString(),"我的专属名称");
+        var primary=chat.direct(a.id());
+        chat.send(send(room.id(),"请帮我规划运动和美食",List.of()));
+        chat.send(send(named.id(),"我的自定义会话",List.of()));
+        chat.send(send(primary.id(),"如何安排周末活动",List.of()));
+        jdbc.update("UPDATE chat_agent_job SET status='SUCCEEDED'");
+        jdbc.update("UPDATE device_message SET created_at=?",System.currentTimeMillis()-300_000);
+        when(model.complete(any(),anyString(),anyList())).thenAnswer(inv -> { List<Map<String,String>> input=inv.getArgument(2); return input.get(1).get("content").contains("运动")?"运动与美食计划":"周末活动安排"; });
+        titles.runOnce(System.currentTimeMillis());
+        assertEquals("运动与美食计划",store.conversation(room.id()).name());
+        assertEquals("我的专属名称",store.conversation(named.id()).name());
+        assertEquals("周末活动安排",store.conversation(primary.id()).name());
+        assertEquals("周末活动安排",chat.conversations().stream().filter(c->c.id().equals(primary.id())).findFirst().orElseThrow().name());
+        assertEquals(room.id(),chat.createDirect(a.id(),request,"新对话 · 11-20 10:07").id());
+        titles.runOnce(System.currentTimeMillis());
+        verify(model,times(2)).complete(any(),anyString(),anyList());
+    }
+    @Test void automaticTitleDoesNotOverwriteNewMessagesOrRetryImmediatelyAfterFailure() throws Exception {
+        var a=agent("writer");var room=chat.createDirect(a.id(),UUID.randomUUID().toString(),"新对话");
+        chat.send(send(room.id(),"原始问题",List.of()));jdbc.update("UPDATE chat_agent_job SET status='SUCCEEDED'");
+        jdbc.update("UPDATE device_message SET created_at=?",System.currentTimeMillis()-300_000);
+        when(model.complete(any(),anyString(),anyList())).thenAnswer(inv->{chat.send(send(room.id(),"新的问题",List.of()));return "旧标题";});
+        long now=System.currentTimeMillis();titles.runOnce(now);
+        assertEquals("新对话",store.conversation(room.id()).name());
+        jdbc.update("UPDATE chat_agent_job SET status='SUCCEEDED'");jdbc.update("UPDATE device_message SET created_at=?",now-300_000);
+        titles.runOnce(now+300_000);verify(model,times(1)).complete(any(),anyString(),anyList());
+    }
+
+    @Test void automaticTitlePreservesConcurrentRenameAndClear() throws Exception {
+        var a=agent("writer");var room=chat.createDirect(a.id(),UUID.randomUUID().toString(),"新对话");
+        chat.send(send(room.id(),"讨论旅行",List.of()));jdbc.update("UPDATE chat_agent_job SET status='SUCCEEDED'");
+        long now=System.currentTimeMillis();jdbc.update("UPDATE device_message SET created_at=?",now-300_000);
+        when(model.complete(any(),anyString(),anyList())).thenAnswer(inv->{
+            jdbc.update("UPDATE chat_conversation SET name='手动改名',history_revision=history_revision+1 WHERE id=?",room.id());
+            return "旅行计划";
+        });
+        titles.runOnce(now);assertEquals("手动改名",store.conversation(room.id()).name());
+    }
+    @Test void automaticTitleIgnoresEmptyRoomsAndRejectsInvalidModelResults() throws Exception {
+        var a=agent("writer");var empty=chat.createDirect(a.id(),UUID.randomUUID().toString(),"新对话");
+        var primary=chat.direct(a.id());chat.send(send(primary.id(),"已命名的私聊",List.of()));
+        jdbc.update("UPDATE chat_conversation SET name='私聊的自定义名称' WHERE id=?",primary.id());
+        var room=chat.createDirect(a.id(),UUID.randomUUID().toString(),"新对话");
+        chat.send(send(room.id(),"讨论旅行",List.of()));jdbc.update("UPDATE chat_agent_job SET status='SUCCEEDED'");
+        long now=System.currentTimeMillis();jdbc.update("UPDATE device_message SET created_at=?",now-300_000);
+        when(model.complete(any(),anyString(),anyList())).thenReturn("标题\n附加说明");
+        titles.runOnce(now);assertEquals("新对话",store.conversation(room.id()).name());
+        assertEquals("新对话",store.conversation(empty.id()).name());
+        assertEquals("私聊的自定义名称",store.conversation(primary.id()).name());
+        titles.runOnce(now+300_000);verify(model,times(1)).complete(any(),anyString(),anyList());
+    }
 
     @Test void agentDescriptionsPersistWithoutExposingPrivatePrompts() throws Exception {
         var saved=agents.save(null,new AgentRegistry.Edit("写作助手","writer","openai","test-model","私有角色提示词",true,KEY,null,null,null,"帮助梳理思路与润色文字"));
