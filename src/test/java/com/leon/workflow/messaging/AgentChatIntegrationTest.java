@@ -58,6 +58,25 @@ class AgentChatIntegrationTest {
         titles.runOnce(System.currentTimeMillis());
         verify(model,times(2)).complete(any(),anyString(),anyList());
     }
+    @Test void titlesRefreshAfterEveryTenNewUserRoundsAndUseRecentMessages() throws Exception {
+        var a=agent("writer");var room=chat.createDirect(a.id(),UUID.randomUUID().toString(),"自定义名称");
+        long now=System.currentTimeMillis();
+        when(model.complete(any(),anyString(),anyList())).thenReturn("第一次总结","第二次总结");
+        for(int i=1;i<=9;i++)chat.send(send(room.id(),"问题"+i,List.of()));
+        jdbc.update("UPDATE chat_agent_job SET status='SUCCEEDED'");
+        titles.runOnce(now);verify(model,never()).complete(any(),anyString(),anyList());
+        chat.send(send(room.id(),"问题10",List.of()));jdbc.update("UPDATE chat_agent_job SET status='SUCCEEDED'");
+        titles.runOnce(now);assertEquals("第一次总结",store.conversation(room.id()).name());
+        titles.runOnce(now+30_000);verify(model,times(1)).complete(any(),anyString(),anyList());
+        for(int i=11;i<=19;i++)chat.send(send(room.id(),"问题"+i,List.of()));
+        jdbc.update("UPDATE chat_agent_job SET status='SUCCEEDED'");titles.runOnce(now+60_000);
+        verify(model,times(1)).complete(any(),anyString(),anyList());
+        chat.send(send(room.id(),"问题20",List.of()));jdbc.update("UPDATE chat_agent_job SET status='SUCCEEDED'");
+        titles.runOnce(now+90_000);assertEquals("第二次总结",store.conversation(room.id()).name());
+        var inputs=org.mockito.ArgumentCaptor.forClass(List.class);
+        verify(model,times(2)).complete(any(),anyString(),inputs.capture());
+        assertTrue(inputs.getAllValues().get(1).toString().contains("问题20"));
+    }
     @Test void automaticTitleDoesNotOverwriteNewMessagesOrRetryImmediatelyAfterFailure() throws Exception {
         var a=agent("writer");var room=chat.createDirect(a.id(),UUID.randomUUID().toString(),"新对话");
         chat.send(send(room.id(),"原始问题",List.of()));jdbc.update("UPDATE chat_agent_job SET status='SUCCEEDED'");

@@ -74,6 +74,7 @@ public class DeviceMessageStore {
         jdbc.execute("ALTER TABLE chat_conversation ADD COLUMN IF NOT EXISTS initial_name VARCHAR(60)");
         jdbc.execute("ALTER TABLE chat_conversation ADD COLUMN IF NOT EXISTS auto_titled BOOLEAN DEFAULT FALSE NOT NULL");
         jdbc.execute("ALTER TABLE chat_conversation ADD COLUMN IF NOT EXISTS title_retry_at BIGINT DEFAULT 0 NOT NULL");
+        jdbc.execute("ALTER TABLE chat_conversation ADD COLUMN IF NOT EXISTS title_through_id BIGINT DEFAULT 0 NOT NULL");
         jdbc.execute("ALTER TABLE chat_conversation ADD COLUMN IF NOT EXISTS last_clear_request_id VARCHAR(36) DEFAULT '' NOT NULL");
         jdbc.execute("ALTER TABLE chat_conversation ADD COLUMN IF NOT EXISTS last_clear_count BIGINT DEFAULT 0 NOT NULL");
         jdbc.execute("CREATE TABLE IF NOT EXISTS chat_cleared_message (device_id VARCHAR(36) NOT NULL,client_message_id VARCHAR(36) NOT NULL,PRIMARY KEY(device_id,client_message_id))");
