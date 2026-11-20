@@ -25,6 +25,10 @@ public class OfficialAgentModelClient implements AgentModelClient {
     @Autowired public OfficialAgentModelClient(ObjectMapper json,WorkflowModels models,OpenAiExecutor executor,ChatImageService images) { this(json,HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).followRedirects(HttpClient.Redirect.NEVER).build(),models,executor,images); }
     OfficialAgentModelClient(ObjectMapper json,HttpClient http,WorkflowModels models,OpenAiExecutor executor) { this(json,http,models,executor,null); }
     OfficialAgentModelClient(ObjectMapper json,HttpClient http,WorkflowModels models,OpenAiExecutor executor,ChatImageService images) { this.json=json;this.http=http;this.models=models;this.executor=executor;this.images=images; }
+    @Override public Reply reply(AgentRegistry.Agent agent,String key,List<Map<String,String>> messages) throws Exception {
+        if(!agent.imageGenerationEnabled()) return AgentModelClient.super.reply(agent,key,messages);
+        return new OpenAiImageReplyClient(json,http,models,executor,images).reply(agent,key,messages);
+    }
     @Override public String complete(AgentRegistry.Agent agent,String key,List<Map<String,String>> messages) throws Exception {
         boolean openai=agent.provider().equals("openai");
         var body=new LinkedHashMap<String,Object>(); body.put("model",agent.model()); body.put("messages",images==null?messages:images.modelMessages(messages,openai)); body.put("stream",false);
@@ -72,13 +76,16 @@ public class OfficialAgentModelClient implements AgentModelClient {
         return result;
     }
     static final class LimitedBody implements HttpResponse.BodySubscriber<byte[]> {
+        final int limit;
+        LimitedBody(){this(1_048_576);}
+        LimitedBody(int limit){this.limit=limit;}
         final CompletableFuture<byte[]> result=new CompletableFuture<>();
         final ByteArrayOutputStream buffer=new ByteArrayOutputStream(); Flow.Subscription subscription;
         public CompletionStage<byte[]> getBody() { return result; }
         public void onSubscribe(Flow.Subscription value) { subscription=value; value.request(1); }
         public void onNext(List<ByteBuffer> chunks) {
             for(var chunk:chunks) {
-                if ((long)buffer.size()+chunk.remaining()>1_048_576) { subscription.cancel(); result.completeExceptionally(new IllegalStateException("模型响应过大")); return; }
+                if ((long)buffer.size()+chunk.remaining()>limit) { subscription.cancel(); result.completeExceptionally(new IllegalStateException("模型响应过大")); return; }
                 byte[] bytes=new byte[chunk.remaining()]; chunk.get(bytes); buffer.writeBytes(bytes);
             }
             subscription.request(1);

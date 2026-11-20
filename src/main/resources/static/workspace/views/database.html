@@ -1,18 +1,38 @@
 <div class="db-page">
-    <div class="advanced-eyebrow"><span></span> DATABASE</div>
-    <h1>数据库管理<span>.</span></h1>
-    <p class="db-intro">查看数据表和执行只读 SQL 查询。</p>
-    <section class="db-card" aria-labelledby="db-tables-title">
-        <div class="db-heading"><div><h2 id="db-tables-title">数据表</h2><p>大小为字段内容的逻辑字节数，不含索引、压缩和数据库存储开销。统计超时或不支持时显示「—」。</p></div><button type="button" data-db-refresh>刷新</button></div>
-        <p data-db-table-status role="status" aria-live="polite"></p>
-        <div class="db-scroll"><table><thead><tr><th>表名</th><th data-db-sort-column="rows"><button type="button" class="db-sort" data-db-sort="rows">行数 <span aria-hidden="true">↕</span></button></th><th data-db-sort-column="bytes"><button type="button" class="db-sort" data-db-sort="bytes">内容大小 <span aria-hidden="true">↕</span></button></th><th></th></tr></thead><tbody data-db-tables></tbody></table></div>
+    <header class="db-page-header">
+        <div>
+            <div class="db-eyebrow"><span></span> DATA WORKSPACE</div>
+            <h1>数据库管理<span>.</span></h1>
+            <p class="db-intro">浏览数据表，轻松查询工作空间数据。</p>
+        </div>
+        <div class="db-readonly"><span></span>只读模式</div>
+    </header>
+    <section class="db-card db-tables-card" aria-labelledby="db-tables-title">
+        <div class="db-card-head">
+            <div class="db-section-title">
+                <div class="db-section-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><ellipse cx="12" cy="5" rx="7" ry="3"/><path d="M5 5v7c0 1.7 3.1 3 7 3s7-1.3 7-3V5M5 12v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6"/></svg></div>
+                <div><div class="db-section-kicker">TABLES</div><h2 id="db-tables-title">数据表</h2></div>
+            </div>
+            <button class="db-refresh" type="button" data-db-refresh><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M5.7 9A7 7 0 0 1 18 6l2 1M18.3 15A7 7 0 0 1 6 18l-2-1"/></svg>刷新</button>
+        </div>
+        <div class="db-table-meta"><p data-db-table-status role="status" aria-live="polite">正在加载数据表…</p><span>点击表名可填入查询</span></div>
+        <div class="db-scroll db-table-scroll"><table><thead><tr><th scope="col">表名</th><th scope="col" data-db-sort-column="rows"><button type="button" class="db-sort" data-db-sort="rows">行数 <span aria-hidden="true">↕</span></button></th><th scope="col" data-db-sort-column="bytes"><button type="button" class="db-sort" data-db-sort="bytes">内容大小 <span aria-hidden="true">↕</span></button></th></tr></thead><tbody data-db-tables></tbody></table></div>
+        <div class="db-table-foot"><span class="db-info-icon" aria-hidden="true">i</span><span>内容大小为字段的逻辑字节数，不含索引、压缩及存储开销；无法统计时显示「—」。</span></div>
     </section>
-    <section class="db-card" aria-labelledby="db-query-title">
-        <div class="db-heading"><div><h2 id="db-query-title">SQL 查询</h2><p>支持单条 SELECT 或 WITH 查询，最多显示 200 行。点击表名可填入查询。</p></div></div>
-        <label class="db-label" for="db-sql">SQL 语句</label>
-        <textarea id="db-sql" data-db-sql spellcheck="false">SELECT * FROM INFORMATION_SCHEMA.TABLES</textarea>
-        <div class="db-actions"><button type="button" data-db-run>执行查询</button><span>Ctrl / ⌘ + Enter</span></div>
-        <p data-db-query-status role="status" aria-live="polite"></p>
-        <div class="db-scroll"><table data-db-result hidden><thead></thead><tbody></tbody></table></div>
+    <section class="db-card db-query-card" aria-labelledby="db-query-title">
+        <div class="db-card-head">
+            <div class="db-section-title">
+                <div class="db-section-icon db-code-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m8 7-5 5 5 5M16 7l5 5-5 5M14 4l-4 16"/></svg></div>
+                <div><div class="db-section-kicker">QUERY EDITOR</div><h2 id="db-query-title">SQL 查询</h2></div>
+            </div>
+            <span class="db-query-limit">最多 200 行</span>
+        </div>
+        <div class="db-editor">
+            <div class="db-editor-bar"><label for="db-sql">SQL 编辑器</label><span>SELECT / WITH</span></div>
+            <textarea id="db-sql" data-db-sql spellcheck="false">SELECT * FROM INFORMATION_SCHEMA.TABLES</textarea>
+        </div>
+        <div class="db-actions"><button class="db-run" type="button" data-db-run><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13l10-6.5z"/></svg>执行查询</button><span>快捷键 <kbd>Ctrl</kbd> / <kbd>⌘</kbd> + <kbd>Enter</kbd></span></div>
+        <p class="db-query-status" data-db-query-status role="status" aria-live="polite"></p>
+        <div class="db-scroll db-result-scroll"><table data-db-result hidden><thead></thead><tbody></tbody></table></div>
     </section>
 </div>

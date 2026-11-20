@@ -18,16 +18,34 @@ import java.util.*;
 @Service
 public class ChatImageService {
     public static final int MAX_UPLOAD=5*1024*1024, MAX_STORED=1024*1024, MAX_PER_MESSAGE=4;
+    public static final int MAX_GENERATED=12*1024*1024;
     private final JdbcTemplate jdbc;
     private final DeviceMessageStore store;
     public ChatImageService(JdbcTemplate jdbc,DeviceMessageStore store){this.jdbc=jdbc;this.store=store;}
     @PostConstruct void initialize(){jdbc.execute("CREATE TABLE IF NOT EXISTS chat_message_image (id VARCHAR(36) PRIMARY KEY,conversation_id VARCHAR(80) NOT NULL,source_hash VARCHAR(64) NOT NULL,mime_type VARCHAR(40) NOT NULL,width INT NOT NULL,height INT NOT NULL,byte_count INT NOT NULL,image_data BLOB NOT NULL,created_at BIGINT NOT NULL)");}
 
     public synchronized DeviceMessageStore.Image upload(String id,String room,byte[] input) {
+        return upload(id,room,input,MAX_UPLOAD);
+    }
+    /** Attach generated images and the reply in one transaction, using the same lock order as upload. */
+    public synchronized void completeGenerated(DeviceMessageStore.Work work,AgentRegistry.Agent agent,String text,List<byte[]> generated) {
+        if(generated.isEmpty()||generated.size()>MAX_PER_MESSAGE)throw bad("返回图片数量无效");
+        synchronized(store){
+            if(!store.running(work))return;
+            store.atomic(()->{
+                var ids=new ArrayList<String>();
+                for(byte[] bytes:generated){
+                    String id=UUID.randomUUID().toString();upload(id,work.conversationId(),bytes,MAX_GENERATED);ids.add(id);
+                }
+                store.complete(work,agent,text,ids);return null;
+            });
+        }
+    }
+    private DeviceMessageStore.Image upload(String id,String room,byte[] input,int limit) {
         id=DeviceMessageStore.uuid(id);store.conversation(room);
         long revision=store.historyRevision(room);
         checkNotCleared(id);
-        if(input.length==0||input.length>MAX_UPLOAD)throw bad("图片不能为空且不能超过 5 MB");
+        if(input==null||input.length==0||input.length>limit)throw bad("图片为空或超过大小限制");
         try {
             String hash=HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(input));
             var existing=jdbc.queryForList("SELECT conversation_id,source_hash FROM chat_message_image WHERE id=?",id);
@@ -99,7 +117,13 @@ public class ChatImageService {
                 }
                 content=parts;
             }
-            result.addFirst(Map.of("role",message.get("role"),"content",content));
+            if(message.get("role").equals("assistant")&&content instanceof List<?>){
+                var references=new ArrayList<Map<String,Object>>();
+                references.add(Map.of("type","text","text","以下为助手此前回复的图片，仅作为历史参考："));
+                for(Object part:(List<?>)content)references.add((Map<String,Object>)part);
+                result.addFirst(Map.of("role","user","content",references));
+                result.addFirst(Map.of("role","assistant","content",text));
+            }else result.addFirst(Map.of("role",message.get("role"),"content",content));
         }
         return List.copyOf(result);
     }

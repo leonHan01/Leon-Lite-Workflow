@@ -22,6 +22,7 @@ import static com.leon.workflow.automation.WorkflowJson.*;
 @Service
 @DependsOn("workflowStore")
 public class OpenAiExecutor {
+    public static final int IMAGE_RESULT_LIMIT=24*1024*1024;
     private final JdbcTemplate jdbc;
     private final WorkflowModels models;
     private final TransactionTemplate transaction;
@@ -50,6 +51,8 @@ public class OpenAiExecutor {
                   created_at BIGINT NOT NULL,deadline_at BIGINT NOT NULL)
                 """);
         jdbc.execute("ALTER TABLE ai_executor_job ADD COLUMN IF NOT EXISTS chat_user_id VARCHAR(36)");
+        jdbc.execute("ALTER TABLE ai_executor_job ADD COLUMN IF NOT EXISTS api VARCHAR(16) DEFAULT 'chat' NOT NULL");
+        jdbc.execute("ALTER TABLE ai_executor_job ADD COLUMN IF NOT EXISTS tool_model VARCHAR(100) DEFAULT '' NOT NULL");
         jdbc.execute("CREATE INDEX IF NOT EXISTS idx_ai_executor_queue ON ai_executor_job(state,created_at)");
         jdbc.update("UPDATE ai_executor_worker SET ready=FALSE,last_seen=0");
         jdbc.update("UPDATE ai_executor_job SET state='FAILED',error_code='RESTART',request_encrypted='',result_encrypted='' WHERE state IN ('QUEUED','LEASED','RUNNING')");
@@ -94,16 +97,29 @@ public class OpenAiExecutor {
         return execute(body,apiKey,timeoutMs,null);
     }
     public Map<String,Object> execute(Map<String,Object> body,String apiKey,int timeoutMs,String userId) throws InterruptedException {
+        return execute(body,apiKey,timeoutMs,userId,"chat");
+    }
+    public Map<String,Object> executeResponses(Map<String,Object> body,String apiKey,int timeoutMs,String userId) throws InterruptedException {
+        return execute(body,apiKey,timeoutMs,userId,"responses");
+    }
+    private Map<String,Object> execute(Map<String,Object> body,String apiKey,int timeoutMs,String userId,String api) throws InterruptedException {
         requireKey();
         if(!enabled() || !online()) throw new IllegalArgumentException("Mac OpenAI 执行器离线，请先启动执行器后重试");
         String model=required(body.get("model"),"OpenAI 模型无效",100);
         if(!model.matches("[A-Za-z0-9_.:-]{1,100}") || Boolean.TRUE.equals(body.get("stream"))) throw new IllegalArgumentException("执行器仅支持非流式 OpenAI 模型请求");
         if(timeoutMs<100 || timeoutMs>240000 || write(body).getBytes(StandardCharsets.UTF_8).length>16_000_000) throw new IllegalArgumentException("OpenAI 任务超时或请求大小无效");
+        String toolModel="";
+        if(api.equals("responses")&&body.get("tools") instanceof List<?> tools)for(Object value:tools){
+            if(value instanceof Map<?,?> tool&&"image_generation".equals(tool.get("type"))){
+                toolModel=text(tool.get("model"));
+                if(!toolModel.matches("gpt-image-[A-Za-z0-9_.-]{1,90}"))throw new IllegalArgumentException("绘图模型无效");
+            }
+        }
         String id=UUID.randomUUID().toString(); long now=System.currentTimeMillis(),deadline=now+timeoutMs;
         synchronized(this) {
             expire(now);
             if(jdbc.queryForObject("SELECT COUNT(*) FROM ai_executor_job WHERE state IN ('QUEUED','LEASED','RUNNING')",Integer.class)>=32) throw new IllegalArgumentException("Mac 执行器队列已满，请稍后重试");
-            jdbc.update("INSERT INTO ai_executor_job(id,model,state,request_encrypted,created_at,deadline_at,chat_user_id) VALUES(?,?,'QUEUED',?,?,?,?)",id,model,encrypt(id+":request",write(Map.of("body",body,"apiKey",apiKey))),now,deadline,userId);
+            jdbc.update("INSERT INTO ai_executor_job(id,model,state,request_encrypted,created_at,deadline_at,chat_user_id,api,tool_model) VALUES(?,?,'QUEUED',?,?,?,?,?,?)",id,model,encrypt(id+":request",write(Map.of("body",body,"apiKey",apiKey,"api",api))),now,deadline,userId,api,toolModel);
         }
         try {
             while(System.currentTimeMillis()<deadline) {
@@ -137,12 +153,14 @@ public class OpenAiExecutor {
             throw failure(HttpStatus.CONFLICT,"任务租约已失效，不得调用 OpenAI");
     }
     public synchronized void complete(String worker,String id,String lease,Map<String,Object> result) {
-        if(write(result).getBytes(StandardCharsets.UTF_8).length>1_040_000) throw failure(HttpStatus.PAYLOAD_TOO_LARGE,"执行结果过大");
+        int size=write(result).getBytes(StandardCharsets.UTF_8).length;
+        if(size>IMAGE_RESULT_LIMIT) throw failure(HttpStatus.PAYLOAD_TOO_LARGE,"执行结果过大");
         transaction.executeWithoutResult(status->{
             var rows=jdbc.queryForList("SELECT * FROM ai_executor_job WHERE id=? FOR UPDATE",id);
             if(rows.isEmpty()) throw failure(HttpStatus.NOT_FOUND,"任务不存在"); var row=rows.getFirst();
             if(!worker.equals(row.get("worker_id")) || !MessageDigest.isEqual(hash(lease).getBytes(StandardCharsets.US_ASCII),text(row.get("lease_hash")).getBytes(StandardCharsets.US_ASCII))) throw failure(HttpStatus.CONFLICT,"任务租约不匹配");
             if(Boolean.TRUE.equals(row.get("reported"))) return;
+            if(!"responses".equals(row.get("api"))&&size>1_040_000)throw failure(HttpStatus.PAYLOAD_TOO_LARGE,"执行结果过大");
             if(!Set.of("RUNNING","CANCELLED","EXPIRED","FAILED").contains(text(row.get("state")))) throw failure(HttpStatus.CONFLICT,"任务尚未开始");
             boolean active="RUNNING".equals(row.get("state")) && ((Number)row.get("deadline_at")).longValue()>System.currentTimeMillis();
             String code=text(result.get("errorCode"));
@@ -154,7 +172,8 @@ public class OpenAiExecutor {
             if(httpStatus>=200 && httpStatus<300){
                 String model=text(row.get("model"));
                 String user=(String)row.get("chat_user_id");
-                if(user==null)models.recordUsage("openai",model,body.get("usage"));
+                if("responses".equals(row.get("api")))models.recordOpenAiResponseUsage(model,body,text(row.get("tool_model")),user);
+                else if(user==null)models.recordUsage("openai",model,body.get("usage"));
                 else models.recordUsage("openai",model,body.get("usage"),user);
             }
             // Never retain raw provider error bodies, which may echo credentials.

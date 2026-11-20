@@ -27,11 +27,15 @@ def configured(content):
         block = content[start:end]
         if 'proxy_buffering off;' not in block or 'proxy_request_buffering off;' not in block:
             raise RuntimeError('unsafe executor buffering; configuration preserved')
+        if 'client_max_body_size 1100k;' in block:
+            return content[:start] + block.replace('client_max_body_size 1100k;', 'client_max_body_size 25m;') + content[end:]
+        if 'client_max_body_size 25m;' not in block:
+            raise RuntimeError('unexpected executor body limit; configuration preserved')
         return content
     if MARKER in content or content.count(ANCHOR) != 1:
         raise RuntimeError('unexpected proxy layout; configuration preserved')
     block = MARKER + '''        location ~ ^/api/(ai-executor|ai-executor-admin)(/|$) {
-            client_max_body_size 1100k;
+            client_max_body_size 25m;
             proxy_buffering off;
             proxy_request_buffering off;
             proxy_pass http://127.0.0.1:80;

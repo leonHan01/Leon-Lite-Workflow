@@ -92,7 +92,39 @@ class OfficialAgentModelClientTest {
         subscriber.onSubscribe(subscription);subscriber.onNext(List.of(ByteBuffer.wrap(new byte[1_048_577])));
         assertTrue(subscriber.result.isCompletedExceptionally());verify(subscription).cancel();
     }
-    private String body(HttpRequest request) {
+    @Test void drawingUsesMacResponsesWhileSummariesStayOnTextEndpoint() throws Exception {
+        var http=mock(HttpClient.class);var models=mock(WorkflowModels.class);var executor=mock(OpenAiExecutor.class);
+        when(executor.enabled()).thenReturn(true);
+        when(executor.executeResponses(anyMap(),eq("test-secret"),eq(240000),isNull())).thenReturn(Map.of("status",200,"body",Map.of("status","completed","output",List.of(Map.of("type","message","content",List.of(Map.of("type","output_text","text","普通聊天 test-secret")))))));
+        when(executor.execute(anyMap(),eq("test-secret"),eq(180000))).thenReturn(Map.of("status",200,"body",Map.of("choices",List.of(Map.of("finish_reason","stop","message",Map.of("content","摘要"))))));
+        var client=new OfficialAgentModelClient(json,http,models,executor);
+        var agent=new AgentRegistry.Agent("id","name","handle","openai","gpt-6.1-sol","",true,true,1,"alfred",null,"",true,AgentRegistry.DEFAULT_IMAGE_MODEL);
+        assertEquals("普通聊天 [已隐藏凭据]",client.reply(agent,"test-secret",List.of(Map.of("role","user","content","你好"))).text());
+        assertEquals("摘要",client.complete(agent,"test-secret",List.of(Map.of("role","user","content","总结"))));
+        var request=org.mockito.ArgumentCaptor.forClass(Map.class);verify(executor).executeResponses(request.capture(),eq("test-secret"),eq(240000),isNull());
+        assertTrue(request.getValue().containsKey("tools"));assertFalse(request.getValue().containsKey("messages"));
+        var summary=org.mockito.ArgumentCaptor.forClass(Map.class);verify(executor).execute(summary.capture(),eq("test-secret"),eq(180000));assertFalse(summary.getValue().containsKey("tools"));
+        verifyNoInteractions(http,models);
+    }
+    @Test void invalidImagesIncompleteRepliesAndProviderErrorsNeverBecomeSuccessfulMessages() throws Exception {
+        var executor=mock(OpenAiExecutor.class);when(executor.enabled()).thenReturn(true);
+        var client=new OfficialAgentModelClient(json,mock(HttpClient.class),mock(WorkflowModels.class),executor);
+        var agent=new AgentRegistry.Agent("id","name","handle","openai","gpt-6.1-sol","",true,true,1,"alfred",null,"",true,AgentRegistry.DEFAULT_IMAGE_MODEL);
+        for(Map<String,Object> payload:List.<Map<String,Object>>of(
+                Map.of("status","incomplete","output",List.of()),
+                Map.of("status","completed","output",List.of(Map.of("type","image_generation_call","status","completed","result","not base64!"))),
+                Map.of("status","completed","output",List.of(Map.of("type","image_generation_call","status","failed","result","YWJj"))),
+                Map.of("status","completed","output",List.of()))){
+            when(executor.executeResponses(anyMap(),anyString(),anyInt(),isNull())).thenReturn(Map.of("status",200,"body",payload));
+            assertThrows(AgentModelClient.Failure.class,()->client.reply(agent,"test-secret",List.of()));
+        }
+        when(executor.executeResponses(anyMap(),anyString(),anyInt(),isNull())).thenReturn(Map.of("status",403,"body",Map.of("error","test-secret")));
+        var failure=assertThrows(AgentModelClient.Failure.class,()->client.reply(agent,"test-secret",List.of()));assertFalse(failure.getMessage().contains("test-secret"));
+        when(executor.executeResponses(anyMap(),anyString(),anyInt(),isNull())).thenReturn(Map.of("status",200,"body",Map.of("status","completed","output",List.of(Map.of("type","message","content",List.of(Map.of("type","refusal","refusal","请换一个图片主题。")))))));
+        assertEquals("请换一个图片主题。",client.reply(agent,"test-secret",List.of()).text());
+    }
+    private String body(HttpRequest request) { return requestBody(request); }
+    static String requestBody(HttpRequest request) {
         var result=new CompletableFuture<String>();var bytes=new ByteArrayOutputStream();
         request.bodyPublisher().orElseThrow().subscribe(new Flow.Subscriber<ByteBuffer>() {
             public void onSubscribe(Flow.Subscription subscription){subscription.request(Long.MAX_VALUE);}

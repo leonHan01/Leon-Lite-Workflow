@@ -36,10 +36,13 @@ export function mount(root) {
             const tr = document.createElement('tr');
             const name = document.createElement('td');
             const button = document.createElement('button'); button.type = 'button'; button.className = 'db-table-link';
-            button.textContent = table.schema + '.' + table.name;
+            const icon = document.createElement('span'); icon.className = 'db-table-icon'; icon.setAttribute('aria-hidden', 'true');
+            const text = document.createElement('span'); text.className = 'db-table-name';
+            const schema = document.createElement('span'); schema.className = 'db-table-schema'; schema.textContent = table.schema + '.';
+            text.append(schema, document.createTextNode(table.name)); button.append(icon, text);
             button.addEventListener('click', () => { sql.value = 'SELECT * FROM ' + identifier(table.schema) + '.' + identifier(table.name); sql.focus(); });
             name.append(button); tr.append(name);
-            for (const text of [table.rows == null ? '—' : number.format(table.rows), bytes(table.bytes), '']) {
+            for (const text of [table.rows == null ? '—' : number.format(table.rows), bytes(table.bytes)]) {
                 const cell = document.createElement('td'); cell.textContent = text; tr.append(cell);
             }
             tbody.append(tr);

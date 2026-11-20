@@ -60,11 +60,21 @@ public class WorkflowModels {
     public void recordUsage(String provider,String model,Object rawUsage){
         recordUsage(provider,model,rawUsage,null);
     }
+    /** Image tool usage is tracked separately; absent usage stays unreported rather than estimated. */
+    @Transactional
+    public void recordOpenAiResponseUsage(String model,Map<?,?> response,String imageModel,String userId){
+        recordUsage("openai",model,response.get("usage"),userId);
+        if(imageModel==null||imageModel.isBlank())return;
+        if(response.get("output") instanceof List<?> output)for(Object value:output){
+            if(value instanceof Map<?,?> item&&"image_generation_call".equals(item.get("type")))
+                recordUsage("openai",imageModel,item.get("usage"),userId);
+        }
+    }
     @Transactional
     public void recordUsage(String provider,String model,Object rawUsage,String userId){
         if (!Set.of("deepseek","openai").contains(provider) || !model.matches("[A-Za-z0-9_.:-]{1,100}")) throw new IllegalArgumentException("模型用量标识无效");
         var usage=rawUsage instanceof Map<?,?> map?map:Map.of();
-        Long input=tokenCount(usage.get("prompt_tokens")), output=tokenCount(usage.get("completion_tokens"));
+        Long input=tokenCount(usage.get(usage.containsKey("prompt_tokens")?"prompt_tokens":"input_tokens")), output=tokenCount(usage.get(usage.containsKey("completion_tokens")?"completion_tokens":"output_tokens"));
         Long total=tokenCount(usage.get("total_tokens"));
         boolean reported=input!=null && output!=null;
         if (reported) {

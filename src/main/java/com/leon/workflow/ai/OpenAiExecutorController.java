@@ -17,12 +17,16 @@ public class OpenAiExecutorController {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN,"请通过管理页面配置 AI 执行器");
     }
     private String worker(HttpServletRequest request) {
-        if(request.getContentLengthLong()>1_100_000) throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE,"执行器请求过大");
+        checkSize(request);
         return executor.authenticate(request.getHeader("Authorization"));
     }
     @ModelAttribute void authorize(HttpServletRequest request) {
-        if(request.getContentLengthLong()>1_100_000) throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE,"执行器请求过大");
+        checkSize(request);
         if(request.getRequestURI().startsWith("/api/ai-executor/")) worker(request); else admin(request);
+    }
+    private void checkSize(HttpServletRequest request){
+        int limit=request.getRequestURI().matches("/api/ai-executor/jobs/[A-Za-z0-9-]+/complete")?OpenAiExecutor.IMAGE_RESULT_LIMIT+4096:1_100_000;
+        if(request.getContentLengthLong()>limit)throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE,"执行器请求过大");
     }
     @GetMapping("/api/ai-executor-admin") public ResponseEntity<?> status(HttpServletRequest request) { admin(request);return result(executor.status()); }
     @PostMapping("/api/ai-executor-admin/workers") public ResponseEntity<?> register(@RequestBody Map<String,Object> body,HttpServletRequest request) { admin(request);return result(executor.register(text(body.get("name")))); }

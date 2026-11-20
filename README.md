@@ -342,6 +342,18 @@ OpenAI 默认模型为 `gpt-6.1-sol`，在统一模型配置的「模型名称�
 
 ## Leon 消息客户端与 Agent 工作台
 
+### 同一 Agent 聊天与 GPT Image 绘图（2026-11-21）
+
+Agent 管理页可为 OpenAI Agent 开启「允许此 Agent 绘图」，指定独立的 GPT Image 模型（默认 `gpt-image-2.5-flare`）。原对话模型需支持 Responses API 的 `image_generation` 工具，通常为 GPT-5 及更新模型；复用该 Agent 的 OpenAI API Key，不需要新建另一个 Agent。所有旧 Agent 默认关闭绘图，旧管理请求省略新字段时保留已有设置。
+
+开启后，仅交互回复使用 Responses API，由对话模型根据最新用户请求自动选择文字回复或生成 / 修改图片，每次最多调用一次工具。历史生成图作为图片参考重新附带，最近最多 8 张；摘要压缩、自动标题、归档总结与其他后台文字调用继续走原文字接口，不开启绘图工具。用量兼容 Responses 的 `input_tokens` / `output_tokens`，图片工具用量按独立绘图模型记录；未返回时记为未报告，不猜测费用。
+
+生成图经现有附件规则规范化为最长边 1600 像素、每张最多 1 MB 的 JPEG（不保留透明背景或高清原文件），与 Agent 回复在同一事务中保存，沿用会话权限、历史同步、备份和清空。Mac / Android / iOS 无需修改附件展示协议。失败不自动重试付费调用；手动重试沿用原回复任务，结果重复确认不重复记账。
+
+服务端和 Mac 执行器均支持固定的官方 Responses 端点；图片响应仅在 Responses 任务放宽到 24 MB，文字任务继续保留原限额。上线需按既有部署流程升级服务端，更新 Mac 安装的 `scripts/mac_ai_executor.py`，并在服务器运行新版 `scripts/install_ai_executor_proxy.py` 将受限执行器回传路由升级至 25 MB。代理配置升级会备份并验证，不扩展其他 API 路径。未升级的执行器不能执行绘图任务。
+
+本次只修改本地源码并构建、测试，未部署或重启线上服务、未替换运行中的 Mac 执行器。官方协议参考：[图片生成指南](https://developers.openai.com/api/docs/guides/image-generation)。
+
 新增管理页面 `/workspace/agents.html`，从工作空间侧栏的「Agent 工作台」进入。配置显示名称、唯一 `@handle`、OpenAI / DeepSeek、模型 ID、系统提示词、独立 API Key 以及启用状态。配置 API `/api/agent-admin` 只接受管理页面 Cookie，会话写入沿用准确 Origin 和 `X-Requested-With` 校验；客户端 Bearer 不能配置 Agent 或读取提示词、Key。API Key 加密保存在 `chat_agent` 表，复用已有 `LEON_WORKFLOW_CREDENTIAL_KEY`，不得重新生成或轮换原密钥。编辑时 Key 不回显，留空保留；切换 provider 必须填写新 Key。
 
 客户端目录为 `/Users/leon/Documents/ChatGPT/LeonApp`。macOS / Android 支持 Agent 私聊、创建群聊、选择 @Agent 和回复失败重试；页面另提供「聊天测试」。现有单所有者认证不变，私聊和群聊同步到同一令牌下的所有设备，没有新增多用户账号系统。

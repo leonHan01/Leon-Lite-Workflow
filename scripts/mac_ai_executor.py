@@ -23,12 +23,14 @@ import urllib.parse
 import urllib.request
 
 API = 'https://api.openai.com/v1/chat/completions'
+RESPONSES_API = 'https://api.openai.com/v1/responses'
 HOME = pathlib.Path.home()
 DIRECTORY = HOME / 'Library/Application Support/Leon Workflow/ai-executor'
 CONFIG = HOME / '.config/leon-workflow/ai-executor/config.json'
 PLIST = HOME / 'Library/LaunchAgents/com.leon.workflow.ai-executor.plist'
 LABEL = 'com.leon.workflow.ai-executor'
 LIMIT = 1_048_576
+IMAGE_RESULT_LIMIT = 24 * 1024 * 1024
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -111,26 +113,28 @@ def invoke_openai(job):
         return {'errorCode': 'REPLY_TIMEOUT'}
     key = job['apiKey']
     body = job['body']
-    if body.get('stream') is not False or not isinstance(body.get('messages'), list):
+    api = job.get('api', 'chat')
+    if api not in ('chat', 'responses') or body.get('stream') is not False or not isinstance(body.get('input' if api == 'responses' else 'messages'), list):
         return {'errorCode': 'INVALID_RESPONSE'}
+    limit = IMAGE_RESULT_LIMIT if api == 'responses' else LIMIT
     try:
-        request = urllib.request.Request(API, data=json.dumps(body, ensure_ascii=False).encode('utf-8'), headers={
+        request = urllib.request.Request(RESPONSES_API if api == 'responses' else API, data=json.dumps(body, ensure_ascii=False).encode('utf-8'), headers={
             'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json'})
         try:
-            response = opener().open(request, timeout=max(1, min(180, remaining)))
+            response = opener().open(request, timeout=max(1, min(230 if api == 'responses' else 180, remaining)))
         except urllib.error.HTTPError as error:
             # Do not read/store provider error text, which could contain secrets.
             error.close()
             return {'status': error.code, 'body': {}}
         with response:
-            raw = response.read(LIMIT + 1)
-            if len(raw) > LIMIT:
+            raw = response.read(limit + 1)
+            if len(raw) > limit:
                 return {'errorCode': 'TOO_LARGE'}
             payload = json.loads(raw)
             if not isinstance(payload, dict):
                 return {'errorCode': 'INVALID_RESPONSE'}
             cleaned = redact(payload, key)
-            if len(json.dumps(cleaned, ensure_ascii=False).encode('utf-8')) > 1_000_000:
+            if len(json.dumps(cleaned, ensure_ascii=False).encode('utf-8')) > (limit - 4096 if api == 'responses' else 1_000_000):
                 return {'errorCode': 'TOO_LARGE'}
             return {'status': response.status, 'body': cleaned}
     except ssl.SSLError:

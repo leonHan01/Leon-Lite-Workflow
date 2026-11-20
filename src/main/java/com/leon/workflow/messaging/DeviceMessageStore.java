@@ -295,9 +295,17 @@ public class DeviceMessageStore {
         return work;
     }
     public synchronized void complete(Work work,AgentRegistry.Agent agent,String text) {
+        complete(work,agent,text,List.of());
+    }
+    synchronized boolean running(Work work){
+        return jdbc.queryForObject("SELECT COUNT(*) FROM chat_agent_job WHERE message_id=? AND agent_id=? AND status='RUNNING'",Integer.class,work.messageId(),work.agentId())==1;
+    }
+    synchronized void complete(Work work,AgentRegistry.Agent agent,String text,List<String> imageIds) {
         transaction.executeWithoutResult(status->{
-            if(!"RUNNING".equals(jdbc.queryForObject("SELECT status FROM chat_agent_job WHERE message_id=? AND agent_id=?",String.class,work.messageId(),work.agentId()))) return;
-            jdbc.update("INSERT INTO device_message(client_message_id,device_id,sender,platform,body,created_at,conversation_id,message_role,agent_id,reply_to) VALUES(?,?,?,?,?,?,?,'assistant',?,?)",UUID.randomUUID().toString(),agent.id(),agent.name(),"agent",text,System.currentTimeMillis(),work.conversationId(),agent.id(),work.messageId());
+            if(!running(work)) return;
+            if(imageIds.size()>ChatImageService.MAX_PER_MESSAGE)throw bad("返回图片过多");
+            for(String id:imageIds)if(jdbc.queryForObject("SELECT COUNT(*) FROM chat_message_image WHERE id=? AND conversation_id=?",Integer.class,id,work.conversationId())!=1)throw bad("回复图片不属于当前会话");
+            jdbc.update("INSERT INTO device_message(client_message_id,device_id,sender,platform,body,created_at,conversation_id,message_role,agent_id,reply_to,image_ids,user_id) VALUES(?,?,?,?,?,?,?,'assistant',?,?,?,?)",UUID.randomUUID().toString(),agent.id(),agent.name(),"agent",text,System.currentTimeMillis(),work.conversationId(),agent.id(),work.messageId(),String.join(",",imageIds),work.userId());
             jdbc.update("UPDATE chat_agent_job SET status='SUCCEEDED',error='' WHERE message_id=? AND agent_id=?",work.messageId(),work.agentId());
         });
     }

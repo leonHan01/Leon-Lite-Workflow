@@ -18,7 +18,19 @@ export function mount(root) {
     const dialog = $('conversation-dialog');
     const status = text => { (dialog.open ? $('dialog-status') : $('status')).textContent = text; };
     $('dialog-close').onclick = () => dialog.close();
-    dialog.addEventListener('close', () => { $('dialog-status').textContent = ''; });
+    let backdropPress = false;
+    function onBackdrop(event) {
+        const bounds = dialog.getBoundingClientRect();
+        return event.target === dialog && (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom);
+    }
+    dialog.addEventListener('pointerdown', event => { backdropPress = onBackdrop(event); });
+    dialog.addEventListener('pointercancel', () => { backdropPress = false; });
+    dialog.addEventListener('click', event => {
+        const close = backdropPress && onBackdrop(event);
+        backdropPress = false;
+        if (close) dialog.close();
+    });
+    dialog.addEventListener('close', () => { backdropPress = false; $('dialog-status').textContent = ''; });
     const userPath = () => base + '/' + encodeURIComponent(user.id);
     function empty(container, title, detail) {
         const state = el('div', null, 'users-empty users-empty-compact');

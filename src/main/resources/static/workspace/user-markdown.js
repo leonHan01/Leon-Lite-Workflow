@@ -1,4 +1,32 @@
-import { marked } from './vendor/marked.esm.js';
+import { Marked } from './vendor/marked.esm.js';
+import katex from './vendor/katex/katex.mjs';
+
+// Recognize math before Markdown consumes backslash delimiters, without touching code spans.
+const markdown = new Marked({ gfm:true, breaks:true, extensions:[
+    {
+        name:'displayMath', level:'block',
+        start(src) { const match = /(?:^|\n) {0,3}(?:\\\[|\$\$)/.exec(src); return match ? match.index + (match[0].startsWith('\n') ? 1 : 0) : undefined; },
+        tokenizer(src) {
+            const match = /^ {0,3}(?:\\\[([\s\S]+?)\\\]|\$\$([\s\S]+?)\$\$)[ \t]*(?:\n|$)/.exec(src);
+            return match ? {type:'displayMath',raw:match[0],text:match[1] ?? match[2]} : undefined;
+        }
+    },
+    {
+        name:'inlineMath', level:'inline',
+        start(src) { const index = src.search(/\\\[|\\\(|\$/); return index < 0 ? undefined : index; },
+        tokenizer(src) {
+            let match = /^(?:\\\[([\s\S]+?)\\\]|\$\$([\s\S]+?)\$\$)/.exec(src);
+            if (match) return {type:'displayMath',raw:match[0],text:match[1] ?? match[2]};
+            match = /^\\\(([\s\S]+?)\\\)/.exec(src);
+            if (match) return {type:'inlineMath',raw:match[0],text:match[1]};
+            // Require non-space delimiters and reject a closing dollar followed by a digit,
+            // so ordinary prices such as "$5 and $10" remain text.
+            match = /^\$(?!\$|\s)([^\n$`]*?[^\s\\`])\$(?!\$|\d)/.exec(src);
+            if (match && /^\d/.test(match[1]) && /[\u3400-\u9fff，。！？；：]/.test(match[1])) return undefined;
+            return match ? {type:'inlineMath',raw:match[0],text:match[1]} : undefined;
+        }
+    }
+] });
 
 // Render parsed tokens as DOM nodes so conversation text cannot inject HTML.
 const entity = document.createElement('textarea');
@@ -14,6 +42,14 @@ function url(value, image = false) {
         return (image ? ['http:', 'https:'] : ['http:', 'https:', 'mailto:']).includes(result.protocol) ? result.href : null;
     } catch { return null; }
 }
+function appendMath(parent, text, raw, displayMode) {
+    const node = document.createElement('span');
+    node.className = displayMode ? 'users-math-block' : 'users-math-inline';
+    try {
+        katex.render(text, node, {displayMode, throwOnError:true, trust:false, maxExpand:300, maxSize:10});
+        parent.append(node);
+    } catch { parent.append(document.createTextNode(raw)); }
+}
 function appendTokens(parent, tokens) {
     for (const token of tokens || []) {
         let node;
@@ -27,8 +63,10 @@ function appendTokens(parent, tokens) {
             case 'html': parent.append(document.createTextNode(token.text || token.raw)); break;
             case 'br': parent.append(document.createElement('br')); break;
             case 'hr': parent.append(document.createElement('hr')); break;
+            case 'displayMath': case 'inlineMath': appendMath(parent, token.text, token.raw, token.type === 'displayMath'); break;
             case 'codespan': node = document.createElement('code'); node.textContent = token.text; parent.append(node); break;
             case 'code':
+                if (/^(?:math|latex)$/i.test((token.lang || '').trim())) { appendMath(parent, token.text, token.raw, true); break; }
                 node = document.createElement('pre');
                 { const code = document.createElement('code'); code.textContent = token.text; node.append(code); }
                 parent.append(node); break;
@@ -75,6 +113,6 @@ function appendTokens(parent, tokens) {
 }
 export function renderUserMarkdown(target, text) {
     target.replaceChildren();
-    try { appendTokens(target, marked.lexer(text || '', { gfm:true, breaks:true })); }
+    try { appendTokens(target, markdown.lexer(text || '')); }
     catch { target.textContent = text || ''; }
 }

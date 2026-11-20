@@ -10,7 +10,11 @@ let background = {background:'喜欢简洁的回答',version:1};
 const markdown = [
     '## 推荐方案', '', '**重点** 与 `code`，还有 [安全链接](https://example.com) 和 [危险链接](javascript:alert(1))。', '',
     '- 列表一', '- 列表二', '', '> 一段引用', '', '| 名称 | 值 |', '| --- | --- |', '| 一 | 二 |', '',
-    '```js', 'const x = "<tag>";', '```', '', '<img src=x onerror="window.markdownXss=1">', '', '![不安全图片](javascript:alert(1))', '', '&lt;hello&gt;'
+    '```js', 'const x = "<tag>";', '```', '', '<img src=x onerror="window.markdownXss=1">', '', '![不安全图片](javascript:alert(1))', '', '&lt;hello&gt;', '',
+    '行内公式 \\(f(t)\\) 与 $x_i^2$；价格 $5 和 $10，代码 `$x$`。', '',
+    '\\[', 'F(\\omega)=\\int_{-\\infty}^{\\infty} f(t)e^{-i\\omega t}\\,dt', '\\]', '',
+    '$$\\sum_{i=1}^{n}x_i$$', '', '```latex', '\\frac{a}{b}', '```', '',
+    '非法公式：$\\notacommand$。不安全公式：$\\href{javascript:alert(1)}{危险公式}$。'
 ].join('\n');
 const server = http.createServer(async (req,res) => {
     const url = new URL(req.url, 'http://localhost');
@@ -31,7 +35,7 @@ const server = http.createServer(async (req,res) => {
     }
     const file = path.resolve(root, '.' + decodeURIComponent(url.pathname));
     if (!file.startsWith(root + path.sep)) { res.writeHead(403); return res.end(); }
-    try { const bytes=fs.readFileSync(file); res.writeHead(200, {'Content-Type':file.endsWith('.js')?'application/javascript':file.endsWith('.css')?'text/css':'text/html; charset=utf-8'}); res.end(bytes); }
+    try { const bytes=fs.readFileSync(file); res.writeHead(200, {'Content-Type':/\.(js|mjs)$/.test(file)?'application/javascript':file.endsWith('.css')?'text/css':file.endsWith('.woff2')?'font/woff2':'text/html; charset=utf-8'}); res.end(bytes); }
     catch { res.writeHead(404); res.end(); }
 });
 (async () => {
@@ -53,13 +57,31 @@ const server = http.createServer(async (req,res) => {
         assert.equal(await dialog.locator('img').count(), 0);
         assert.equal(await page.evaluate(() => window.markdownXss), undefined);
         assert.ok((await dialog.locator('.users-markdown').textContent()).includes('<hello>'));
+        const math = dialog.locator('.users-markdown .katex');
+        const formulas = await math.locator('annotation').allTextContents();
+        for (const formula of ['f(t)', 'x_i^2', 'F(\\omega)=\\int_{-\\infty}^{\\infty} f(t)e^{-i\\omega t}\\,dt', '\\sum_{i=1}^{n}x_i', '\\frac{a}{b}'])
+            assert.equal(formulas.filter(value => value.trim() === formula).length, 1, formula);
+        assert.equal(await dialog.locator('.users-markdown .katex-display').count(), 3);
+        assert.ok((await dialog.locator('.users-markdown').textContent()).includes('价格 $5 和 $10'));
+        assert.equal(await dialog.locator('.users-markdown code').filter({hasText:'$x$'}).count(), 1);
+        assert.ok((await dialog.locator('.users-markdown').textContent()).includes('$\\notacommand$'));
+        assert.equal(await dialog.locator('.users-markdown a[href^="javascript:"]').count(), 0);
+        await page.evaluate(() => document.fonts.ready);
+        assert.equal(await page.evaluate(() => [...document.fonts].some(font => font.family === 'KaTeX_Main' && font.status === 'loaded')), true);
         await dialog.getByRole('button',{name:'加载更早消息'}).click(); await dialog.getByText('更早的消息').waitFor();
         await page.keyboard.press('Escape'); assert.equal(await dialog.count(), 0); assert.equal(await conversation.evaluate(el => document.activeElement === el), true);
+        await conversation.click(); await dialog.getByRole('heading',{name:'推荐方案'}).waitFor();
+        const desktopRect = await dialog.boundingBox();
+        await page.mouse.click(desktopRect.x + 30, desktopRect.y + 30); assert.equal(await dialog.count(), 1);
+        await page.mouse.move(desktopRect.x + 150, desktopRect.y + 150); await page.mouse.down(); await page.mouse.move(5, 5); await page.mouse.up();
+        assert.equal(await dialog.count(), 1);
+        await page.mouse.click(5, 5); assert.equal(await dialog.count(), 0);
         await conversation.click(); await dialog.getByRole('heading',{name:'推荐方案'}).waitFor();
         await page.setViewportSize({width:390,height:844});
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 2), false);
         const rect = await dialog.boundingBox(); assert.ok(rect.width <= 390 && rect.height <= 844);
-        await dialog.getByRole('button',{name:'关闭会话详情'}).click();
+        await page.mouse.click(5, 5); assert.equal(await dialog.count(), 0);
+        await conversation.click(); await dialog.getByRole('button',{name:'关闭会话详情'}).click();
         await page.locator('[data-background]').fill('喜欢摄影'); await page.getByRole('button',{name:'保存背景'}).click();
         await page.getByText('已保存；后续对话会使用这份背景。').waitFor(); assert.equal(background.background,'喜欢摄影');
         await page.getByRole('button',{name:'分析用户画像'}).click(); await page.getByText('偏好清晰的建议。').waitFor();

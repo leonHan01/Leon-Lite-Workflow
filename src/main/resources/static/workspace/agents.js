@@ -85,7 +85,13 @@ function modelHint() {
     const profile = models.find(m => m.id === $('modelId').value);
     $('modelHint').textContent = profile ? `${profile.provider === 'openai' ? 'OpenAI' : 'DeepSeek'} · ${profile.model}。复用模型凭据；修改模型配置会同步影响此 Agent。${profile.enabled ? '' : '所选模型已停用，请重新选择。'}`
         : editing && !editing.modelId ? '现有独立配置仍可使用。选择已保存的模型后，将改用统一模型与凭据。' : models.some(m => m.enabled) ? '请选择一个可用模型，无需另填 API Key。' : '还没有可用模型，请先在模型配置中添加并启用。';
+    const provider = profile?.provider || (editing && !editing.modelId ? editing.provider : '');
+    $('imageGenerationEnabled').disabled = provider !== 'openai';
+    if (provider !== 'openai') $('imageGenerationEnabled').checked = false;
+    imageOptions();
 }
+function imageOptions() { $('imageModelOptions').hidden = !$('imageGenerationEnabled').checked; $('imageModel').required = $('imageGenerationEnabled').checked; }
+$('imageGenerationEnabled').onchange = imageOptions;
 $('modelId').onchange = modelHint;
 $('reloadModels').onclick = async () => { try { await loadAgents(); notice('模型列表已刷新。'); } catch (error) { notice(error.message, true); } };
 const appMessenger = mountAppMessenger(pane, {api, avatarImage, loadDirectory: async () => { await loadAgents(); await refreshConversations(); return {agents, conversations}; }});
@@ -96,6 +102,8 @@ function resetForm(agent = null) {
     selectAvatar(agent?.avatarId || 'alfred');
     for (const key of ['name', 'handle', 'description', 'systemPrompt']) $(key).value = agent?.[key] || '';
     modelOptions(agent?.modelId || ''); $('enabled').checked = agent?.enabled ?? true;
+    $('imageGenerationEnabled').checked = agent?.imageGenerationEnabled ?? false;
+    $('imageModel').value = agent?.imageModel || 'gpt-image-2.5-flare'; modelHint();
     $('formTitle').textContent = agent ? `编辑 ${agent.name}` : '新建 Agent';
     renderAgents();
 }
@@ -125,6 +133,7 @@ $('agentForm').onsubmit = async event => {
     if ($('modelId').value) body.modelId = $('modelId').value;
     if (uploadingAvatar) return; body.avatarId = selectedAvatarId;
     body.enabled = $('enabled').checked; body.version = editing?.version;
+    body.imageGenerationEnabled = $('imageGenerationEnabled').checked; body.imageModel = $('imageModel').value.trim() || 'gpt-image-2.5-flare';
     try {
         const saved = await api('/api/agent-admin' + (editing ? '/' + editing.id : ''), { method: editing ? 'PUT' : 'POST', body: JSON.stringify(body) });
         await loadAgents(); resetForm(saved); notice('Agent 已保存。客户端同步后即可开始私聊或在群聊中 @它。');

@@ -68,6 +68,33 @@ class MacExecutorTest(unittest.TestCase):
             self.assertEqual(1, factory.return_value.open.call_count)
         self.assertIsNone(worker.NoRedirect().redirect_request(None, None, 302, '', {}, 'https://other.invalid'))
 
+    def test_responses_image_results_use_fixed_endpoint_and_larger_bounded_transport(self):
+        value = self.job()
+        value['api'] = 'responses'
+        value['body'] = {'model': 'gpt-6.1-sol', 'stream': False, 'input': [{'role': 'user', 'content': '画一张图'}]}
+        payload = {'status': 'completed', 'output': [{'type': 'image_generation_call', 'result': 'A' * 1_100_000}]}
+        with patch.object(worker, 'opener') as factory:
+            factory.return_value.open.return_value = Response(json.dumps(payload).encode())
+            result = worker.invoke_openai(value)
+            self.assertEqual(payload, result['body'])
+            self.assertEqual(worker.RESPONSES_API, factory.return_value.open.call_args.args[0].full_url)
+            self.assertEqual(1, factory.return_value.open.call_count)
+            factory.return_value.open.return_value = Response(json.dumps(payload).encode())
+            self.assertEqual({'errorCode': 'TOO_LARGE'}, worker.invoke_openai(self.job()))
+            factory.return_value.open.return_value = Response(b' ' * (worker.IMAGE_RESULT_LIMIT + 1))
+            self.assertEqual({'errorCode': 'TOO_LARGE'}, worker.invoke_openai(value))
+        value['api'] = 'https://untrusted.test/responses'
+        with patch.object(worker, 'opener') as factory:
+            self.assertEqual({'errorCode': 'INVALID_RESPONSE'}, worker.invoke_openai(value))
+            factory.assert_not_called()
+
+    def test_proxy_upgrade_expands_image_result_delivery_and_is_idempotent(self):
+        original = 'server {\n' + proxy.ANCHOR + '\n}'
+        legacy = proxy.configured(original).replace('client_max_body_size 25m;', 'client_max_body_size 1100k;')
+        updated = proxy.configured(legacy)
+        self.assertIn('client_max_body_size 25m;', updated)
+        self.assertEqual(updated, proxy.configured(updated))
+
     def test_ambiguous_start_never_executes_the_provider(self):
         instance = worker.Worker({'server': 'https://example.test', 'token': 'test-token'})
         instance.ready.set()

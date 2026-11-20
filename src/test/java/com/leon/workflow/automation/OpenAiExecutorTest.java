@@ -73,4 +73,17 @@ class OpenAiExecutorTest {
         executor.complete(worker,id,lease,Map.of("status",401,"body",Map.of("error","echo test-secret")));
         var output=future.get(2,TimeUnit.SECONDS);assertEquals(401,output.get("status"));assertTrue(object(output.get("body")).isEmpty());assertEquals(0,tokens());
     }
+    @Test void responsesCarryApiTypeAndLargeImagesAndAccountMainlineAndToolSeparately() throws Exception {
+        var body=Map.<String,Object>of("model","gpt-6-luna","stream",false,"input",List.of(Map.of("role","user","content","draw")),"tools",List.of(Map.of("type","image_generation","model","gpt-image-2.5-flare")));
+        var future=callers.submit(()->executor.executeResponses(body,"test-secret",5000,null));
+        var job=claim();assertEquals("responses",job.get("api"));String id=text(job.get("id")),lease=text(job.get("lease"));executor.start(worker,id,lease);
+        Map<String,Object> payload=Map.of("status",200,"body",Map.of("status","completed","usage",Map.of("input_tokens",20,"output_tokens",5,"total_tokens",25),"output",List.of(Map.of("type","image_generation_call","status","completed","result","A".repeat(1_100_000)))));
+        executor.complete(worker,id,lease,payload);executor.complete(worker,id,lease,payload);
+        assertTrue(write(future.get(2,TimeUnit.SECONDS)).length()>1_048_576);assertEquals(25,tokens());
+        assertEquals(1,jdbc.queryForObject("SELECT unreported_calls FROM automation_model_usage WHERE model='gpt-image-2.5-flare'",Integer.class));
+        var textFuture=submit();job=claim();id=text(job.get("id"));lease=text(job.get("lease"));executor.start(worker,id,lease);
+        String textId=id,textLease=lease;
+        assertThrows(ResponseStatusException.class,()->executor.complete(worker,textId,textLease,payload));
+        executor.complete(worker,id,lease,result());textFuture.get(2,TimeUnit.SECONDS);
+    }
 }

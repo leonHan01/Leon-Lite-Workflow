@@ -17,6 +17,7 @@ import java.util.*;
 
 @Service
 public class AgentRegistry {
+    public static final String DEFAULT_IMAGE_MODEL="gpt-image-2.5-flare";
     private final JdbcTemplate jdbc;
     private final byte[] key;
     private final AgentAvatarService avatars;
@@ -30,14 +31,18 @@ public class AgentRegistry {
         if (key != null && key.length != 32) throw new IllegalStateException("Agent 凭据加密密钥必须为 32 字节");
     }
     public record Agent(String id, String name, String handle, String provider, String model, String systemPrompt,
-                        boolean enabled, boolean hasApiKey, long version, String avatarId, String modelId, String description) {
+                        boolean enabled, boolean hasApiKey, long version, String avatarId, String modelId, String description,
+                        boolean imageGenerationEnabled, String imageModel) {
+        public Agent(String id,String name,String handle,String provider,String model,String systemPrompt,boolean enabled,boolean hasApiKey,long version,String avatarId,String modelId,String description){this(id,name,handle,provider,model,systemPrompt,enabled,hasApiKey,version,avatarId,modelId,description,false,DEFAULT_IMAGE_MODEL);}
         public Agent(String id,String name,String handle,String provider,String model,String systemPrompt,boolean enabled,boolean hasApiKey,long version,String avatarId,String modelId){this(id,name,handle,provider,model,systemPrompt,enabled,hasApiKey,version,avatarId,modelId,"");}
         public Agent(String id,String name,String handle,String provider,String model,String systemPrompt,boolean enabled,boolean hasApiKey,long version,String avatarId){this(id,name,handle,provider,model,systemPrompt,enabled,hasApiKey,version,avatarId,null);}
         public Agent(String id,String name,String handle,String provider,String model,String systemPrompt,boolean enabled,boolean hasApiKey,long version){this(id,name,handle,provider,model,systemPrompt,enabled,hasApiKey,version,AgentAvatarService.DEFAULT_ID);}
     }
     public record Summary(String id, String name, String handle, String provider, String model, boolean enabled, String avatarId, String description) {}
     public record Edit(String name, String handle, String provider, String model, String systemPrompt,
-                       boolean enabled, String apiKey, Long version, String avatarId, String modelId, String description) {
+                       boolean enabled, String apiKey, Long version, String avatarId, String modelId, String description,
+                       Boolean imageGenerationEnabled, String imageModel) {
+        public Edit(String name,String handle,String provider,String model,String systemPrompt,boolean enabled,String apiKey,Long version,String avatarId,String modelId,String description){this(name,handle,provider,model,systemPrompt,enabled,apiKey,version,avatarId,modelId,description,null,null);}
         public Edit(String name,String handle,String provider,String model,String systemPrompt,boolean enabled,String apiKey,Long version,String avatarId,String modelId){this(name,handle,provider,model,systemPrompt,enabled,apiKey,version,avatarId,modelId,null);}
         public Edit(String name,String handle,String provider,String model,String systemPrompt,boolean enabled,String apiKey,Long version,String avatarId){this(name,handle,provider,model,systemPrompt,enabled,apiKey,version,avatarId,null);}
         public Edit(String name,String handle,String provider,String model,String systemPrompt,boolean enabled,String apiKey,Long version){this(name,handle,provider,model,systemPrompt,enabled,apiKey,version,null);}
@@ -52,6 +57,8 @@ public class AgentRegistry {
         jdbc.execute("ALTER TABLE chat_agent ADD COLUMN IF NOT EXISTS avatar_id VARCHAR(80) DEFAULT 'alfred' NOT NULL");
         jdbc.execute("ALTER TABLE chat_agent ADD COLUMN IF NOT EXISTS model_id VARCHAR(36)");
         jdbc.execute("ALTER TABLE chat_agent ADD COLUMN IF NOT EXISTS description VARCHAR(2000) DEFAULT '' NOT NULL");
+        jdbc.execute("ALTER TABLE chat_agent ADD COLUMN IF NOT EXISTS image_generation_enabled BOOLEAN DEFAULT FALSE NOT NULL");
+        jdbc.execute("ALTER TABLE chat_agent ADD COLUMN IF NOT EXISTS image_model VARCHAR(100) DEFAULT 'gpt-image-2.5-flare' NOT NULL");
     }
     public boolean keyStorageEnabled() { return key != null; }
     static final class RuntimeConfig {
@@ -62,7 +69,7 @@ public class AgentRegistry {
         var agent=get(id);
         if(agent.modelId()==null) return new RuntimeConfig(agent,apiKey(id));
         var profile=models.resolve(Map.of("modelId",agent.modelId()));
-        var resolved=new Agent(agent.id(),agent.name(),agent.handle(),(String)profile.get("provider"),(String)profile.get("model"),agent.systemPrompt(),agent.enabled(),true,agent.version(),agent.avatarId(),agent.modelId(),agent.description());
+        var resolved=new Agent(agent.id(),agent.name(),agent.handle(),(String)profile.get("provider"),(String)profile.get("model"),agent.systemPrompt(),agent.enabled(),true,agent.version(),agent.avatarId(),agent.modelId(),agent.description(),agent.imageGenerationEnabled(),agent.imageModel());
         return new RuntimeConfig(resolved,profileKey(profile));
     }
     private String profileKey(Map<String,Object> profile) {
@@ -75,7 +82,7 @@ public class AgentRegistry {
         for(var profile:models.list()) profiles.put((String)profile.get("id"),profile);
         return jdbc.query("SELECT * FROM chat_agent ORDER BY name,id", (rs,n) -> {
             String modelId=rs.getString("model_id"); var profile=profiles.get(modelId);
-            return new Agent(rs.getString("id"),rs.getString("name"),rs.getString("handle"),profile==null?rs.getString("provider"):(String)profile.get("provider"),profile==null?rs.getString("model"):(String)profile.get("model"),rs.getString("system_prompt"),rs.getBoolean("enabled"),true,rs.getLong("version"),rs.getString("avatar_id"),modelId,rs.getString("description"));
+            return new Agent(rs.getString("id"),rs.getString("name"),rs.getString("handle"),profile==null?rs.getString("provider"):(String)profile.get("provider"),profile==null?rs.getString("model"):(String)profile.get("model"),rs.getString("system_prompt"),rs.getBoolean("enabled"),true,rs.getLong("version"),rs.getString("avatar_id"),modelId,rs.getString("description"),rs.getBoolean("image_generation_enabled"),rs.getString("image_model"));
         });
     }
     public List<Summary> summaries() { return list().stream().map(a -> new Summary(a.id(),a.name(),a.handle(),a.provider(),a.model(),a.enabled(),a.avatarId(),a.description())).toList(); }
@@ -95,6 +102,10 @@ public class AgentRegistry {
         if (!handle.matches("[a-z][a-z0-9_-]{1,31}")) throw failure(HttpStatus.BAD_REQUEST,"@标识应为 2–32 位小写字母、数字、下划线或短横线，并以字母开头");
         if (!Set.of("openai","deepseek").contains(provider)) throw failure(HttpStatus.BAD_REQUEST,"请选择 OpenAI 或 DeepSeek");
         if (!model.matches("[A-Za-z0-9_.:-]{1,100}") || prompt.length()>16000) throw failure(HttpStatus.BAD_REQUEST,"模型名称无效或提示词超过 16000 字符");
+        boolean drawing=edit.imageGenerationEnabled()==null?previous!=null&&previous.imageGenerationEnabled():edit.imageGenerationEnabled();
+        String imageModel=edit.imageModel()==null?(previous==null?DEFAULT_IMAGE_MODEL:previous.imageModel()):text(edit.imageModel()).strip();
+        if(!imageModel.matches("gpt-image-[A-Za-z0-9_.-]{1,90}")) throw failure(HttpStatus.BAD_REQUEST,"绘图模型应为有效的 GPT Image 模型名称");
+        if(drawing&&(!provider.equals("openai")||model.startsWith("gpt-image-"))) throw failure(HttpStatus.BAD_REQUEST,"允许绘图需要选择支持图片生成工具的 OpenAI 对话模型");
         if (previous == null && list().size()>=64) throw failure(HttpStatus.BAD_REQUEST,"最多配置 64 个 Agent");
         String avatarId=edit.avatarId()==null?(previous==null?AgentAvatarService.DEFAULT_ID:previous.avatarId()):edit.avatarId();
         if(!avatars.exists(avatarId))throw failure(HttpStatus.BAD_REQUEST,"请选择头像库中的头像或先上传图片");
@@ -106,8 +117,8 @@ public class AgentRegistry {
         if (previous != null && !Objects.equals(edit.version(),previous.version())) throw failure(HttpStatus.CONFLICT,"配置已变更，请刷新后重试");
         String encrypted = profile!=null ? "" : apiKey.isEmpty() ? jdbc.queryForObject("SELECT encrypted_key FROM chat_agent WHERE id=?",String.class,id) : encrypt(agentId,apiKey);
         try {
-            if (previous == null) jdbc.update("INSERT INTO chat_agent(id,name,handle,provider,model,system_prompt,enabled,encrypted_key,avatar_id,model_id,description,version) VALUES(?,?,?,?,?,?,?,?,?,?,?,1)",agentId,name,handle,provider,model,prompt,edit.enabled(),encrypted,avatarId,modelId.isEmpty()?null:modelId,description);
-            else if (jdbc.update("UPDATE chat_agent SET name=?,handle=?,provider=?,model=?,system_prompt=?,enabled=?,encrypted_key=?,avatar_id=?,model_id=?,description=?,version=version+1 WHERE id=? AND version=?",name,handle,provider,model,prompt,edit.enabled(),encrypted,avatarId,modelId.isEmpty()?null:modelId,description,agentId,previous.version()) != 1) throw failure(HttpStatus.CONFLICT,"配置已变更，请刷新后重试");
+            if (previous == null) jdbc.update("INSERT INTO chat_agent(id,name,handle,provider,model,system_prompt,enabled,encrypted_key,avatar_id,model_id,description,image_generation_enabled,image_model,version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,1)",agentId,name,handle,provider,model,prompt,edit.enabled(),encrypted,avatarId,modelId.isEmpty()?null:modelId,description,drawing,imageModel);
+            else if (jdbc.update("UPDATE chat_agent SET name=?,handle=?,provider=?,model=?,system_prompt=?,enabled=?,encrypted_key=?,avatar_id=?,model_id=?,description=?,image_generation_enabled=?,image_model=?,version=version+1 WHERE id=? AND version=?",name,handle,provider,model,prompt,edit.enabled(),encrypted,avatarId,modelId.isEmpty()?null:modelId,description,drawing,imageModel,agentId,previous.version()) != 1) throw failure(HttpStatus.CONFLICT,"配置已变更，请刷新后重试");
         } catch (DuplicateKeyException e) { throw failure(HttpStatus.BAD_REQUEST,"@标识已被其他 Agent 使用"); }
         return get(agentId);
     }
