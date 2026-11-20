@@ -133,7 +133,7 @@ public class ChatBackupService {
         }
         var ids=new HashMap<Long,DeviceMessageStore.Message>();var usedImages=new HashSet<String>();long previous=0;
         for(var m:backup.messages()){
-            if(m==null||m.id()<=previous||!Set.of("user","assistant").contains(m.role())||!Set.of("macos","android","agent").contains(m.platform())||!text(m.sender(),60)||m.text()==null||m.text().length()>8000||m.text().indexOf('\0')>=0||m.createdAt()<0||m.images()==null||m.images().size()>4)throw bad("备份消息无效");
+            if(m==null||m.id()<=previous||!Set.of("user","assistant").contains(m.role())||!Set.of("macos","android","ios","agent").contains(m.platform())||!text(m.sender(),60)||m.text()==null||m.text().length()>8000||m.text().indexOf('\0')>=0||m.createdAt()<0||m.images()==null||m.images().size()>4)throw bad("备份消息无效");
             DeviceMessageStore.uuid(m.deviceId());
             if(!Objects.equals(m.conversationId(),room.id()))throw bad("备份消息会话不匹配");
             if(m.role().equals("assistant")){DeviceMessageStore.uuid(m.agentId());if(!room.agentIds().contains(m.agentId())&&!ChatAccess.personalRoom(room.id()))throw bad("备份回复 Agent 无效");}

@@ -123,7 +123,7 @@ public class AgentContextManager {
         List<Long> anchors; Memory memory;
         synchronized(store) {
             memory=memory(work,policy,work.messageId());
-            anchors=store.contextAnchors(work,memory.throughId(),work.messageId(),policy.recentRounds(),true);
+            anchors=store.contextAnchors(work,memory.throughId(),work.messageId(),Math.min(policy.recentRounds(),recentRoundLimit(agent)),true);
         }
         Collections.reverse(anchors);
         var recent=new ArrayList<Turn>();for(long anchor:anchors) recent.add(turn(work,anchor,agent,key));
@@ -355,7 +355,12 @@ public class AgentContextManager {
     // Conservative estimate, not provider billing. CJK/emoji reserve more than ASCII; output has its own 2048-token allowance.
     static int estimate(String text) { int ascii=0,other=0;for(int c:text.codePoints().toArray()) { if(c<128)ascii++;else other+=c>0xffff?4:2; }return (ascii+2)/3+other; }
     static int tokens(List<Map<String,String>> messages) { return 12+messages.stream().mapToInt(m->estimate(m.get("content"))+8+(m.getOrDefault("imageIds","").isBlank()?0:m.get("imageIds").split(",").length*2000)).sum(); }
+    static boolean isLuna(AgentRegistry.Agent agent) {
+        return agent.provider().equalsIgnoreCase("openai") && agent.model().toLowerCase(Locale.ROOT).contains("luna");
+    }
+    static int recentRoundLimit(AgentRegistry.Agent agent) { return isLuna(agent)?4:20; }
     static int inputBudget(AgentRegistry.Agent agent) {
+        if(isLuna(agent)) return 4000;
         String model=agent.model().toLowerCase(Locale.ROOT);
         return agent.provider().equals("deepseek")||model.startsWith("gpt-6")||model.startsWith("gpt-5")||model.startsWith("gpt-4.1")||model.startsWith("gpt-4o")||model.startsWith("o3")||model.startsWith("o4")?12000:5500;
     }

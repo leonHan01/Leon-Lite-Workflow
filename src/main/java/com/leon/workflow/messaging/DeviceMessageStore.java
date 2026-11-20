@@ -135,7 +135,7 @@ public class DeviceMessageStore {
         if(input==null) throw bad("消息不能为空"); uuid(input.clientMessageId()); uuid(input.deviceId()); mentions(input);
         String name=input.sender()==null?"":input.sender().strip();
         if(name.isBlank()||name.length()>60||name.codePoints().anyMatch(Character::isISOControl)) throw bad("设备名称应为 1–60 字且不能含控制字符");
-        if(!Set.of("macos","android").contains(input.platform()==null?"":input.platform())) throw bad("设备平台无效");
+        if(!Set.of("macos","android","ios").contains(input.platform()==null?"":input.platform())) throw bad("设备平台无效");
         if(input.text()==null||(input.text().isBlank()&&imageIds(input).isEmpty())||input.text().length()>8000||input.text().indexOf('\0')>=0) throw bad("消息应为 1–8000 字符");
     }
     public synchronized Message retry(Send input) { return retry(input,null); }

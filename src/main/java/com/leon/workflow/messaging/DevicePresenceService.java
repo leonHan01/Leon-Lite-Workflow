@@ -19,7 +19,7 @@ public class DevicePresenceService {
         if(input==null) throw DeviceMessageStore.failure(HttpStatus.BAD_REQUEST,"设备信息不能为空");
         String id=DeviceMessageStore.uuid(input.deviceId()),name=input.name()==null?"":input.name().strip();
         if(name.isBlank()||name.length()>60||name.codePoints().anyMatch(Character::isISOControl)) throw DeviceMessageStore.failure(HttpStatus.BAD_REQUEST,"设备名称应为 1–60 字");
-        if(!Set.of("macos","android").contains(input.platform()==null?"":input.platform())) throw DeviceMessageStore.failure(HttpStatus.BAD_REQUEST,"设备平台无效");
+        if(!Set.of("macos","android","ios").contains(input.platform()==null?"":input.platform())) throw DeviceMessageStore.failure(HttpStatus.BAD_REQUEST,"设备平台无效");
         long now=clock.millis();prune(now);
         if(!devices.containsKey(id)&&devices.size()>=1024) throw DeviceMessageStore.failure(HttpStatus.TOO_MANY_REQUESTS,"在线设备数量已达上限");
         var device=new Device(id,name,input.platform(),now);devices.put(id,device);return device;

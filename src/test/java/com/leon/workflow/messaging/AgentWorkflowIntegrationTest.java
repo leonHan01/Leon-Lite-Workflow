@@ -136,6 +136,17 @@ class AgentWorkflowIntegrationTest {
     private org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder appSend(Map<String,Object> payload,Cookie cookie) {
         return post("/api/agent-admin/messages").cookie(cookie).header("Origin","https://example.test").header("X-Requested-With","XMLHttpRequest").contentType("application/json").content(write(payload));
     }
+    @Test void manualHelperRequiresManagementSessionAndCorrectWriteOrigin() throws Exception {
+        MockMvc mvc=MockMvcBuilders.webAppContextSetup(context).build();
+        Cookie cookie=new Cookie(BrowserSessionService.COOKIE_NAME,sessions.create(false,auth.fingerprint()));
+        String body=write(Map.of("requestId",UUID.randomUUID().toString()));
+        String path="/api/agent-admin/helper-outreach";
+        mvc.perform(post(path).contentType("application/json").content(body)).andExpect(status().isUnauthorized());
+        mvc.perform(post(path).header("Authorization",AUTH).contentType("application/json").content(body)).andExpect(status().isForbidden());
+        mvc.perform(post(path).cookie(cookie).contentType("application/json").content(body)).andExpect(status().isForbidden());
+        mvc.perform(post(path).cookie(cookie).header("Origin","https://evil.test").header("X-Requested-With","XMLHttpRequest").contentType("application/json").content(body)).andExpect(status().isForbidden());
+        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM chat_helper_outreach",Integer.class));
+    }
     @Test void manualAppSendRequiresManagementSessionAndCorrectWriteOrigin() throws Exception {
         var a=agent("manual_auth");var body=Map.<String,Object>of("agentId",a.id(),"text","网页消息","clientMessageId",UUID.randomUUID().toString());
         MockMvc mvc=MockMvcBuilders.webAppContextSetup(context).build();Cookie cookie=new Cookie(BrowserSessionService.COOKIE_NAME,sessions.create(false,auth.fingerprint()));

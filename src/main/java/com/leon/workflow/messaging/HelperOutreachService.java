@@ -44,6 +44,35 @@ public class HelperOutreachService {
         jdbc.update("UPDATE chat_helper_outreach SET status='FAILED' WHERE status='RUNNING'");
     }
 
+
+    record ManualStatus(String requestId,String status) {}
+
+    ManualStatus manualStatus(ChatUserRegistry.User user,String requestId) {
+        String id=DeviceMessageStore.uuid(requestId);
+        var result=jdbc.query("SELECT status FROM chat_helper_outreach WHERE user_id=? AND message_id=? AND slot<0",
+            (rs,n)->new ManualStatus(id,rs.getString(1)),user.id(),id);
+        if(result.isEmpty())throw DeviceMessageStore.failure(org.springframework.http.HttpStatus.NOT_FOUND,"主动消息任务不存在");
+        return result.getFirst();
+    }
+
+    Delivery startManual(ChatUserRegistry.User user,String requestId) {
+        String id=DeviceMessageStore.uuid(requestId);
+        synchronized(store) {
+            var existing=jdbc.query("SELECT * FROM chat_helper_outreach WHERE user_id=? AND message_id=? AND slot<0",
+                (rs,n)->new Delivery(rs.getString("user_id"),rs.getString("local_date"),rs.getInt("slot"),rs.getString("agent_id"),rs.getLong("due_at"),id),user.id(),id);
+            if(!existing.isEmpty())return null;
+            var agent=helper();
+            if(agent==null)throw DeviceMessageStore.failure(org.springframework.http.HttpStatus.CONFLICT,"Helper 不存在或未启用");
+            if(recipients(agent.id()).stream().noneMatch(u->u.id().equals(user.id())))
+                throw DeviceMessageStore.failure(org.springframework.http.HttpStatus.CONFLICT,"请先与 Helper 对话并收到回复");
+            String date=clock.instant().atZone(ZONE).toLocalDate().toString();
+            int slot=jdbc.queryForObject("SELECT COALESCE(MIN(slot),0) FROM chat_helper_outreach WHERE user_id=? AND local_date=? AND slot<0",Integer.class,user.id(),date)-1;
+            long time=clock.millis();
+            jdbc.update("INSERT INTO chat_helper_outreach(user_id,local_date,slot,agent_id,due_at,message_id,status) VALUES(?,?,?,?,?,?,'RUNNING')",user.id(),date,slot,agent.id(),time,id);
+            return new Delivery(user.id(),date,slot,agent.id(),time,id);
+        }
+    }
+
     private AgentRegistry.Agent helper() {
         var all=agents.list();
         if(!configuredAgent.isBlank())return all.stream().filter(a->a.id().equals(configuredAgent)&&a.enabled()).findFirst().orElse(null);
@@ -73,7 +102,7 @@ public class HelperOutreachService {
             var helper=helper();if(helper==null)return;
             var date=now.atZone(ZONE).toLocalDate();long start=date.atTime(9,0).atZone(ZONE).toInstant().toEpochMilli();
             for(var user:recipients(helper.id())) {
-                if(jdbc.queryForObject("SELECT COUNT(*) FROM chat_helper_outreach WHERE user_id=? AND local_date=?",Integer.class,user.id(),date.toString())>0)continue;
+                if(jdbc.queryForObject("SELECT COUNT(*) FROM chat_helper_outreach WHERE user_id=? AND local_date=? AND slot>0",Integer.class,user.id(),date.toString())>0)continue;
                 int first=ThreadLocalRandom.current().nextInt(13*60),second;
                 do { second=ThreadLocalRandom.current().nextInt(13*60); } while(Math.abs(first-second)<60);
                 int[] minutes={Math.min(first,second),Math.max(first,second)};
@@ -161,7 +190,7 @@ public class HelperOutreachService {
 
     private void guard(Delivery delivery) {
         var now=clock.instant();
-        if(Thread.currentThread().isInterrupted()||!daytime(now)||!now.atZone(ZONE).toLocalDate().toString().equals(delivery.date()))
+        if(Thread.currentThread().isInterrupted()||(delivery.slot()>0&&(!daytime(now)||!now.atZone(ZONE).toLocalDate().toString().equals(delivery.date()))))
             throw new IllegalStateException("不在主动消息发送时段");
         var helper=helper();
         if(helper==null||!helper.id().equals(delivery.agentId())||jdbc.queryForObject(
@@ -169,6 +198,7 @@ public class HelperOutreachService {
             delivery.userId(),delivery.date(),delivery.slot())!=1)throw new IllegalStateException("主动消息任务已失效");
     }
     private static boolean daytime(Instant now) { int hour=now.atZone(ZONE).getHour();return hour>=9&&hour<22; }
+    void failManual(Delivery delivery) { synchronized(store) { finish(delivery,"FAILED"); } }
     private void finish(Delivery delivery,String status) {
         jdbc.update("UPDATE chat_helper_outreach SET status=? WHERE user_id=? AND local_date=? AND slot=? AND status='RUNNING'",status,delivery.userId(),delivery.date(),delivery.slot());
     }

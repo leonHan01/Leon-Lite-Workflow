@@ -65,6 +65,20 @@ class HelperOutreachIntegrationTest {
     }
     String state(ChatUserRegistry.User user,int slot){return jdbc.queryForObject("SELECT status FROM chat_helper_outreach WHERE user_id=? AND local_date='2026-11-20' AND slot=?",String.class,user.id(),slot);}
 
+    @Test void manualOutreachIsIdempotentWorksAfterHoursAndDoesNotConsumeDailySlots() {
+        var alice=users.getOrCreate("ManualAlice");exchange(alice,direct(alice,helper),"你好",List.of());
+        clock.now=at("08:00");String request=uuid();var delivery=service.startManual(alice,request);
+        assertNotNull(delivery);assertNull(service.startManual(alice,request));
+        assertEquals("RUNNING",service.manualStatus(alice,request).status());
+        service.deliver(delivery);service.deliver(delivery);
+        assertEquals("SENT",service.manualStatus(alice,request).status());
+        assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM device_message WHERE client_message_id=?",Integer.class,request));
+        service.plan(clock.instant());
+        assertEquals(2,jdbc.queryForObject("SELECT COUNT(*) FROM chat_helper_outreach WHERE user_id=? AND slot>0",Integer.class,alice.id()));
+        var bob=users.getOrCreate("ManualBob");assertThrows(Exception.class,()->service.manualStatus(bob,request));
+        assertThrows(Exception.class,()->service.startManual(bob,uuid()));
+    }
+
     @Test void plansOnlyAfterAnExchangeAndPersistsTwoDistinctDaytimeSlots() {
         var alice=users.getOrCreate("HelperAlice");var bob=users.getOrCreate("HelperBob");var eve=users.getOrCreate("HelperEve");
         String room=direct(alice,helper);direct(eve,helper);

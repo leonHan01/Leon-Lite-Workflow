@@ -63,7 +63,7 @@ async function refreshPresence() {
         if (!state.devices.length) $('onlineDevices').append(node('p', '暂无在线设备。打开已连接的 App 后自动显示。', 'subtle'));
         for (const device of state.devices) {
             const row = node('div', null, 'presence-device');
-            row.append(node('span', '', 'presence-dot'), node('strong', device.name), node('small', (device.platform === 'macos' ? 'macOS' : 'Android') + ' · ' + Math.max(0, Math.floor((Date.now() - device.lastSeenAt) / 1000)) + ' 秒前活跃'));
+            row.append(node('span', '', 'presence-dot'), node('strong', device.name), node('small', ({ macos: 'macOS', android: 'Android', ios: 'iOS' }[device.platform] || device.platform) + ' · ' + Math.max(0, Math.floor((Date.now() - device.lastSeenAt) / 1000)) + ' 秒前活跃'));
             $('onlineDevices').append(row);
         }
     } catch (error) { if (epoch === presenceEpoch && viewActive) { $('onlineCount').textContent = '—'; $('onlineDevices').replaceChildren(node('p', '设备状态暂时不可用，下次自动重试。', 'subtle')); } }
@@ -285,6 +285,24 @@ $('cancelGroup').onclick = () => $('groupDialog').close();
 $('groupForm').onsubmit = async event => {
     event.preventDefault(); try { const agentIds = [...$('groupMembers').querySelectorAll('input:checked')].map(e => e.value); const c = await api('/api/conversations/groups', { method: 'POST', body: JSON.stringify({ name: $('groupName').value, agentIds }) }); $('groupDialog').close(); await refreshConversations(); selectConversation(c.id); } catch (e) { notice(e.message, true); }
 };
+// A stable request ID makes retries safe if the connection drops during generation.
+let helperRequestId = null, helperBusy = false;
+$('sendHelperOutreach').onclick = async () => {
+    if (helperBusy) return;
+    helperBusy = true; const button = $('sendHelperOutreach'), status = $('helperOutreachStatus');
+    helperRequestId ||= crypto.randomUUID(); button.disabled = true; status.textContent = '正在生成并发送，可能需要一些时间…';
+    try {
+        let job = await api('/api/agent-admin/helper-outreach', {method: 'POST', body: JSON.stringify({requestId: helperRequestId})});
+        while (job.status === 'RUNNING') {
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            job = await api('/api/agent-admin/helper-outreach/' + encodeURIComponent(helperRequestId));
+        }
+        status.textContent = job.status === 'SENT' ? '已发送到 Helper 私聊，App 在线时会自动同步。' : '本次未发送成功，请检查 Helper 配置和模型连接后重试。';
+        helperRequestId = null;
+    } catch (error) { status.textContent = error.message + '；可点击按钮查询或重试本次任务。'; }
+    finally { helperBusy = false; button.disabled = false; }
+};
+
 document.addEventListener('visibilitychange', () => { clearTimeout(timer); if (viewActive && !document.hidden) { refreshPresence(); appMessenger.visibilityChanged(); if (activeTab === 'chat') poll(); } else clearTimeout(presenceTimer); });
 return {
     async activate() { viewActive = true; refreshPresence(); try { await loadAgents(); if (activeTab === 'chat') { await refreshConversations(); poll(); } } catch (error) { notice(error.message, true); } },

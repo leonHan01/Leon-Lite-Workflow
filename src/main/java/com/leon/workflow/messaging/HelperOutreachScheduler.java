@@ -34,5 +34,12 @@ public class HelperOutreachScheduler {
             }
         } catch(Exception ignored) { /* Retry polling without logging private conversation data. */ }
     }
+    void startManual(ChatUserRegistry.User user,String requestId) {
+        var delivery=service.startManual(user,requestId);
+        if(delivery!=null) {
+            try { workers.execute(()->service.deliver(delivery)); }
+            catch(RejectedExecutionException stopped) { service.failManual(delivery); }
+        }
+    }
     @PreDestroy public void close() { loop.shutdownNow();workers.shutdownNow(); }
 }

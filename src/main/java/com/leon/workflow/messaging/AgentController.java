@@ -16,11 +16,13 @@ public class AgentController {
     private final AgentAvatarService avatars;
     private final DeviceMessageStore store;
     private final ChatAccess access;
+    private final HelperOutreachService outreach;
+    private final HelperOutreachScheduler outreachScheduler;
 
     public AgentController(AgentRegistry agents,AgentChatService chat,ApiTokenInterceptor auth,AgentAvatarService avatars,
-                           WorkflowModels models,DeviceMessageStore store,ChatAccess access){
+                           WorkflowModels models,DeviceMessageStore store,ChatAccess access,HelperOutreachService outreach,HelperOutreachScheduler outreachScheduler){
         this.models=models;this.agents=agents;this.chat=chat;this.auth=auth;this.avatars=avatars;
-        this.store=store;this.access=access;
+        this.store=store;this.access=access;this.outreach=outreach;this.outreachScheduler=outreachScheduler;
     }
     @GetMapping("/api/agents") public ResponseEntity<?> agents() { return response(agents.summaries()); }
     @GetMapping("/api/agents/usage") public ResponseEntity<?> usage(HttpServletRequest request) {
@@ -98,6 +100,17 @@ public class AgentController {
         adminOnly(request);
         if(auth.enabled()&&!auth.validAdminWrite(request)) throw AgentRegistry.failure(HttpStatus.FORBIDDEN,"请从本站管理页面发送消息");
         return response(chat.publishAgentMessage(DeviceMessageStore.uuid(input.agentId()),input.conversationId(),input.text(),DeviceMessageStore.uuid(input.clientMessageId())));
+    }
+    public record HelperRequest(String requestId) {}
+    @PostMapping("/api/agent-admin/helper-outreach") public ResponseEntity<?> helperOutreach(@RequestBody HelperRequest input,HttpServletRequest request) {
+        adminOnly(request);
+        if(auth.enabled()&&!auth.validAdminWrite(request))throw AgentRegistry.failure(HttpStatus.FORBIDDEN,"请从本站管理页面发送消息");
+        var user=access.user(request);
+        outreachScheduler.startManual(user,input.requestId());
+        return response(outreach.manualStatus(user,input.requestId()));
+    }
+    @GetMapping("/api/agent-admin/helper-outreach/{id}") public ResponseEntity<?> helperOutreachStatus(@PathVariable String id,HttpServletRequest request) {
+        adminOnly(request);return response(outreach.manualStatus(access.user(request),id));
     }
     private void adminOnly(HttpServletRequest request) { if(auth.enabled()&&!auth.validBrowserSession(request)) throw AgentRegistry.failure(HttpStatus.FORBIDDEN,"请使用管理页面登录后配置 Agent"); }
     private ResponseEntity<?> response(Object value) { return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(value); }
