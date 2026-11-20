@@ -11,6 +11,7 @@ import com.leon.workflow.messaging.AgentAvatarController;
 import com.leon.workflow.messaging.AgentContextController;
 import com.leon.workflow.messaging.AgentController;
 import com.leon.workflow.messaging.ChatBackupController;
+import com.leon.workflow.messaging.ConversationBranchController;
 import com.leon.workflow.messaging.ChatImageController;
 import com.leon.workflow.messaging.ChatUserController;
 import com.leon.workflow.messaging.ChatUserRegistry;
@@ -55,7 +56,7 @@ public class ApiTokenInterceptor implements HandlerInterceptor {
     @Autowired void setChatUsers(ChatUserRegistry chatUsers){this.chatUsers=chatUsers;}
 
     private static final Set<Class<?>> CHAT_CONTROLLERS=Set.of(
-        AgentContextController.class,ChatBackupController.class,
+        AgentContextController.class,ChatBackupController.class,ConversationBranchController.class,
         ChatImageController.class,DeviceMessageController.class);
 
     private static boolean chatSessionEndpoint(Object handler){

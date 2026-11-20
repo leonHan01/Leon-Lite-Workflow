@@ -19,9 +19,14 @@ public class HelperConversationMemory {
     private final ChatAccess access;
     private final AgentModelClient model;
     private final ObjectMapper json;
+    private final ConversationFactMemory facts;
 
     public HelperConversationMemory(JdbcTemplate jdbc,DeviceMessageStore store,ChatAccess access,AgentModelClient model,ObjectMapper json) {
-        this.jdbc=jdbc;this.store=store;this.access=access;this.model=model;this.json=json;
+        this(jdbc,store,access,model,json,new ConversationFactMemory(jdbc,store,json));
+    }
+    @org.springframework.beans.factory.annotation.Autowired
+    public HelperConversationMemory(JdbcTemplate jdbc,DeviceMessageStore store,ChatAccess access,AgentModelClient model,ObjectMapper json,ConversationFactMemory facts) {
+        this.jdbc=jdbc;this.store=store;this.access=access;this.model=model;this.json=json;this.facts=facts;
     }
     record Stamp(String room,long revision,long epoch,long after) {}
     record Digest(String text,List<Stamp> stamps) {}
@@ -65,10 +70,12 @@ public class HelperConversationMemory {
             if(!cached.isEmpty()) {
                 through=((Number)cached.getFirst().get("through_id")).longValue();summary=(String)cached.getFirst().get("summary");
             } else {
-                var existing=jdbc.queryForList("SELECT through_id,summary FROM chat_context_summary WHERE conversation_id=? AND epoch=? AND through_id>? AND through_id<=? ORDER BY through_id DESC LIMIT 1",
+                var existing=jdbc.queryForList("SELECT agent_id,through_id,summary FROM chat_context_summary WHERE conversation_id=? AND epoch=? AND through_id>? AND through_id<=? ORDER BY through_id DESC LIMIT 1",
                     stamp.room(),stamp.epoch(),stamp.after(),end);
                 if(!existing.isEmpty()) {
                     through=((Number)existing.getFirst().get("through_id")).longValue();seed=(String)existing.getFirst().get("summary");
+                    var known=facts.prompt(facts.latest(stamp.room(),(String)existing.getFirst().get("agent_id"),stamp.epoch(),stamp.after(),through+1),"",1000);
+                    if(known!=null)seed+="\n"+known.get("content");
                 }
             }
         }

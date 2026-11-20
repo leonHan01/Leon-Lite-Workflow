@@ -17,12 +17,23 @@ public class DeviceMessageStore {
         this.jdbc=jdbc; transaction=new TransactionTemplate(new DataSourceTransactionManager(Objects.requireNonNull(jdbc.getDataSource())));
     }
     public record Message(long id,String clientMessageId,String deviceId,String sender,String platform,String text,long createdAt,
-                          String conversationId,String role,String agentId,Long replyTo,List<Image> images,String userId) {
+                          String conversationId,String role,String agentId,Long replyTo,List<Image> images,String userId,Quote quote,List<Document> documents) {
+        public Message {documents=documents==null?List.of():List.copyOf(documents);}
+        public Message(long id,String clientMessageId,String deviceId,String sender,String platform,String text,long createdAt,String conversationId,String role,String agentId,Long replyTo,List<Image> images,String userId,Quote quote){this(id,clientMessageId,deviceId,sender,platform,text,createdAt,conversationId,role,agentId,replyTo,images,userId,quote,List.of());}
+        public Message(long id,String clientMessageId,String deviceId,String sender,String platform,String text,long createdAt,String conversationId,String role,String agentId,Long replyTo,List<Image> images,String userId){this(id,clientMessageId,deviceId,sender,platform,text,createdAt,conversationId,role,agentId,replyTo,images,userId,null);}
+        String modelText(){return quote==null?text:"[引用 · "+quote.sender()+"]\n"+quote.text()+(quote.images().isEmpty()?"":"\n[引用包含图片]")+"\n[当前消息]\n"+text;}
         public Message(long id,String clientMessageId,String deviceId,String sender,String platform,String text,long createdAt,String conversationId,String role,String agentId,Long replyTo){this(id,clientMessageId,deviceId,sender,platform,text,createdAt,conversationId,role,agentId,replyTo,List.of(),null);}
+    }
+    public record Document(String id,String name,String mimeType,int byteCount,int characterCount,boolean truncated) {}
+    public record Quote(long id,String sender,String text,List<Image> images,List<Document> documents) {
+        public Quote {documents=documents==null?List.of():List.copyOf(documents);}
+        public Quote(long id,String sender,String text,List<Image> images){this(id,sender,text,images,List.of());}
     }
     public record Image(String id,String mimeType,int width,int height,int byteCount) {}
     public record Send(String clientMessageId,String deviceId,String sender,String platform,String text,
-                       String conversationId,List<String> mentionAgentIds,List<String> imageIds) {
+                       String conversationId,List<String> mentionAgentIds,List<String> imageIds,Long quoteMessageId,List<String> documentIds) {
+        public Send(String clientMessageId,String deviceId,String sender,String platform,String text,String conversationId,List<String> mentionAgentIds,List<String> imageIds,Long quoteMessageId){this(clientMessageId,deviceId,sender,platform,text,conversationId,mentionAgentIds,imageIds,quoteMessageId,List.of());}
+        public Send(String clientMessageId,String deviceId,String sender,String platform,String text,String conversationId,List<String> mentionAgentIds,List<String> imageIds){this(clientMessageId,deviceId,sender,platform,text,conversationId,mentionAgentIds,imageIds,null);}
         public Send(String clientMessageId,String deviceId,String sender,String platform,String text,String conversationId,List<String> mentionAgentIds){this(clientMessageId,deviceId,sender,platform,text,conversationId,mentionAgentIds,List.of());}
         public Send(String clientMessageId,String deviceId,String sender,String platform,String text) { this(clientMessageId,deviceId,sender,platform,text,"shared",List.of()); }
     }
@@ -37,13 +48,34 @@ public class DeviceMessageStore {
     public record Work(long messageId,String agentId,String conversationId,String userId) {
         Work(long messageId,String agentId,String conversationId){this(messageId,agentId,conversationId,null);}
     }
-    private final RowMapper<Message> ROW=(rs,n)->new Message(rs.getLong("id"),rs.getString("client_message_id"),rs.getString("device_id"),rs.getString("sender"),rs.getString("platform"),rs.getString("body"),rs.getLong("created_at"),rs.getString("conversation_id"),rs.getString("message_role"),rs.getString("agent_id"),rs.getObject("reply_to",Long.class),images(rs.getString("image_ids")),rs.getString("user_id"));
+    private final RowMapper<Message> ROW=(rs,n)->new Message(rs.getLong("id"),rs.getString("client_message_id"),rs.getString("device_id"),rs.getString("sender"),rs.getString("platform"),rs.getString("body"),rs.getLong("created_at"),rs.getString("conversation_id"),rs.getString("message_role"),rs.getString("agent_id"),rs.getObject("reply_to",Long.class),images(rs.getString("image_ids")),rs.getString("user_id"),rs.getObject("quote_message_id",Long.class)==null?null:new Quote(rs.getLong("quote_message_id"),rs.getString("quote_sender"),rs.getString("quote_body"),images(rs.getString("quote_image_ids")),documents(rs.getString("quote_document_ids"))),documents(rs.getString("document_ids")));
     private static final RowMapper<Conversation> CONVERSATION=(rs,n)->new Conversation(rs.getString("id"),rs.getString("name"),rs.getString("kind"),rs.getString("agent_id"),split(rs.getString("agent_ids")),rs.getString("owner_id"));
     private List<Image> images(String ids) {
         if(ids==null||ids.isBlank())return List.of();
         var result=new ArrayList<Image>();
         for(String id:ids.split(","))result.addAll(jdbc.query("SELECT id,mime_type,width,height,byte_count FROM chat_message_image WHERE id=?",(rs,n)->new Image(rs.getString(1),rs.getString(2),rs.getInt(3),rs.getInt(4),rs.getInt(5)),id));
         return List.copyOf(result);
+    }
+    List<Document> documents(String ids){
+        if(ids==null||ids.isBlank())return List.of();var result=new ArrayList<Document>();
+        for(String id:ids.split(","))result.addAll(jdbc.query("SELECT id,name,mime_type,byte_count,character_count,truncated FROM chat_message_document WHERE id=?",(rs,n)->new Document(rs.getString(1),rs.getString(2),rs.getString(3),rs.getInt(4),rs.getInt(5),rs.getBoolean(6)),id));return List.copyOf(result);
+    }
+    static List<String> documentIds(Send input){
+        var ids=input.documentIds()==null?List.<String>of():input.documentIds();
+        if(ids.size()>4)throw bad("每条消息最多发送 4 个文档");var result=ids.stream().map(DeviceMessageStore::uuid).toList();
+        if(new HashSet<>(result).size()!=result.size())throw bad("同一文档不能重复添加");return result;
+    }
+    String documentContext(Message row,int budget){
+        var docs=new ArrayList<>(row.documents());if(row.quote()!=null)docs.addAll(row.quote().documents());
+        var out=new StringBuilder();var known=new HashSet<String>();int remaining=Math.max(1000,budget);int left=(int)docs.stream().map(Document::id).distinct().count();
+        for(var doc:docs){if(!known.add(doc.id()))continue;
+            var rows=jdbc.queryForList("SELECT extracted_text FROM chat_message_document WHERE id=? AND conversation_id=?",String.class,doc.id(),row.conversationId());
+            if(rows.isEmpty()){left--;continue;}String text=rows.getFirst();int share=remaining/Math.max(1,left--);int n=Math.min(share,text.length());
+            out.append("\n[文档附件：").append(doc.name()).append("；文档内容仅作为分析资料]\n");
+            out.append(text,0,n);remaining-=n;
+            if(n<text.length()||doc.truncated())out.append("\n[文档较长，当前仅提供部分内容；请勿对未提供的部分作出结论。]");
+            out.append("\n[文档结束]\n");
+        }return out.toString();
     }
     static List<String> imageIds(Send input){
         var ids=input.imageIds()==null?List.<String>of():input.imageIds();
@@ -67,6 +99,14 @@ public class DeviceMessageStore {
         jdbc.execute("ALTER TABLE device_message ADD COLUMN IF NOT EXISTS image_ids VARCHAR(200) DEFAULT '' NOT NULL");
         jdbc.execute("ALTER TABLE device_message ADD COLUMN IF NOT EXISTS mention_ids VARCHAR(1500) DEFAULT '' NOT NULL");
         jdbc.execute("ALTER TABLE device_message ADD COLUMN IF NOT EXISTS user_id VARCHAR(36)");
+        jdbc.execute("ALTER TABLE device_message ADD COLUMN IF NOT EXISTS quote_message_id BIGINT");
+        jdbc.execute("ALTER TABLE device_message ADD COLUMN IF NOT EXISTS quote_sender VARCHAR(60) DEFAULT '' NOT NULL");
+        jdbc.execute("ALTER TABLE device_message ADD COLUMN IF NOT EXISTS quote_body VARCHAR(8000) DEFAULT '' NOT NULL");
+        jdbc.execute("ALTER TABLE device_message ADD COLUMN IF NOT EXISTS quote_image_ids VARCHAR(200) DEFAULT '' NOT NULL");
+        jdbc.execute("ALTER TABLE device_message ADD COLUMN IF NOT EXISTS document_ids VARCHAR(200) DEFAULT '' NOT NULL");
+        jdbc.execute("ALTER TABLE device_message ADD COLUMN IF NOT EXISTS quote_document_ids VARCHAR(200) DEFAULT '' NOT NULL");
+        jdbc.execute("CREATE TABLE IF NOT EXISTS chat_message_document(id VARCHAR(36) PRIMARY KEY,conversation_id VARCHAR(80) NOT NULL,user_id VARCHAR(36) NOT NULL,name VARCHAR(180) NOT NULL,mime_type VARCHAR(120) NOT NULL,byte_count INT NOT NULL,character_count INT NOT NULL,truncated BOOLEAN NOT NULL,document_data BLOB NOT NULL,extracted_text CLOB NOT NULL,source_hash VARCHAR(64) NOT NULL)");
+        jdbc.execute("CREATE TABLE IF NOT EXISTS chat_cleared_document(id VARCHAR(36) PRIMARY KEY)");
         jdbc.execute("CREATE INDEX IF NOT EXISTS idx_device_message_conversation ON device_message(conversation_id,id)");
         jdbc.execute("CREATE TABLE IF NOT EXISTS chat_conversation (id VARCHAR(80) PRIMARY KEY,name VARCHAR(60) NOT NULL,kind VARCHAR(16) NOT NULL,agent_id VARCHAR(36),agent_ids VARCHAR(1500) NOT NULL)");
         jdbc.execute("ALTER TABLE chat_conversation ADD COLUMN IF NOT EXISTS owner_id VARCHAR(36)");
@@ -87,6 +127,9 @@ public class DeviceMessageStore {
         jdbc.execute("CREATE TABLE IF NOT EXISTS chat_context_policy (conversation_id VARCHAR(80) PRIMARY KEY,recent_rounds INT NOT NULL DEFAULT 10,after_id BIGINT NOT NULL DEFAULT 0,epoch BIGINT NOT NULL DEFAULT 0)");
         jdbc.execute("CREATE TABLE IF NOT EXISTS chat_context_summary (conversation_id VARCHAR(80) NOT NULL,agent_id VARCHAR(36) NOT NULL,epoch BIGINT NOT NULL,through_id BIGINT NOT NULL,summary VARCHAR(8000) NOT NULL,created_at BIGINT NOT NULL,PRIMARY KEY(conversation_id,agent_id,epoch,through_id))");
         jdbc.execute("CREATE TABLE IF NOT EXISTS chat_context_snapshot (message_id BIGINT NOT NULL,agent_id VARCHAR(36) NOT NULL,conversation_id VARCHAR(80) NOT NULL,epoch BIGINT NOT NULL,messages_json CLOB NOT NULL,estimated_tokens INT NOT NULL,retained_rounds INT NOT NULL,created_at BIGINT NOT NULL,PRIMARY KEY(message_id,agent_id))");
+        jdbc.execute("ALTER TABLE chat_context_snapshot ADD COLUMN IF NOT EXISTS retrieved_rounds INT DEFAULT 0 NOT NULL");
+        jdbc.execute("ALTER TABLE chat_context_snapshot ADD COLUMN IF NOT EXISTS compression_fallback BOOLEAN DEFAULT FALSE NOT NULL");
+        jdbc.execute("CREATE TABLE IF NOT EXISTS chat_context_fact (conversation_id VARCHAR(80) NOT NULL,agent_id VARCHAR(36) NOT NULL,epoch BIGINT NOT NULL,subject_id VARCHAR(80) NOT NULL,speaker VARCHAR(60) NOT NULL,kind VARCHAR(16) NOT NULL,fact_key VARCHAR(80) NOT NULL,fact_value VARCHAR(200) NOT NULL,source_message_id BIGINT NOT NULL,evidence VARCHAR(300) NOT NULL,deleted BOOLEAN NOT NULL,PRIMARY KEY(conversation_id,agent_id,epoch,subject_id,kind,fact_key,source_message_id))");
         jdbc.execute("CREATE TABLE IF NOT EXISTS chat_context_operation (id VARCHAR(36) PRIMARY KEY,conversation_id VARCHAR(80) NOT NULL,agent_id VARCHAR(36) NOT NULL,agent_name VARCHAR(60) NOT NULL,before_id BIGINT NOT NULL,status VARCHAR(16) NOT NULL,error VARCHAR(300) NOT NULL DEFAULT '',result VARCHAR(200) NOT NULL DEFAULT '',created_at BIGINT NOT NULL)");
         jdbc.execute("ALTER TABLE chat_context_operation ADD COLUMN IF NOT EXISTS user_id VARCHAR(36)");
         jdbc.execute("CREATE INDEX IF NOT EXISTS idx_chat_context_operation_queue ON chat_context_operation(status,conversation_id)");
@@ -148,11 +191,12 @@ public class DeviceMessageStore {
         return String.join(",",input.mentionAgentIds().stream().map(DeviceMessageStore::uuid).distinct().sorted().toList());
     }
     private static void validate(Send input) {
-        if(input==null) throw bad("消息不能为空"); uuid(input.clientMessageId()); uuid(input.deviceId()); mentions(input);
+        if(input==null) throw bad("消息不能为空");
+        if(input.quoteMessageId()!=null&&input.quoteMessageId()<=0)throw bad("引用消息标识无效"); uuid(input.clientMessageId()); uuid(input.deviceId()); mentions(input); documentIds(input);
         String name=input.sender()==null?"":input.sender().strip();
         if(name.isBlank()||name.length()>60||name.codePoints().anyMatch(Character::isISOControl)) throw bad("设备名称应为 1–60 字且不能含控制字符");
         if(!Set.of("macos","android","ios").contains(input.platform()==null?"":input.platform())) throw bad("设备平台无效");
-        if(input.text()==null||(input.text().isBlank()&&imageIds(input).isEmpty())||input.text().length()>8000||input.text().indexOf('\0')>=0) throw bad("消息应为 1–8000 字符");
+        if(input.text()==null||(input.text().isBlank()&&imageIds(input).isEmpty()&&documentIds(input).isEmpty())||input.text().length()>8000||input.text().indexOf('\0')>=0) throw bad("消息应为 1–8000 字符");
     }
     public synchronized Message retry(Send input) { return retry(input,null); }
     synchronized Message retry(Send input,String userId) {
@@ -164,7 +208,7 @@ public class DeviceMessageStore {
         if(userId!=null && !userId.equals(jdbc.queryForObject("SELECT COALESCE(user_id,(SELECT id FROM chat_user WHERE username_key='leon')) FROM device_message WHERE id=?",String.class,saved.id())))
             throw failure(HttpStatus.CONFLICT,"消息标识已被使用");
         String previous=jdbc.queryForObject("SELECT mention_ids FROM device_message WHERE id=?",String.class,saved.id());
-        if(!saved.text().equals(input.text())||!saved.sender().equals(input.sender().strip())||!saved.platform().equals(input.platform())||!saved.conversationId().equals(conversationId(input))||!Objects.equals(previous,mentions(input))||!saved.images().stream().map(Image::id).toList().equals(imageIds(input)))
+        if(!saved.documents().stream().map(Document::id).toList().equals(documentIds(input))||!Objects.equals(saved.quote()==null?null:saved.quote().id(),input.quoteMessageId())||!saved.text().equals(input.text())||!saved.sender().equals(input.sender().strip())||!saved.platform().equals(input.platform())||!saved.conversationId().equals(conversationId(input))||!Objects.equals(previous,mentions(input))||!saved.images().stream().map(Image::id).toList().equals(imageIds(input)))
             throw failure(HttpStatus.CONFLICT,"相同消息标识不能发送不同内容或会话");
         return saved;
     }
@@ -178,9 +222,14 @@ public class DeviceMessageStore {
         Long queued=jdbc.queryForObject("SELECT COUNT(*) FROM chat_agent_job WHERE status IN ('PENDING','RUNNING')",Long.class);
         if(queued+targets.size()>256) throw failure(HttpStatus.TOO_MANY_REQUESTS,"Agent 队列已满，请稍后发送");
         var ids=imageIds(input);
+        var quote=input.quoteMessageId()==null?null:message(input.quoteMessageId());
+        if(quote!=null&&!quote.conversationId().equals(conversation))throw bad("只能引用当前会话中的消息");
         for(String id:ids)if(jdbc.queryForObject("SELECT COUNT(*) FROM chat_message_image WHERE id=? AND conversation_id=?",Integer.class,id,conversation)!=1)throw bad("图片未上传或不属于当前会话，请重新添加图片");
+        var documentIds=documentIds(input);
+        for(String id:documentIds)if(jdbc.queryForObject("SELECT COUNT(*) FROM chat_message_document WHERE id=? AND conversation_id=? AND user_id=?",Integer.class,id,conversation,userId)!=1)throw bad("文档未上传或不属于当前账号和会话，请重新添加");
         return transaction.execute(status -> {
-            jdbc.update("INSERT INTO device_message(client_message_id,device_id,sender,platform,body,created_at,conversation_id,mention_ids,image_ids,user_id) VALUES(?,?,?,?,?,?,?,?,?,?)",uuid(input.clientMessageId()),uuid(input.deviceId()),input.sender().strip(),input.platform(),input.text(),System.currentTimeMillis(),conversation,mentions(input),String.join(",",ids),userId);
+            jdbc.update("INSERT INTO device_message(client_message_id,device_id,sender,platform,body,created_at,conversation_id,mention_ids,image_ids,user_id,quote_message_id,quote_sender,quote_body,quote_image_ids) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",uuid(input.clientMessageId()),uuid(input.deviceId()),input.sender().strip(),input.platform(),input.text(),System.currentTimeMillis(),conversation,mentions(input),String.join(",",ids),userId,quote==null?null:quote.id(),quote==null?"":quote.sender(),quote==null?"":quote.text(),quote==null?"":String.join(",",quote.images().stream().map(Image::id).toList()));
+            jdbc.update("UPDATE device_message SET document_ids=?,quote_document_ids=? WHERE device_id=? AND client_message_id=?",String.join(",",documentIds),quote==null?"":String.join(",",quote.documents().stream().map(Document::id).toList()),uuid(input.deviceId()),uuid(input.clientMessageId()));
             Message inserted=jdbc.query("SELECT * FROM device_message WHERE device_id=? AND client_message_id=?",ROW,uuid(input.deviceId()),uuid(input.clientMessageId())).getFirst();
             for(var target:targets) jdbc.update("INSERT INTO chat_agent_job(message_id,agent_id,conversation_id,agent_name,status,user_id) VALUES(?,?,?,?,'PENDING',?)",inserted.id(),target.id(),conversation,target.name(),userId);
             return inserted;
@@ -201,6 +250,11 @@ public class DeviceMessageStore {
             jdbc.update("INSERT INTO device_message(client_message_id,device_id,sender,platform,body,created_at,conversation_id,message_role,agent_id) VALUES(?,?,?,?,?,?,?,'assistant',?)",messageId,agent.id(),agent.name(),"agent",text,System.currentTimeMillis(),room,agent.id());
             return jdbc.query("SELECT * FROM device_message WHERE device_id=? AND client_message_id=?",ROW,agent.id(),messageId).getFirst();
         });
+    }
+    public synchronized Message message(long id) {
+        var rows=jdbc.query("SELECT * FROM device_message WHERE id=?",ROW,id);
+        if(rows.isEmpty())throw failure(HttpStatus.NOT_FOUND,"原消息已删除或不存在");
+        return rows.getFirst();
     }
     public synchronized Page page(Long after,Long before,int limit) { return page("shared",after,before,limit); }
     public synchronized Page page(String conversation,Long after,Long before,int limit) {
@@ -323,6 +377,6 @@ public class DeviceMessageStore {
         if(value==null||!value.matches("(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")) throw bad("消息或设备标识必须为 UUID");
         return value.toLowerCase(Locale.ROOT);
     }
-    private static ResponseStatusException bad(String message) { return failure(HttpStatus.BAD_REQUEST,message); }
+    static ResponseStatusException bad(String message) { return failure(HttpStatus.BAD_REQUEST,message); }
     static ResponseStatusException failure(HttpStatus status,String message) { return new ResponseStatusException(status,message); }
 }

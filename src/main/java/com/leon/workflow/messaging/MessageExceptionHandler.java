@@ -5,7 +5,7 @@ import org.springframework.web.server.ResponseStatusException;
 import org.springframework.http.*;
 import java.util.Map;
 
-@RestControllerAdvice(assignableTypes={AgentController.class,DeviceMessageController.class,AgentAvatarController.class,AgentContextController.class,ChatBackupController.class,ChatUserController.class,ChatImageController.class})
+@RestControllerAdvice(assignableTypes={AgentController.class,DeviceMessageController.class,AgentAvatarController.class,AgentContextController.class,ChatBackupController.class,ConversationBranchController.class,ChatUserController.class,ChatImageController.class})
 public class MessageExceptionHandler {
     @ExceptionHandler(ResponseStatusException.class)
     public ResponseEntity<?> invalid(ResponseStatusException error) {

@@ -1,0 +1,15 @@
+[
+  {"title":"后台总览","description":"工作空间首页","path":"/index.html","group":"日常管理","icon":"⌂"},
+  {"title":"Leon Tools Pro","description":"集合、网页、便签、待办与工具","path":"/workspace/tools-pro.html","group":"日常管理","icon":"▦"},
+  {"title":"快捷项","description":"文本、链接、分类与导入导出","path":"/simple-kv.html","group":"日常管理","icon":"↗"},
+  {"title":"JSON 记录","description":"搜索、查看与编辑记录","path":"/json-record-search.html","group":"日常管理","icon":"{}"},
+  {"title":"工作流编排","description":"编排、脚本、凭据、发布与定时","path":"/workflows.html","group":"自动化与 AI","icon":"⑂"},
+  {"title":"运行实例","description":"实例筛选、状态与节点执行详情","path":"/workflow-runs.html","group":"自动化与 AI","icon":"▷"},
+  {"title":"Agent 工作台","description":"Agent、模型、会话与用量","path":"/workspace/agents.html","group":"自动化与 AI","icon":"✳"},
+  {"title":"用户管理","description":"用户、会话、背景资料与分析","path":"/workspace/users.html","group":"自动化与 AI","icon":"◎"},
+  {"title":"歌曲管理","description":"上传、试听、歌单与歌曲整理","path":"/music.html","group":"媒体资料","icon":"♫"},
+  {"title":"歌曲统计","description":"曲库与播放统计","path":"/music-statistics.html","group":"媒体资料","icon":"▥"},
+  {"title":"服务器监控","description":"运行指标、部署记录与一键部署","path":"/monitor.html","group":"服务管理","icon":"⌁"},
+  {"title":"数据库管理","description":"数据表、容量与只读 SQL 查询","path":"/workspace/database.html","group":"服务管理","icon":"▤"},
+  {"title":"高级设置","description":"模型配置、加密凭据与数据库备份","path":"/advanced-settings.html","group":"服务管理","icon":"⚙"}
+]

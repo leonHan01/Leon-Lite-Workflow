@@ -1,0 +1,38 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'com.leon.workflow.admin'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.leon.workflow.admin'
+        minSdk 26
+        targetSdk 35
+        versionCode 3
+        versionName '1.0.2'
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    buildFeatures { buildConfig true }
+    testOptions {
+        unitTests.includeAndroidResources = true
+        unitTests.all {
+            jvmArgs '--add-opens=java.base/java.lang=ALL-UNNAMED', '--add-opens=java.base/java.util=ALL-UNNAMED',
+                '--add-opens=java.base/java.io=ALL-UNNAMED', '--add-opens=java.base/java.net=ALL-UNNAMED'
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            // Supply a private signing configuration in Android Studio for release distribution.
+        }
+    }
+    lint { abortOnError true }
+}
+
+dependencies {
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.robolectric:robolectric:4.16.1'
+}

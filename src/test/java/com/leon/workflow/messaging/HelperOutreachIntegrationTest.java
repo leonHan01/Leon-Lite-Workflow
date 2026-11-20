@@ -24,6 +24,7 @@ class HelperOutreachIntegrationTest {
     @Autowired ChatAccess access;
     @Autowired ChatUserRegistry users;
     @Autowired HelperConversationMemory memory;
+    @Autowired ConversationFactMemory facts;
     @Autowired AgentContextManager contexts;
     @MockitoBean AgentModelClient model;
     HelperOutreachService service;
@@ -39,7 +40,7 @@ class HelperOutreachIntegrationTest {
     }
     static Instant at(String time){return LocalDateTime.parse("2026-11-20T"+time+":00").atZone(HelperOutreachService.ZONE).toInstant();}
     @BeforeEach void setUp() throws Exception {
-        for(String table:List.of("chat_helper_outreach","chat_helper_memory","chat_context_summary","chat_context_archive","chat_context_snapshot",
+        for(String table:List.of("chat_context_fact","chat_helper_outreach","chat_helper_memory","chat_context_summary","chat_context_archive","chat_context_snapshot",
                 "chat_context_operation","chat_context_policy","chat_agent_job","device_message","chat_agent","chat_cleared_message"))jdbc.update("DELETE FROM "+table);
         jdbc.update("DELETE FROM chat_conversation_member");jdbc.update("DELETE FROM chat_conversation WHERE id<>'shared'");
         clock=new MutableClock();service=new HelperOutreachService(jdbc,store,agents,chat,access,memory,model,users,"",clock);
@@ -190,11 +191,14 @@ class HelperOutreachIntegrationTest {
     }
 
     @Test void reusesExistingCompressedHistoryInsteadOfReadingOldMessages() throws Exception {
-        var alice=users.getOrCreate("HelperAlice");String room=direct(alice,helper);exchange(alice,room,"OLD_RAW_HISTORY",List.of());
+        var alice=users.getOrCreate("HelperAlice");String room=direct(alice,helper);exchange(alice,room,"OLD_RAW_HISTORY STRUCTURED_PREFERENCE",List.of());
         long through=jdbc.queryForObject("SELECT MAX(id) FROM device_message WHERE conversation_id=?",Long.class,room);
         jdbc.update("INSERT INTO chat_context_summary(conversation_id,agent_id,epoch,through_id,summary,created_at) VALUES(?,?,0,?,'EXISTING_MEMORY',1)",room,helper.id(),through);
+        long userMessage=jdbc.queryForObject("SELECT MIN(id) FROM device_message WHERE conversation_id=? AND message_role='user'",Long.class,room);
+        var original=store.message(userMessage);
+        facts.save(room,0,List.of(new ConversationFactMemory.Fact(helper.id(),ConversationFactMemory.subject(original),original.sender(),"preference","reply_style","STRUCTURED_PREFERENCE",userMessage,"STRUCTURED_PREFERENCE",false)));
         service.plan(clock.instant());due(alice,1,clock.instant());service.deliver(Objects.requireNonNull(service.claim(clock.instant())));
-        assertEquals("SENT",state(alice,1));assertTrue(calls.toString().contains("EXISTING_MEMORY"));assertFalse(calls.toString().contains("OLD_RAW_HISTORY"));
+        assertEquals("SENT",state(alice,1));assertTrue(calls.toString().contains("EXISTING_MEMORY"));assertTrue(calls.toString().contains("STRUCTURED_PREFERENCE"));assertFalse(calls.toString().contains("OLD_RAW_HISTORY"));
     }
 
     @Test void longUnicodeMessagesAreSummarizedInBoundedPiecesIncludingTheirEnd() {

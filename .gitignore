@@ -56,3 +56,6 @@ venv/
 ._*
 Thumbs.db
 Desktop.ini
+
+# Android distributable artifacts (source lives in android/)
+/dist/android/

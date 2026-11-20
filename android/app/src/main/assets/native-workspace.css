@@ -1,0 +1,22 @@
+/* Applied only inside the Android client; desktop pages retain their layout. */
+html.leon-android { color-scheme:light; -webkit-text-size-adjust:100%; }
+html.leon-android body { min-width:0; }
+html.leon-android .workspace-app .lw-sidebar,
+html.leon-android .workspace-app .lw-topbar { display:none !important; }
+html.leon-android .workspace-app .lw-shell { display:block; min-height:100dvh; }
+html.leon-android .workspace-app .lw-main { width:100%; min-width:0; margin:0; }
+html.leon-android .login { width:min(420px,calc(100vw - 32px)); padding:28px 24px; }
+html.leon-android .workspace-app .ws-load-status { margin:16px; }
+@media (max-width:700px) {
+    html.leon-android .workspace-app .advanced-page,
+    html.leon-android .workspace-app .workspace-record-search .page,
+    html.leon-android .workspace-app .workspace-record-detail .page { padding:24px 16px 36px; }
+    html.leon-android .workspace-app .advanced-card { flex-direction:column; padding:20px; }
+    html.leon-android .workspace-app input:not([type=checkbox]):not([type=radio]),
+    html.leon-android .workspace-app select { font-size:16px; }
+    html.leon-android .workspace-app .wf-page input,
+    html.leon-android .workspace-app .wf-page select { font-size:14px; }
+    html.leon-android .workspace-app .model-settings { min-width:0; }
+    html.leon-android .workspace-app .model-form { grid-template-columns:1fr; }
+    html.leon-android .workspace-app .model-form label { grid-column:auto; }
+}
