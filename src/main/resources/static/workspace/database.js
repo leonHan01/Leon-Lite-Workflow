@@ -18,7 +18,40 @@ export function mount(root) {
     const refresh = root.querySelector('[data-db-refresh]');
     const run = root.querySelector('[data-db-run]');
     const result = root.querySelector('[data-db-result]');
+    const sortButtons = root.querySelectorAll('[data-db-sort]');
     let loaded = false;
+    let tables = [];
+    let sortKey = null;
+    let sortDirection = 'descending';
+
+    function renderTables() {
+        const ordered = [...tables];
+        if (sortKey) ordered.sort((a, b) => {
+            const left = a[sortKey], right = b[sortKey];
+            if (left == null || right == null) return left == null ? (right == null ? 0 : 1) : -1;
+            return (left - right) * (sortDirection === 'ascending' ? 1 : -1);
+        });
+        tbody.replaceChildren();
+        for (const table of ordered) {
+            const tr = document.createElement('tr');
+            const name = document.createElement('td');
+            const button = document.createElement('button'); button.type = 'button'; button.className = 'db-table-link';
+            button.textContent = table.schema + '.' + table.name;
+            button.addEventListener('click', () => { sql.value = 'SELECT * FROM ' + identifier(table.schema) + '.' + identifier(table.name); sql.focus(); });
+            name.append(button); tr.append(name);
+            for (const text of [table.rows == null ? '—' : number.format(table.rows), bytes(table.bytes), '']) {
+                const cell = document.createElement('td'); cell.textContent = text; tr.append(cell);
+            }
+            tbody.append(tr);
+        }
+        for (const button of sortButtons) {
+            const selected = button.dataset.dbSort === sortKey;
+            const column = button.closest('th');
+            if (selected) column.setAttribute('aria-sort', sortDirection);
+            else column.removeAttribute('aria-sort');
+            button.querySelector('span').textContent = selected ? (sortDirection === 'ascending' ? '↑' : '↓') : '↕';
+        }
+    }
 
     async function loadTables() {
         refresh.disabled = true; tableStatus.textContent = '正在统计数据表…';
@@ -26,20 +59,9 @@ export function mount(root) {
             const response = await fetch(endpoint + '?tables', { cache: 'no-store' });
             if (!response.ok) throw new Error('数据表加载失败，请检查登录状态后重试。');
             const data = await response.json();
-            tbody.replaceChildren();
-            for (const table of data.tables) {
-                const tr = document.createElement('tr');
-                const name = document.createElement('td');
-                const button = document.createElement('button'); button.type = 'button'; button.className = 'db-table-link';
-                button.textContent = table.schema + '.' + table.name;
-                button.addEventListener('click', () => { sql.value = 'SELECT * FROM ' + identifier(table.schema) + '.' + identifier(table.name); sql.focus(); });
-                name.append(button); tr.append(name);
-                for (const text of [table.rows == null ? '—' : number.format(table.rows), bytes(table.bytes), '']) {
-                    const cell = document.createElement('td'); cell.textContent = text; tr.append(cell);
-                }
-                tbody.append(tr);
-            }
-            tableStatus.textContent = '共 ' + number.format(data.tables.length) + ' 张表';
+            tables = data.tables;
+            renderTables();
+            tableStatus.textContent = '共 ' + number.format(tables.length) + ' 张表';
             loaded = true;
         } catch (error) { tableStatus.textContent = error.message; }
         finally { refresh.disabled = false; }
@@ -66,6 +88,12 @@ export function mount(root) {
         finally { run.disabled = false; }
     }
     refresh.addEventListener('click', loadTables);
+    for (const button of sortButtons) button.addEventListener('click', () => {
+        const key = button.dataset.dbSort;
+        sortDirection = sortKey === key && sortDirection === 'descending' ? 'ascending' : 'descending';
+        sortKey = key;
+        renderTables();
+    });
     run.addEventListener('click', execute);
     sql.addEventListener('keydown', event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !run.disabled) { event.preventDefault(); execute(); } });
     return { activate() { if (!loaded) loadTables(); } };

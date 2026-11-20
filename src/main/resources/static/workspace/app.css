@@ -398,6 +398,9 @@
 .db-scroll th,.db-scroll td { padding:10px 12px; border-bottom:1px solid #edf0ed; max-width:350px; overflow-wrap:anywhere; vertical-align:top; }
 .db-scroll th { color:#76817c; white-space:nowrap; background:#f8faf8; position:sticky; top:0; }
 .db-table-link { border:0; background:none; color:#4669e8; padding:0; cursor:pointer; text-align:left; font:inherit; }
+.db-card button.db-sort { padding:0; border:0; background:transparent; color:inherit; font:inherit; font-weight:inherit; cursor:pointer; white-space:nowrap; }
+.db-sort span { color:#7d8984; margin-left:3px; }
+.db-card button.db-sort:focus-visible { outline:2px solid #4669e8; outline-offset:3px; }
 .db-label { display:block; margin:0 0 8px; font-size:13px; color:#465552; }
 .db-card textarea { display:block; width:100%; min-height:150px; box-sizing:border-box; padding:14px; border:1px solid #dfe5e1; border-radius:8px; resize:vertical; font:13px/1.6 ui-monospace,monospace; }
 .db-actions { display:flex; align-items:center; gap:12px; margin-top:12px; }

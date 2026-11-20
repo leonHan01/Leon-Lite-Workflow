@@ -22,6 +22,25 @@ public class DeviceMessageController {
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(store.page(access.room(request,conversationId,false),after,before,limit));
     }
 
+
+    @GetMapping("/search")
+    public ResponseEntity<DeviceMessageStore.SearchPage> search(@RequestParam String q,
+            @RequestParam(required=false) String conversationId,@RequestParam(required=false) Long before,
+            @RequestParam(defaultValue="50") int limit,HttpServletRequest request) {
+        var user=access.user(request);
+        String room=conversationId==null?null:access.room(request,conversationId,false);
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore())
+            .body(store.search(q,room,before,limit,user.id(),access.legacy(user)));
+    }
+
+    @GetMapping("/context")
+    public ResponseEntity<DeviceMessageStore.SearchContext> context(@RequestParam String conversationId,
+            @RequestParam long messageId,@RequestParam(defaultValue="around") String direction,
+            @RequestParam(defaultValue="20") int limit,HttpServletRequest request) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore())
+            .body(store.searchContext(access.room(request,conversationId,false),messageId,direction,limit));
+    }
+
     @PostMapping
     public ResponseEntity<DeviceMessageStore.Message> send(@RequestBody DeviceMessageStore.Send input,HttpServletRequest request) {
         var user=access.user(request);

@@ -1,28 +1,42 @@
 <div class="users-page">
-  <div class="advanced-eyebrow"><span></span> USERS</div>
-  <h1>用户管理<span>.</span></h1>
-  <p class="users-intro">查看用户参与的对话，管理会话并分析用户画像。</p>
-  <div class="users-layout">
-    <section class="users-panel"><div class="users-heading"><h2>用户</h2><button type="button" data-refresh>刷新</button></div><div data-users class="users-list"></div></section>
-    <section class="users-panel"><div class="users-heading"><h2 data-user-title>选择用户</h2></div><div data-rooms class="users-list"></div></section>
-    <section class="users-panel users-content">
-      <div class="users-heading"><h2 data-room-title>选择会话</h2><button type="button" data-delete hidden>删除会话</button></div>
-      <button type="button" data-older hidden>加载更早消息</button><div data-messages class="users-messages"><p>选择会话后查看对话。</p></div>
+  <header class="users-page-header">
+    <div><div class="users-eyebrow"><span></span> USER MANAGEMENT</div><h1>用户管理<span>.</span></h1><p class="users-intro">了解用户、查看对话，让每一次交流更有温度。</p></div>
+    <button type="button" class="users-btn users-btn-quiet users-refresh" data-refresh><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M5.5 9a7 7 0 0 1 12-2L20 12M4 12l2.5 5a7 7 0 0 0 12-2"/></svg>刷新数据</button>
+  </header>
+  <section class="users-explorer" aria-label="用户与对话">
+    <section class="users-column users-people" aria-labelledby="users-people-title">
+      <div class="users-column-heading"><div><span class="users-kicker">PEOPLE</span><h2 id="users-people-title">用户 <span class="users-count" data-user-count>0</span></h2></div></div>
+      <label class="users-search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 4 4"/></svg><input type="search" data-user-search placeholder="搜索用户" aria-label="搜索用户"></label>
+      <div data-users class="users-list" aria-label="用户列表"></div>
+    </section>
+    <section class="users-column users-conversations" aria-labelledby="users-rooms-title">
+      <div class="users-column-heading"><div><span class="users-kicker">CONVERSATIONS</span><h2 id="users-rooms-title">会话 <span class="users-count" data-room-count>0</span></h2></div></div>
+      <p class="users-column-caption" data-user-title>选择用户以查看会话</p>
+      <div data-rooms class="users-list"><div class="users-empty users-empty-compact"><span class="users-empty-icon" aria-hidden="true">↗</span><strong>选择一位用户</strong><span>该用户的会话将显示在这里</span></div></div>
+    </section>
+  </section>
+  <dialog class="users-dialog" data-conversation-dialog aria-labelledby="users-messages-title" aria-describedby="users-dialog-caption">
+    <div class="users-dialog-header"><div><span class="users-kicker">CONVERSATION DETAILS</span><h2 id="users-messages-title" data-room-title>对话记录</h2><p id="users-dialog-caption" class="users-chat-caption" data-room-caption></p></div><div class="users-dialog-actions"><button type="button" class="users-btn users-btn-danger" data-delete>删除会话</button><button type="button" class="users-dialog-close" data-dialog-close aria-label="关闭会话详情" autofocus>×</button></div></div>
+    <p class="users-dialog-status" data-dialog-status role="status" aria-live="polite"></p>
+    <div class="users-message-area"><button type="button" class="users-btn users-btn-quiet users-older" data-older hidden>加载更早消息</button><div data-messages class="users-messages"></div></div>
+  </dialog>
+  <div class="users-details">
+    <section class="users-panel users-background">
+      <div class="users-panel-title"><div class="users-panel-icon users-icon-profile" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="8" r="3.5"/><path d="M5 20v-1a7 7 0 0 1 14 0v1"/></svg></div><div><span class="users-kicker">CONTEXT</span><h2>用户背景</h2></div></div>
+      <p class="users-panel-description">记录背景、偏好或工作信息，帮助 Agent 更好地理解当前用户。</p>
+      <div class="users-field-heading"><label for="user-background">背景信息</label><span data-background-count>0 / 1000</span></div>
+      <textarea id="user-background" data-background maxlength="1000" rows="5" disabled placeholder="选择用户后填写背景信息"></textarea>
+      <div class="users-background-footer"><div class="users-actions"><button type="button" class="users-btn users-btn-primary" data-background-save disabled>保存背景</button><button type="button" class="users-btn users-btn-quiet" data-background-reload disabled>重新加载</button></div><p data-background-status role="status" aria-live="polite"></p></div>
+      <p class="users-footnote">背景会随对话发送给模型服务；群聊仅使用当前发言者的背景。</p>
+    </section>
+    <section class="users-panel users-analysis">
+      <div class="users-panel-title"><div class="users-panel-icon users-icon-spark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="m12 3 1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3ZM19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8L19 15Z"/></svg></div><div><span class="users-kicker">AI INSIGHTS</span><h2>AI 用户画像</h2></div></div>
+      <p class="users-panel-description">基于用户的文字发言，提炼需求、兴趣与偏好。</p>
+      <label class="users-model-label" for="user-analysis-agent">分析模型</label><select id="user-analysis-agent" data-agent aria-label="分析模型"></select>
+      <button type="button" class="users-btn users-btn-primary users-analyze" data-analyze disabled><span aria-hidden="true">✦</span> 分析用户画像</button>
+      <p data-analysis-status role="status" aria-live="polite"></p><div data-analysis-result class="users-analysis-result"></div>
+      <p class="users-footnote">最多使用最近 200 条、3 万字符的用户文字；不包含其他用户发言和图片。内容将发送给所选模型，结果仅显示在当前页面。</p>
     </section>
   </div>
-  <section class="users-panel users-background">
-    <h2>用户背景信息</h2>
-    <p>填写当前用户的背景、偏好或工作信息。每次该用户向 Agent 发起对话时，这些内容会随对话发送给所选模型服务；群聊中仅带入本轮发言者的背景。</p>
-    <label for="user-background">背景信息（最多 1000 字符）</label>
-    <textarea id="user-background" data-background maxlength="1000" rows="5" disabled placeholder="请先选择用户"></textarea>
-    <div class="users-analysis-actions"><button type="button" data-background-save disabled>保存背景</button><button type="button" data-background-reload disabled>重新加载</button></div>
-    <p data-background-status role="status" aria-live="polite"></p>
-  </section>
-  <section class="users-panel users-analysis">
-    <h2>AI 用户画像</h2>
-    <p>使用所选 Agent 的模型分析该用户最近最多 200 条、3 万字符的文字发言；不包含其他用户发言或图片。发言会发送给所选模型服务，结果仅显示在当前页面。</p>
-    <div class="users-analysis-actions"><label>分析模型 <select data-agent aria-label="分析模型"></select></label><button type="button" data-analyze>分析用户画像</button></div>
-    <p data-analysis-status role="status"></p><div data-analysis-result class="users-analysis-result"></div>
-  </section>
-  <p data-status role="status" aria-live="polite"></p>
+  <p data-status class="users-page-status" role="status" aria-live="polite"></p>
 </div>

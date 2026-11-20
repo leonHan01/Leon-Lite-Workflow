@@ -215,6 +215,47 @@ public class DeviceMessageStore {
         var jobs=jdbc.query("SELECT * FROM chat_agent_job WHERE conversation_id=? AND status<>'SUCCEEDED' ORDER BY CASE WHEN status='FAILED' THEN 1 ELSE 0 END,message_id DESC LIMIT 100",(rs,n)->new Job(rs.getLong("message_id"),rs.getString("agent_id"),rs.getString("agent_name"),rs.getString("status"),rs.getString("error"),rs.getString("phase"),rs.getString("user_id")),conversation);
         return new Page(List.copyOf(result),more,jobs,contextOperations(conversation),historyRevision(conversation));
     }
+
+    public record SearchHit(Message message,String conversationName) {}
+    public record SearchPage(List<SearchHit> results,boolean hasMore,Long nextBefore) {}
+    public record SearchContext(List<Message> messages,boolean hasOlder,boolean hasNewer,long historyRevision) {}
+
+    /** Literal substring search: SQL wildcard characters have no special meaning. */
+    public synchronized SearchPage search(String query,String room,Long before,int limit,String userId,boolean legacy) {
+        String q=query==null?"":query.strip();
+        if(q.isEmpty()||q.length()>100||q.codePoints().anyMatch(Character::isISOControl)
+                ||before!=null&&before<=0||limit<1||limit>50)throw bad("搜索词应为 1–100 字符，分页参数必须有效");
+        String sql="SELECT m.*,c.name AS conversation_name FROM device_message m JOIN chat_conversation c ON c.id=m.conversation_id "
+            +"WHERE (c.owner_id=? OR (? AND c.owner_id IS NULL) OR EXISTS "
+            +"(SELECT 1 FROM chat_conversation_member cm WHERE cm.conversation_id=c.id AND cm.user_id=?)) "
+            +"AND LOCATE(LOWER(?),LOWER(m.body))>0";
+        var args=new ArrayList<Object>(List.of(userId,legacy,userId,q));
+        if(room!=null){sql+=" AND m.conversation_id=?";args.add(room);}
+        if(before!=null){sql+=" AND m.id<?";args.add(before);}
+        sql+=" ORDER BY m.id DESC LIMIT ?";args.add(limit+1);
+        var rows=jdbc.query(sql,(rs,n)->new SearchHit(ROW.mapRow(rs,n),rs.getString("conversation_name")),args.toArray());
+        boolean more=rows.size()>limit;
+        var result=List.copyOf(rows.subList(0,Math.min(limit,rows.size())));
+        return new SearchPage(result,more,more?result.getLast().message().id():null);
+    }
+
+    public synchronized SearchContext searchContext(String room,long anchor,String direction,int limit) {
+        if(anchor<=0||limit<1||limit>50||!Set.of("around","before","after").contains(direction))throw bad("消息定位参数无效");
+        var target=jdbc.query("SELECT * FROM device_message WHERE conversation_id=? AND id=?",ROW,room,anchor);
+        if(target.isEmpty())throw failure(HttpStatus.NOT_FOUND,"原消息已删除或不属于当前会话");
+        var result=new ArrayList<Message>();
+        if(!direction.equals("after")){
+            result.addAll(jdbc.query("SELECT * FROM device_message WHERE conversation_id=? AND id<? ORDER BY id DESC LIMIT ?",ROW,room,anchor,limit));
+            Collections.reverse(result);
+        }
+        if(direction.equals("around"))result.add(target.getFirst());
+        if(!direction.equals("before"))result.addAll(jdbc.query("SELECT * FROM device_message WHERE conversation_id=? AND id>? ORDER BY id LIMIT ?",ROW,room,anchor,limit));
+        long first=result.isEmpty()?anchor:result.getFirst().id(),last=result.isEmpty()?anchor:result.getLast().id();
+        boolean older=Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM device_message WHERE conversation_id=? AND id<?)",Boolean.class,room,first));
+        boolean newer=Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM device_message WHERE conversation_id=? AND id>?)",Boolean.class,room,last));
+        return new SearchContext(List.copyOf(result),older,newer,historyRevision(room));
+    }
+
     synchronized long historyRevision(String room) { return jdbc.queryForObject("SELECT history_revision FROM chat_conversation WHERE id=?",Long.class,room); }
     private void checkNotCleared(String device,String message) {
         if(jdbc.queryForObject("SELECT COUNT(*) FROM chat_cleared_message WHERE device_id=? AND client_message_id=?",Integer.class,device,message)>0)
