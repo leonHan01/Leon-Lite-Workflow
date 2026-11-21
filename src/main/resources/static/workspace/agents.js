@@ -4,6 +4,7 @@ export function mount(pane) {
     if (!document.getElementById('agents-css')) { const css = document.createElement('link'); css.id = 'agents-css'; css.rel = 'stylesheet'; css.href = '/workspace/agents.css'; document.head.append(css); }
     let viewActive = false, presenceTimer = null, presenceEpoch = 0;
 const $ = id => pane.querySelector('#' + CSS.escape(id));
+const DEFAULT_IMAGE_MODEL = $('imageModel').defaultValue;
 let agents = [], conversations = [], editing = null, current = 'shared', rows = [], more = false, generation = 0, timer, loading = false, activeTab = 'config', historyRevision = null;
 let avatarCatalog = [], selectedAvatarId = 'alfred', uploadingAvatar = false, models = [];
 const deviceId = (() => { let value = localStorage.getItem('leon-agent-web-device'); if (!value) { value = crypto.randomUUID(); localStorage.setItem('leon-agent-web-device', value); } return value; })();
@@ -106,7 +107,7 @@ function resetForm(agent = null) {
     modelOptions(agent?.modelId || ''); $('enabled').checked = agent?.enabled ?? true;
     $('webSearchEnabled').checked = agent?.webSearchEnabled ?? false;
     $('imageGenerationEnabled').checked = agent?.imageGenerationEnabled ?? false;
-    $('imageModel').value = agent?.imageModel || 'gpt-image-2.5-flare'; modelHint();
+    $('imageModel').value = agent?.imageModel || DEFAULT_IMAGE_MODEL; modelHint();
     $('formTitle').textContent = agent ? `编辑 ${agent.name}` : '新建 Agent';
     renderAgents();
 }
@@ -137,7 +138,7 @@ $('agentForm').onsubmit = async event => {
     if (uploadingAvatar) return; body.avatarId = selectedAvatarId;
     body.enabled = $('enabled').checked; body.version = editing?.version;
     body.webSearchEnabled = $('webSearchEnabled').checked;
-    body.imageGenerationEnabled = $('imageGenerationEnabled').checked; body.imageModel = $('imageModel').value.trim() || 'gpt-image-2.5-flare';
+    body.imageGenerationEnabled = $('imageGenerationEnabled').checked; body.imageModel = $('imageModel').value.trim() || DEFAULT_IMAGE_MODEL;
     try {
         const saved = await api('/api/agent-admin' + (editing ? '/' + editing.id : ''), { method: editing ? 'PUT' : 'POST', body: JSON.stringify(body) });
         await loadAgents(); resetForm(saved); notice('Agent 已保存。客户端同步后即可开始私聊或在群聊中 @它。');

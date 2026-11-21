@@ -17,7 +17,7 @@ import java.util.*;
 
 @Service
 public class AgentRegistry {
-    public static final String DEFAULT_IMAGE_MODEL="gpt-image-2.5-flare";
+    public static final String DEFAULT_IMAGE_MODEL="gpt-image-2.6-sunburst";
     private final JdbcTemplate jdbc;
     private final byte[] key;
     private final AgentAvatarService avatars;
@@ -61,7 +61,8 @@ public class AgentRegistry {
         jdbc.execute("ALTER TABLE chat_agent ADD COLUMN IF NOT EXISTS description VARCHAR(2000) DEFAULT '' NOT NULL");
         jdbc.execute("ALTER TABLE chat_agent ADD COLUMN IF NOT EXISTS web_search_enabled BOOLEAN DEFAULT FALSE NOT NULL");
         jdbc.execute("ALTER TABLE chat_agent ADD COLUMN IF NOT EXISTS image_generation_enabled BOOLEAN DEFAULT FALSE NOT NULL");
-        jdbc.execute("ALTER TABLE chat_agent ADD COLUMN IF NOT EXISTS image_model VARCHAR(100) DEFAULT 'gpt-image-2.5-flare' NOT NULL");
+        jdbc.execute("ALTER TABLE chat_agent ADD COLUMN IF NOT EXISTS image_model VARCHAR(100) DEFAULT '"+DEFAULT_IMAGE_MODEL+"' NOT NULL");
+        jdbc.execute("ALTER TABLE chat_agent ALTER COLUMN image_model SET DEFAULT '"+DEFAULT_IMAGE_MODEL+"'");
     }
     public boolean keyStorageEnabled() { return key != null; }
     static final class RuntimeConfig {

@@ -362,7 +362,7 @@ Agent 管理页新增「允许此 Agent 联网搜索」，默认关闭，旧请�
 
 ### 同一 Agent 聊天与 GPT Image 绘图（2026-11-21）
 
-Agent 管理页可为 OpenAI Agent 开启「允许此 Agent 绘图」，指定独立的 GPT Image 模型（默认 `gpt-image-2.5-flare`）。原对话模型需支持 Responses API 的 `image_generation` 工具，通常为 GPT-5 及更新模型；复用该 Agent 的 OpenAI API Key，不需要新建另一个 Agent。所有旧 Agent 默认关闭绘图，旧管理请求省略新字段时保留已有设置。
+Agent 管理页可为 OpenAI Agent 开启「允许此 Agent 绘图」，指定独立的 GPT Image 模型（默认 `gpt-image-2.6-sunburst`）。原对话模型需支持 Responses API 的 `image_generation` 工具，通常为 GPT-5 及更新模型；复用该 Agent 的 OpenAI API Key，不需要新建另一个 Agent。所有旧 Agent 默认关闭绘图，旧管理请求省略新字段时保留已有设置。新建 Agent 或工作台中未填写绘图模型时使用 `gpt-image-2.6-sunburst`；已有 Agent 保存的模型不会被默认值更新覆盖。
 
 开启后，仅交互回复使用 Responses API，由对话模型根据最新用户请求自动选择文字回复或生成 / 修改图片，每次最多调用一次工具。历史生成图作为图片参考重新附带，最近最多 8 张；摘要压缩、自动标题、归档总结与其他后台文字调用继续走原文字接口，不开启绘图工具。用量兼容 Responses 的 `input_tokens` / `output_tokens`，图片工具用量按独立绘图模型记录；未返回时记为未报告，不猜测费用。
 
