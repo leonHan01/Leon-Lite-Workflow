@@ -323,7 +323,7 @@ class ContextMemoryIntegrationTest {
             if(calls.incrementAndGet()==1)return json.writeValueAsString(Map.of("summary","已讨论合同。","facts",List.of(
                 change(id,"合同编号","ORCHID779","set"),change(seat,"座位代号","WREN533","set"))));
             assertTrue(request.getLast().get("content").contains("ORCHID779"));
-            return json.writeValueAsString(Map.of("summary","已讨论合同 ORCHID779 和座位 WREN533。","facts",List.of(
+            return json.writeValueAsString(Map.of("title","合同交付与编号更正","summary","已讨论合同 ORCHID779 和座位 WREN533。","facts",List.of(
                 change(corrected,"合同编号","MAPLE842","set"),change(withdrawn,"座位代号","","delete"))));
         }).when(model).complete(any(),anyString(),anyList());
         var job=contexts.enqueueArchive(room,a.id(),UUID.randomUUID().toString());send(room,"未来合同 FUTURE999");engine.runNext();
@@ -335,6 +335,7 @@ class ContextMemoryIntegrationTest {
         assertEquals(2,page2.turns().size());
         assertEquals(2,calls.get());
         var result=contexts.archive(job.id());String summary=result.get("summary").toString();
+        assertEquals("合同交付与编号更正",result.get("title"));
         assertEquals("SUCCEEDED",store.page(room,null,null,100).contextOperations().getFirst().status(),result.get("operation").toString());
         assertTrue(summary.contains("青竹园"),summary);
         assertTrue(summary.contains("MAPLE842"),summary);
@@ -344,6 +345,19 @@ class ContextMemoryIntegrationTest {
         assertTrue(result.get("messages").toString().contains("ORCHID779"));assertEquals(2,calls.get());
         assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM chat_context_fact WHERE conversation_id=?",Integer.class,room));
         assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM chat_context_summary WHERE conversation_id=?",Integer.class,room));
+    }
+
+    @Test void archiveDoesNotPublishRetractedValuesInArticleTitle() throws Exception {
+        var a=agent("titleforget");String room=chat.group("归档标题",List.of(a.id())).id();
+        var original=send(room,"座位代号是 WREN533");remember(a,original,"座位代号","WREN533",false);
+        var withdrawn=send(room,"忘记座位代号");
+        doReturn(json.writeValueAsString(Map.of("title","WREN533 座位安排","summary","已撤销座位代号。","facts",List.of(
+            change(withdrawn,"座位代号","","delete"))))).when(model).complete(any(),anyString(),anyList());
+        var op=contexts.enqueueArchive(room,a.id(),UUID.randomUUID().toString());engine.runNext();
+        var archive=contexts.archive(op.id());
+        assertEquals("FAILED",((DeviceMessageStore.ContextOperation)archive.get("operation")).status());
+        assertEquals("",archive.get("title"));assertThrows(Exception.class,()->contexts.finishArchive(op.id()));
+        assertEquals(2,store.page(room,null,null,100).messages().size());
     }
 
     @Test void automaticSecondBatchFailureFallsBackWithNoPartialFactsOrSummary() throws Exception {
@@ -393,7 +407,7 @@ class ContextMemoryIntegrationTest {
             String value="reference-"+i+"-"+"x".repeat(160);
             var source=send(room,value);remember(a,source,"reference"+i,value,false);
         }
-        doReturn("核对完毕").when(model).complete(any(),anyString(),anyList());
+        doReturn(json.writeValueAsString(Map.of("title","资料引用的核对与保留","summary","核对完毕","facts",List.of()))).when(model).complete(any(),anyString(),anyList());
         var op=contexts.enqueueArchive(room,a.id(),UUID.randomUUID().toString());engine.runNext();
         String summary=contexts.archive(op.id()).get("summary").toString();
         assertTrue(summary.startsWith("核对完毕"));assertTrue(summary.length()>8000);

@@ -441,25 +441,57 @@ class AgentChatIntegrationTest {
         chat.send(send(room.id(),"first original",List.of()));chat.send(send(room.id(),"second original",List.of()));
         when(model.complete(any(),anyString(),anyList())).thenAnswer(call->{
             List<Map<String,String>> input=call.getArgument(2);String text=input.getLast().get("content");
-            assertTrue(text.contains("first original")&&text.contains("second original"));return "本轮总结：已确认原始事实。";
+            assertTrue(text.contains("first original")&&text.contains("second original"));
+            assertTrue(input.getFirst().get("content").contains("\"title\""));
+            return json.writeValueAsString(Map.of("title","已确认原始事实与后续计划","summary","本轮总结：已确认原始事实。","facts",List.of()));
         });
         String id=UUID.randomUUID().toString();contexts.enqueueArchive(room.id(),a.id(),id);
         assertThrows(Exception.class,()->contexts.finishArchive(id));
         assertTrue(engine.runNext());var archive=contexts.archive(id);
         assertTrue(archive.get("summary").toString().contains("本轮总结"));
+        assertEquals("已确认原始事实与后续计划",archive.get("title"));
+        contexts.enqueueArchive(room.id(),a.id(),id);assertFalse(engine.runNext());
+        assertEquals("已确认原始事实与后续计划",contexts.archive(id).get("title"));
+        verify(model,times(1)).complete(any(),anyString(),anyList());
         assertEquals(2,json.valueToTree(archive.get("messages")).size());
         assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM chat_context_summary",Integer.class));
         var updated=contexts.finishArchive(id);assertTrue(updated.topicStartedAfter()>0);
         assertEquals(updated.topicStartedAfter(),contexts.finishArchive(id).topicStartedAfter());
         assertEquals(2,store.page(room.id(),null,null,100).messages().size());
         chat.send(send(room.id(),"new round",List.of()));
-        doReturn("新一轮总结").when(model).complete(any(),anyString(),anyList());
+        doReturn(json.writeValueAsString(Map.of("title","新一轮任务的讨论记录","summary","新一轮总结","facts",List.of()))).when(model).complete(any(),anyString(),anyList());
         String next=UUID.randomUUID().toString();contexts.enqueueArchive(room.id(),a.id(),next);engine.runNext();
         var messages=json.valueToTree(contexts.archive(next).get("messages"));assertEquals(1,messages.size());assertEquals("new round",messages.get(0).path("text").asText());
     }
+    @Test void archiveRejectsMissingOrInvalidAiArticleTitlesWithoutResettingContext() throws Exception {
+        List<Object> invalidTitles=Arrays.asList(null,""," \n ","标题\n换行","长".repeat(81),List.of("nested"),"聊天总结",123);
+        for(int index=0;index<invalidTitles.size();index++){
+            var a=agent("invalidtitle"+index);var room=chat.group("不能沿用的会话名称",List.of(a.id()));
+            chat.send(send(room.id(),"需要整理的原始讨论",List.of()));
+            var answer=new HashMap<String,Object>();answer.put("summary","有效摘要");answer.put("facts",List.of());
+            if(invalidTitles.get(index)!=null)answer.put("title",invalidTitles.get(index));
+            when(model.complete(any(),anyString(),anyList())).thenReturn(json.writeValueAsString(answer));
+            String id=UUID.randomUUID().toString();contexts.enqueueArchive(room.id(),a.id(),id);assertTrue(engine.runNext());
+            var archive=contexts.archive(id);var op=(DeviceMessageStore.ContextOperation)archive.get("operation");
+            assertEquals("FAILED",op.status(),"invalid title case "+index);assertTrue(op.error().contains("文章标题"));
+            assertEquals("",archive.get("title"));assertThrows(Exception.class,()->contexts.finishArchive(id));
+            assertEquals(0,contexts.info(room.id()).topicStartedAfter());
+            assertEquals(1,store.page(room.id(),null,null,100).messages().size());
+        }
+    }
+    @Test void archiveAcceptsFencedJsonTitleAndTrimsOnlyOuterWhitespace() throws Exception {
+        var a=agent("fencedtitle");var room=chat.group("会话分支",List.of(a.id()));
+        chat.send(send(room.id(),"讨论李志音乐中的南京意象与个人表达",List.of()));
+        doReturn("```json\n"+json.writeValueAsString(Map.of("title","  李志：南京意象与个人表达  ","summary","已讨论音乐与城市。","facts",List.of()))+"\n```")
+            .when(model).complete(any(),anyString(),anyList());
+        String id=UUID.randomUUID().toString();contexts.enqueueArchive(room.id(),a.id(),id);engine.runNext();
+        var archive=contexts.archive(id);assertEquals("李志：南京意象与个人表达",archive.get("title"));
+        assertEquals("SUCCEEDED",((DeviceMessageStore.ContextOperation)archive.get("operation")).status());
+        verify(model,times(1)).complete(any(),anyString(),anyList());
+    }
     @Test void archiveFinishNeverDropsMessagesArrivingDuringExport() throws Exception {
         var a=agent("writer");var room=chat.group("round",List.of(a.id()));
-        chat.send(send(room.id(),"archived",List.of()));when(model.complete(any(),anyString(),anyList())).thenReturn("总结");
+        chat.send(send(room.id(),"archived",List.of()));when(model.complete(any(),anyString(),anyList())).thenReturn(json.writeValueAsString(Map.of("title","已归档事项与后续进展","summary","总结","facts",List.of())));
         String id=UUID.randomUUID().toString();contexts.enqueueArchive(room.id(),a.id(),id);engine.runNext();
         chat.send(send(room.id(),"arrived during local export",List.of()));
         assertThrows(Exception.class,()->contexts.finishArchive(id));assertEquals(0,contexts.info(room.id()).topicStartedAfter());
@@ -481,6 +513,7 @@ class AgentChatIntegrationTest {
         when(model.complete(any(),anyString(),anyList())).thenReturn("summary");
         chat.send(send(room.id(),"question",List.of(a.id())));engine.runNext();
         contexts.enqueueCompression(room.id(),a.id(),UUID.randomUUID().toString());engine.runNext();
+        doReturn(json.writeValueAsString(Map.of("title","清空前的对话归档","summary","summary","facts",List.of()))).when(model).complete(any(),anyString(),anyList());
         String archive=UUID.randomUUID().toString();contexts.enqueueArchive(room.id(),a.id(),archive);engine.runNext();
         var preview=contexts.clearPreview(room.id());assertTrue(preview.messageCount()>0);assertFalse(preview.hasActiveWork());
         String clearId=UUID.randomUUID().toString();var result=contexts.clear(room.id(),clearId,preview.latestMessageId(),preview.historyRevision(),true);
