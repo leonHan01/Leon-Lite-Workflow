@@ -404,22 +404,27 @@ class AgentChatIntegrationTest {
         assertEquals("FAILED",store.page(room.id(),null,null,100).contextOperations().getFirst().status());
         verifyNoInteractions(model);
     }
-    @Test void manualCompressionResumesCompletedBatchesAfterFailure() throws Exception {
+    @Test void manualCompressionRestartsFromCommittedBoundaryAfterFailure() throws Exception {
         var a=agent("writer");var room=chat.group("test",List.of(a.id()));
-        for(int i=0;i<10;i++) chat.send(send(room.id(),"history-"+i+"中".repeat(500),List.of()));
+        for(int i=0;i<10;i++)chat.send(send(room.id(),"history-"+i+"中".repeat(500),List.of()));
         var calls=new java.util.concurrent.atomic.AtomicInteger();
         when(model.complete(any(),anyString(),anyList())).thenAnswer(call->{
-            if(calls.incrementAndGet()==2)throw new AgentModelClient.Failure("超时");return "已完成第一批";
+            if(calls.incrementAndGet()==2)throw new AgentModelClient.Failure("超时");return "未发布第一批";
         });
         contexts.enqueueCompression(room.id(),a.id(),UUID.randomUUID().toString());engine.runNext();
         assertEquals("FAILED",store.page(room.id(),null,null,100).contextOperations().getFirst().status());
-        assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM chat_context_summary",Integer.class));
+        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM chat_context_summary",Integer.class));
+        calls.set(0);
         doAnswer(call->{
             List<Map<String,String>> input=call.getArgument(2);String text=input.getLast().get("content");
-            assertTrue(text.contains("已完成第一批")||text.contains("已继续压缩"));assertFalse(text.contains("history-0"));return "已继续压缩";
+            assertFalse(text.contains("未发布第一批"));
+            if(calls.getAndIncrement()==0)assertTrue(text.contains("history-0"));
+            else assertTrue(text.contains("重新压缩"));
+            return "重新压缩";
         }).when(model).complete(any(),anyString(),anyList());
         contexts.enqueueCompression(room.id(),a.id(),UUID.randomUUID().toString());engine.runNext();
         assertEquals("SUCCEEDED",store.page(room.id(),null,null,100).contextOperations().getFirst().status());
+        assertTrue(calls.get()>1);
         assertEquals(10,store.page(room.id(),null,null,100).messages().size());
     }
     @Test void noEarlierHistoryCompletesWithoutPaidModelCall() {

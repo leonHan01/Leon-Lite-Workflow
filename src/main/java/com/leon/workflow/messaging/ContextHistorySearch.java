@@ -25,15 +25,55 @@ public class ContextHistorySearch {
         return terms.stream().limit(24).toList();
     }
     static int score(String text,List<String> terms){String lower=text.toLowerCase(Locale.ROOT);return terms.stream().filter(lower::contains).mapToInt(s->s.length()*s.length()).sum();}
-    List<Long> find(DeviceMessageStore.Work work,long after,Set<Long> excluded,String question){
-        var terms=terms(question);if(terms.isEmpty())return List.of();
-        var args=new ArrayList<Object>(List.of(work.conversationId(),after,work.messageId(),work.messageId()));
-        var filters=new ArrayList<String>();
+    // A separator belongs to an identifier only when it joins two ASCII components.
+    private static final Pattern CODE=Pattern.compile("[a-z0-9]+(?:[-_./][a-z0-9]+)*",Pattern.CASE_INSENSITIVE);
+    private static final Pattern CODE_LABEL=Pattern.compile("(?:编号|订单号|合同号|单号|序列号|代码|代号|\\b(?:id|code|sku|ref))\\s*[:：#]?\\s*$",Pattern.CASE_INSENSITIVE);
+    private static String identifierPattern(String question){
+        var codes=new LinkedHashSet<String>();
+        var matcher=CODE.matcher(question==null?"":question);
+        while(matcher.find() && codes.size()<24){
+            String code=matcher.group();
+            boolean labelled=CODE_LABEL.matcher(question).region(Math.max(0,matcher.start()-20),matcher.start()).find();
+            if(code.length()>=2 && (labelled||code.chars().anyMatch(Character::isDigit)))
+                codes.add(Pattern.quote(code.toLowerCase(Locale.ROOT)));
+        }
+        if(codes.isEmpty())return "";
+        return "(?<![a-z0-9])(?<![a-z0-9][-_./])(?:"
+            +String.join("|",codes)+")(?![a-z0-9]|[-_./][a-z0-9])";
+    }
+    private record Hit(boolean exact,int lexical) implements Comparable<Hit>{
+        public int compareTo(Hit other){
+            int priority=Boolean.compare(exact,other.exact);
+            return priority!=0?priority:Integer.compare(lexical,other.lexical);
+        }
+    }
+    List<Long> find(DeviceMessageStore.Work work,long after,Set<Long> excluded,String question,ConversationFactMemory.Recall recall){
+        var terms=terms(question);
+        String pattern=identifierPattern(question);
+        if(terms.isEmpty()&&pattern.isEmpty())return List.of();
+        var args=new ArrayList<Object>();
+        String exact="FALSE";
+        if(!pattern.isEmpty()){exact="REGEXP_LIKE(LOWER(body),?)";args.add(pattern);}
+        String scope="conversation_id=? AND COALESCE(reply_to,id)>? AND COALESCE(reply_to,id)<? AND id<?";
+        args.addAll(List.of(work.conversationId(),after,work.messageId(),work.messageId()));
+        if(!excluded.isEmpty()){
+            scope+=" AND COALESCE(reply_to,id) NOT IN ("+String.join(",",Collections.nCopies(excluded.size(),"?"))+")";
+            args.addAll(excluded);
+        }
+        var filters=new ArrayList<String>();filters.add("exact_hit");
         for(String term:terms){filters.add("LOWER(body) LIKE ? ESCAPE '!'");args.add("%"+term.replace("!","!!").replace("%","!%").replace("_","!_")+"%");}
-        var rows=jdbc.query("SELECT COALESCE(reply_to,id) AS anchor,body FROM device_message WHERE conversation_id=? AND COALESCE(reply_to,id)>? AND COALESCE(reply_to,id)<? AND id<? AND ("+String.join(" OR ",filters)+") ORDER BY id DESC LIMIT 256",
-            (r,n)->Map.entry(r.getLong("anchor"),score(r.getString("body"),terms)),args.toArray());
-        var scores=new HashMap<Long,Integer>();
-        for(var row:rows)if(!excluded.contains(row.getKey()))scores.merge(row.getKey(),row.getValue(),Math::max);
-        return scores.entrySet().stream().sorted(Map.Entry.<Long,Integer>comparingByValue().reversed().thenComparing(Map.Entry.<Long,Integer>comparingByKey().reversed())).limit(8).map(Map.Entry::getKey).toList();
+        // Apply exact priority in SQL before the candidate limit, and keep it when ranking turns.
+        String sql="SELECT anchor,body,exact_hit FROM (SELECT COALESCE(reply_to,id) anchor,id,body,"+exact+
+            " AS exact_hit FROM device_message WHERE "+scope+") WHERE "+String.join(" OR ",filters)+
+            " ORDER BY exact_hit DESC,id DESC LIMIT 256";
+        var scores=new HashMap<Long,Hit>();
+        jdbc.query(sql,row->{
+            Hit hit=new Hit(row.getBoolean("exact_hit"),score(row.getString("body"),terms));
+            for(long anchor:recall.eligibleAnchors(row.getLong("anchor"))){
+                if(!excluded.contains(anchor))scores.merge(anchor,hit,(a,b)->a.compareTo(b)>=0?a:b);
+            }
+        },args.toArray());
+        return scores.entrySet().stream().sorted(Map.Entry.<Long,Hit>comparingByValue().reversed()
+            .thenComparing(Map.Entry.<Long,Hit>comparingByKey().reversed())).limit(8).map(Map.Entry::getKey).toList();
     }
 }

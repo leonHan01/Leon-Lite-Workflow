@@ -28,9 +28,9 @@ public class HelperConversationMemory {
     public HelperConversationMemory(JdbcTemplate jdbc,DeviceMessageStore store,ChatAccess access,AgentModelClient model,ObjectMapper json,ConversationFactMemory facts) {
         this.jdbc=jdbc;this.store=store;this.access=access;this.model=model;this.json=json;this.facts=facts;
     }
-    record Stamp(String room,long revision,long epoch,long after) {}
+    record Stamp(String room,long revision,long epoch,long after,long factVersions) {}
     record Digest(String text,List<Stamp> stamps) {}
-    private record Entry(long id,String sender,String role,String text,long time) {}
+    private record Entry(long id,String sender,String role,String text,long time,String subject,Long replyTo) {}
 
     Digest digest(ChatUserRegistry.User user,AgentRegistry.RuntimeConfig runtime,Runnable guard) throws Exception {
         List<DeviceMessageStore.Conversation> rooms;
@@ -56,25 +56,27 @@ public class HelperConversationMemory {
     private Stamp stamp(String room) {
         long revision=store.historyRevision(room);
         var policies=jdbc.queryForList("SELECT epoch,after_id FROM chat_context_policy WHERE conversation_id=?",room);
-        return policies.isEmpty()?new Stamp(room,revision,0,0):new Stamp(room,revision,
-            ((Number)policies.getFirst().get("epoch")).longValue(),((Number)policies.getFirst().get("after_id")).longValue());
+        long factVersions=jdbc.queryForObject("SELECT COUNT(*) FROM chat_context_fact WHERE conversation_id=?",Long.class,room);
+        return policies.isEmpty()?new Stamp(room,revision,0,0,factVersions):new Stamp(room,revision,
+            ((Number)policies.getFirst().get("epoch")).longValue(),((Number)policies.getFirst().get("after_id")).longValue(),factVersions);
     }
 
     private String roomSummary(ChatUserRegistry.User user,Stamp stamp,AgentRegistry.RuntimeConfig runtime,Runnable guard) throws Exception {
-        String summary="",seed="";long through=stamp.after(),end;
+        String summary="",seed="";long through=stamp.after(),end;ConversationFactMemory.Recall recall;
         synchronized(store) {
             requireValid(user,stamp);
             end=jdbc.queryForObject("SELECT COALESCE(MAX(id),0) FROM device_message WHERE conversation_id=?",Long.class,stamp.room());
-            var cached=jdbc.queryForList("SELECT through_id,summary FROM chat_helper_memory WHERE conversation_id=? AND history_revision=? AND epoch=? AND after_id=?",
+            recall=facts.recall(stamp.room(),null,stamp.epoch(),stamp.after(),end+1);
+            var cached=jdbc.queryForList("SELECT through_id,summary,recall_signature FROM chat_helper_memory WHERE conversation_id=? AND history_revision=? AND epoch=? AND after_id=?",
                 stamp.room(),stamp.revision(),stamp.epoch(),stamp.after());
             if(!cached.isEmpty()) {
-                through=((Number)cached.getFirst().get("through_id")).longValue();summary=(String)cached.getFirst().get("summary");
+                through=((Number)cached.getFirst().get("through_id")).longValue();summary=recall.summary((String)cached.getFirst().get("summary"),(String)cached.getFirst().get("recall_signature"));
             } else {
-                var existing=jdbc.queryForList("SELECT agent_id,through_id,summary FROM chat_context_summary WHERE conversation_id=? AND epoch=? AND through_id>? AND through_id<=? ORDER BY through_id DESC LIMIT 1",
+                var existing=jdbc.queryForList("SELECT agent_id,through_id,summary,recall_signature FROM chat_context_summary WHERE conversation_id=? AND epoch=? AND through_id>? AND through_id<=? ORDER BY through_id DESC LIMIT 1",
                     stamp.room(),stamp.epoch(),stamp.after(),end);
                 if(!existing.isEmpty()) {
-                    through=((Number)existing.getFirst().get("through_id")).longValue();seed=(String)existing.getFirst().get("summary");
-                    var known=facts.prompt(facts.latest(stamp.room(),(String)existing.getFirst().get("agent_id"),stamp.epoch(),stamp.after(),through+1),"",1000);
+                    through=((Number)existing.getFirst().get("through_id")).longValue();seed=recall.summary((String)existing.getFirst().get("summary"),(String)existing.getFirst().get("recall_signature"));
+                    var known=facts.prompt(facts.latest(stamp.room(),(String)existing.getFirst().get("agent_id"),stamp.epoch(),stamp.after(),end+1),"",1000,recall);
                     if(known!=null)seed+="\n"+known.get("content");
                 }
             }
@@ -85,21 +87,22 @@ public class HelperConversationMemory {
                 if(next<seed.length()&&Character.isHighSurrogate(seed.charAt(next-1)))next--;
                 summary=summarize(runtime,summary,"已有会话摘要片段："+seed.substring(offset,next),guard);offset=next;
             }
-            save(user,stamp,through,summary);
+            save(user,stamp,through,summary,recall.signature());
         }
         // Read each page independently; no model or network operation holds the store lock.
         while(through<end) {
             List<Entry> page;
             synchronized(store) {
                 requireValid(user,stamp);
-                page=jdbc.query("SELECT id,sender,message_role,body,created_at FROM device_message WHERE conversation_id=? AND id>? AND id<=? ORDER BY id LIMIT 32",
-                    (rs,n)->new Entry(rs.getLong(1),rs.getString(2),rs.getString(3),rs.getString(4),rs.getLong(5)),stamp.room(),through,end);
+                page=jdbc.query("SELECT id,sender,message_role,body,created_at,COALESCE(user_id,CONCAT('device:',device_id)),reply_to FROM device_message WHERE conversation_id=? AND id>? AND id<=? ORDER BY id LIMIT 32",
+                    (rs,n)->new Entry(rs.getLong(1),rs.getString(2),rs.getString(3),rs.getString(4),rs.getLong(5),rs.getString(6),rs.getObject(7,Long.class)),stamp.room(),through,end);
             }
             if(page.isEmpty())break;
             StringBuilder batch=new StringBuilder();long batchThrough=through;
             for(var entry:page) {
                 // A long individual message is summarized in pieces rather than silently truncated.
-                String text=entry.text().isBlank()?"[图片消息，未读取图片内容]":entry.text();
+                if(recall.hides(entry.id(),entry.replyTo())){batchThrough=entry.id();continue;}
+                String text=entry.text().isBlank()?"[图片消息，未读取图片内容]":recall.redact(entry.text(),entry.role().equals("user")?entry.subject():null);
                 for(int offset=0;offset<text.length();) {
                     int next=Math.min(text.length(),offset+600);
                     if(next<text.length()&&Character.isHighSurrogate(text.charAt(next-1)))next--;
@@ -107,7 +110,7 @@ public class HelperConversationMemory {
                         "时间",entry.time(),"内容片段",text.substring(offset,next)));
                     if(batch.length()+part.length()>900&&!batch.isEmpty()) {
                         summary=summarize(runtime,summary,batch.toString(),guard);batch.setLength(0);
-                        save(user,stamp,batchThrough,summary);
+                        save(user,stamp,batchThrough,summary,recall.signature());
                     }
                     batch.append(part).append('\n');
                     offset=next;
@@ -115,19 +118,19 @@ public class HelperConversationMemory {
                 batchThrough=entry.id();
             }
             if(!batch.isEmpty())summary=summarize(runtime,summary,batch.toString(),guard);
-            through=batchThrough;save(user,stamp,through,summary);
+            through=batchThrough;save(user,stamp,through,summary,recall.signature());
         }
         return summary;
     }
 
-    private void save(ChatUserRegistry.User user,Stamp stamp,long through,String summary) {
+    private void save(ChatUserRegistry.User user,Stamp stamp,long through,String summary,String recallSignature) {
         synchronized(store) {
             requireValid(user,stamp);
             // Two recipients may read the same group; an older worker must not rewind its cache.
             var newer=jdbc.queryForList("SELECT through_id FROM chat_helper_memory WHERE conversation_id=? AND history_revision=? AND epoch=? AND after_id=? AND through_id>=?",
                 stamp.room(),stamp.revision(),stamp.epoch(),stamp.after(),through);
-            if(newer.isEmpty())jdbc.update("MERGE INTO chat_helper_memory(conversation_id,history_revision,epoch,after_id,through_id,summary) KEY(conversation_id) VALUES(?,?,?,?,?,?)",
-                stamp.room(),stamp.revision(),stamp.epoch(),stamp.after(),through,summary);
+            if(newer.isEmpty())jdbc.update("MERGE INTO chat_helper_memory(conversation_id,history_revision,epoch,after_id,through_id,summary,recall_signature) KEY(conversation_id) VALUES(?,?,?,?,?,?,?)",
+                stamp.room(),stamp.revision(),stamp.epoch(),stamp.after(),through,summary,recallSignature);
         }
     }
 

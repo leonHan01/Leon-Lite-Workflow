@@ -100,6 +100,6 @@ class DocumentAttachmentsIntegrationTest {
     }
     @Test void longTextHasExplicitExtractionAndContextLimits()throws Exception{
         var user=user();String doc=upload(user,"long.txt","a".repeat(70000).getBytes(StandardCharsets.UTF_8));long message=send(user,body(user,List.of(doc)));var saved=store.message(message);
-        assertTrue(saved.documents().getFirst().truncated());assertEquals(60000,saved.documents().getFirst().characterCount());String text=store.documentContext(saved,2000);assertTrue(text.length()<2300);assertTrue(text.contains("仅提供部分内容"));
+        assertTrue(saved.documents().getFirst().truncated());assertEquals(60000,saved.documents().getFirst().characterCount());String text=store.documentContext(saved,2000);assertTrue(AgentContextManager.estimate(text)<=2000);assertTrue(text.contains("仅提供部分内容"));
     }
 }

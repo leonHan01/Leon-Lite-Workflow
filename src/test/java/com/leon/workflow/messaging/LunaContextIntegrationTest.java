@@ -23,6 +23,8 @@ class LunaContextIntegrationTest {
     @Autowired AgentReplyEngine engine; @Autowired AgentContextManager contexts; @Autowired JdbcTemplate jdbc;
     @Autowired ObjectMapper json;
     @MockitoBean AgentModelClient model;
+    @Autowired ChatDocumentService documents;
+    @Autowired ChatUserRegistry users;
     @BeforeEach void clean(){
         for(String table:List.of("chat_context_fact","chat_context_archive","chat_context_operation","chat_context_snapshot","chat_context_summary","chat_context_policy","chat_agent_job","device_message"))jdbc.update("DELETE FROM "+table);
         jdbc.update("DELETE FROM chat_conversation WHERE id<>'shared'");jdbc.update("DELETE FROM chat_agent");
@@ -106,6 +108,31 @@ class LunaContextIntegrationTest {
             send(room.id(),"原文-"+"中".repeat(6500));engine.runNext();assertEquals(0,compacted.get());assertEquals(1,replies.get());
             send(room.id(),"后续-"+"中".repeat(1700));engine.runNext();assertEquals(1,compacted.get());assertEquals(2,replies.get());
             assertTrue(store.page(room.id(),null,null,100).jobs().isEmpty());
+        }
+    }
+
+    @Test void chineseAttachmentsUseRemainingTokensAcrossModelsAndRetryReusesTheExcerpt() throws Exception {
+        for(var name:List.of("luna","sol","terra")){
+            var a=agent(name,"gpt-6.1-"+name);String room=chat.direct(a.id()).id();
+            String user=users.getOrCreate("doc-test-"+name).id(),device=UUID.randomUUID().toString();
+            users.updateBackground(user,"阅读背景"+"文".repeat(100),users.background(user).version());
+            int chars=name.equals("luna")?2000:12000;
+            var doc=documents.upload(UUID.randomUUID().toString(),room,user,"中文.txt",("开头🌍"+"中".repeat(chars)+"附件末尾").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            String question="请用中文总结。"+"保留问题".repeat(10)+"问题末尾";
+            var send=new DeviceMessageStore.Send(UUID.randomUUID().toString(),device,"用户","macos",question,room,List.of(),List.of(),null,List.of(doc.id()));
+            var q=chat.send(send,user);
+            var calls=new ArrayList<List<Map<String,String>>>();
+            doAnswer(call->{calls.add(call.getArgument(2));if(calls.size()==1)throw new AgentModelClient.Failure("timeout");return "ok";}).when(model).complete(any(),anyString(),anyList());
+            engine.runNext();store.retryJob(q.id(),a.id());engine.runNext();
+            assertEquals(2,calls.size());assertEquals(calls.getFirst(),calls.getLast());
+            assertTrue(AgentContextManager.tokens(calls.getFirst())<=AgentContextManager.inputBudget(a));
+            assertTrue(calls.getFirst().toString().contains("阅读背景"));
+            String material=calls.getFirst().getLast().get("content");
+            assertTrue(material.contains(question));assertTrue(material.contains("开头🌍"));assertTrue(material.contains("仅提供部分内容"));
+            assertFalse(material.contains("附件末尾"));assertFalse(material.contains("�"));
+            send(room,"请再看前面的附件");engine.runNext();
+            assertTrue(calls.getLast().stream().anyMatch(m->m.get("content").contains("开头🌍")));
+            assertTrue(AgentContextManager.tokens(calls.getLast())<=AgentContextManager.inputBudget(a));
         }
     }
 

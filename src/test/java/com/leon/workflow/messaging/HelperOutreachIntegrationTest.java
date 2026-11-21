@@ -221,4 +221,18 @@ class HelperOutreachIntegrationTest {
         service.deliver(delivery);assertEquals("FAILED",state(alice,1));
         assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM device_message WHERE client_message_id=?",Integer.class,delivery.messageId()));
     }
+    @Test void helperDoesNotRepeatAWithdrawnValueFromItsCacheOrNewMessages() {
+        var alice=users.getOrCreate("RecallHelper");String room=direct(alice,helper);
+        exchange(alice,room,"我的盒子写着 WREN417",List.of());
+        var source=store.archiveMessages(room,0,Long.MAX_VALUE).getFirst();
+        exchange(alice,room,"请忘记这个编号 WREN417",List.of());
+        var delete=store.archiveMessages(room,source.id(),Long.MAX_VALUE).stream().filter(m->m.role().equals("user")).findFirst().orElseThrow();
+        facts.save(room,0,List.of(new ConversationFactMemory.Fact(helper.id(),alice.id(),alice.username(),"fact","code","WREN417",source.id(),source.text(),false),
+            new ConversationFactMemory.Fact(helper.id(),alice.id(),alice.username(),"fact","code","",delete.id(),delete.text(),true)));
+        jdbc.update("INSERT INTO chat_helper_memory(conversation_id,history_revision,epoch,after_id,through_id,summary) VALUES(?,?,0,0,?,'盒子的代号 WREN417，准备出发')",
+            room,store.historyRevision(room),source.id());
+        service.plan(clock.instant());due(alice,1,clock.instant());service.deliver(Objects.requireNonNull(service.claim(clock.instant())));
+        assertEquals("SENT",state(alice,1));assertTrue(calls.toString().contains("准备出发"));assertFalse(calls.toString().contains("WREN417"));
+    }
+
 }

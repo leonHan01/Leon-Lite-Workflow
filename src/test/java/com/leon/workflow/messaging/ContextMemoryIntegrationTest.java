@@ -23,6 +23,7 @@ class ContextMemoryIntegrationTest {
     @Autowired AgentReplyEngine engine; @Autowired AgentContextManager contexts; @Autowired JdbcTemplate jdbc;
     @Autowired ObjectMapper json; @Autowired ChatBackupService backups;
     @MockitoBean AgentModelClient model;
+    @Autowired ConversationFactMemory factStore;
     private static final String KEY="test-only-context-key";
     @BeforeEach void clean(){
         for(String table:List.of("chat_context_fact","chat_context_archive","chat_context_operation","chat_context_snapshot","chat_context_summary","chat_context_policy","chat_agent_job","device_message"))jdbc.update("DELETE FROM "+table);
@@ -163,6 +164,240 @@ class ContextMemoryIntegrationTest {
         assertEquals(remembered,new AgentContextManager(store,jdbc,agents,model,json).info(room.id()).agents().getFirst().facts());
         var restored=backups.restore(UUID.randomUUID().toString(),null,backups.export(room.id()));
         assertEquals(2,contexts.info(restored.id()).agents().getFirst().facts().size());
+    }
+
+    private void remember(AgentRegistry.Agent agent,DeviceMessageStore.Message source,String key,String value,boolean deleted){
+        factStore.save(source.conversationId(),0,List.of(new ConversationFactMemory.Fact(agent.id(),
+            ConversationFactMemory.subject(source),source.sender(),"fact",key,value,source.id(),source.text(),deleted)));
+    }
+    private String ask(String room,AgentRegistry.Agent agent,String text) throws Exception {
+        var question=send(room,text);
+        return contexts.prepare(new DeviceMessageStore.Work(question.id(),agent.id(),room),agent,KEY).toString();
+    }
+    @Test void suppressedSourcesStayOutOfRecallAndBackupsAcrossMultiplePages() throws Exception {
+        var a=agents.save(null,new AgentRegistry.Edit("mask","mask","openai","gpt-6-luna","",true,KEY,null));
+        String room=chat.group("旅行",List.of(a.id())).id();
+        var first=send(room,"盒子上贴着代号 ORCHID779");
+        remember(a,first,"code","ORCHID779",false);
+        var deleted=send(room,"请忘记代号");remember(a,deleted,"code","",true);
+        var beforeCorrection=send(room,"礼物编号 WREN177");remember(a,beforeCorrection,"gift","WREN177",false);
+        var corrected=send(room,"礼物编号是 FINCH234");remember(a,corrected,"gift","FINCH234",false);
+        long through=0;
+        for(int i=0;i<260;i++){
+            var next=send(room,"座位"+i);remember(a,next,"seat"+i,next.text(),false);through=next.id();
+        }
+        jdbc.update("INSERT INTO chat_context_summary(conversation_id,agent_id,epoch,through_id,summary,created_at) VALUES(?,?,0,?,'旧摘要提到 ORCHID779 和 WREN177',1)",room,a.id(),through);
+        var restored=backups.restore(UUID.randomUUID().toString(),null,backups.export(room));
+        for(String id:List.of(room,restored.id())){
+            var info=contexts.info(id).agents().getFirst();
+            assertEquals(261,info.facts().size());
+            assertEquals(264,jdbc.queryForObject("SELECT COUNT(*) FROM chat_context_fact WHERE conversation_id=?",Integer.class,id));
+            assertTrue(info.facts().stream().anyMatch(f->f.key().equals("seat0")));
+            String payload=ask(id,a,"盒子上贴的是什么？礼物编号是什么？");
+            assertFalse(payload.contains("ORCHID779"));assertFalse(payload.contains("WREN177"));
+            assertTrue(payload.contains("FINCH234"));
+        }
+        var again=send(room,"我重新确认代号 ORCHID779");remember(a,again,"code","ORCHID779",false);
+        assertTrue(ask(room,a,"代号是什么？").contains("ORCHID779"));
+    }
+    @Test void oldSnapshotAndQuotedTextRespectRetractionsButOtherSpeakersKeepTheirFacts() throws Exception {
+        var a=agent("quotes");var room=chat.group("小组",List.of(a.id())).id();
+        var old=send(room,"我的编号是 FOX445");remember(a,old,"number","FOX445",false);
+        var other=chat.send(new DeviceMessageStore.Send(UUID.randomUUID().toString(),UUID.randomUUID().toString(),"Bob","macos","Bob 的编号是 FOX445",room,List.of()));
+        remember(a,other,"number","FOX445",false);
+        var forget=send(room,"请忘记我的编号 FOX445");remember(a,forget,"number","",true);
+        var q=chat.send(new DeviceMessageStore.Send(UUID.randomUUID().toString(),old.deviceId(),"Mac","macos","请继续",room,List.of(),List.of(),old.id()));
+        jdbc.update("INSERT INTO chat_context_snapshot(message_id,agent_id,conversation_id,epoch,messages_json,estimated_tokens,retained_rounds,created_at) VALUES(?,?,?,0,?,100,0,1)",
+            q.id(),a.id(),room,json.writeValueAsString(List.of(Map.of("role","user","content","OLD-SNAPSHOT 我的编号是 FOX445"))));
+        var input=contexts.prepare(new DeviceMessageStore.Work(q.id(),a.id(),room),a,KEY);
+        assertFalse(input.toString().contains("OLD-SNAPSHOT"));assertFalse(input.toString().contains(old.text()));
+        assertFalse(input.toString().contains(forget.text()));assertTrue(input.toString().contains(other.text()));
+        assertTrue(input.getLast().get("content").contains(q.text()));assertFalse(input.getLast().get("content").contains("FOX445"));
+    }
+
+    @Test void retriesUseRetractionsKnownBeforeTheOriginalQuestionOnly() throws Exception {
+        var a=agent("retrymask");String room=chat.group("测试",List.of(a.id())).id();
+        var first=send(room,"包裹代码 ECHO447");remember(a,first,"code","ECHO447",false);
+        var early=send(room,"包裹上写了什么");
+        var earlyWork=new DeviceMessageStore.Work(early.id(),a.id(),room);
+        var before=contexts.prepare(earlyWork,a,KEY);assertTrue(before.toString().contains("ECHO447"));
+        var withdrawal=send(room,"请忘记包裹代码");
+        var later=send(room,"包裹代码还记得吗");
+        var laterWork=new DeviceMessageStore.Work(later.id(),a.id(),room);
+        assertTrue(contexts.prepare(laterWork,a,KEY).toString().contains("ECHO447"));
+        remember(a,withdrawal,"code","",true);
+        var rebuilt=contexts.prepare(laterWork,a,KEY);assertFalse(rebuilt.toString().contains("ECHO447"));
+        assertEquals(rebuilt,contexts.prepare(laterWork,a,KEY));
+        assertEquals(before,contexts.prepare(earlyWork,a,KEY));
+    }
+    @Test void legacyDeleteWithoutSourceDoesNotExposeUnattributedHistory() throws Exception {
+        var a=agent("legacyforget");String room=chat.group("导入聊天",List.of(a.id())).id();
+        send(room,"旧盒子标有 NOTE333");
+        var deleted=send(room,"忘记我的盒子编号");remember(a,deleted,"code","",true);
+        var third=chat.send(new DeviceMessageStore.Send(UUID.randomUUID().toString(),UUID.randomUUID().toString(),"Bob","macos","另一个盒子标有 BIRD550",room,List.of()));
+        remember(a,third,"code","BIRD550",false);
+        String payload=ask(room,a,"盒子上标着什么");
+        assertFalse(payload.contains("NOTE333"));assertTrue(payload.contains("BIRD550"));
+    }
+
+    @Test void wholeIdentifiersBeatNewerWordsSubstringsAndCompoundCodeFragments() throws Exception {
+        var a=agent("ids");String room=chat.group("编号",List.of(a.id())).id();
+        var exact=send(room,"计划使用 HoTel-4821/A、000731 和 ARCH-IV。");
+        for(int i=0;i<265;i++)send(room,"plan 计划 HOTEL-48210/A PRE-HOTEL-4821/A HOTEL-4821/A-X 0007319 ARCH-IVE");
+        var boundary=send(room,"已讨论");
+        jdbc.update("INSERT INTO chat_context_summary(conversation_id,agent_id,epoch,through_id,summary,created_at) VALUES(?,?,0,?,'行程',1)",room,a.id(),boundary.id());
+        var search=new ContextHistorySearch(jdbc);
+        for(String code:List.of("hotel-4821/a","000731","ARCH-IV")){
+            var q=send(room,"plan 计划编号 "+code+" 怎么安排？");
+            var work=new DeviceMessageStore.Work(q.id(),a.id(),room);
+            var hits=search.find(work,0,Set.of(),q.text(),new ConversationFactMemory.Recall());
+            assertEquals(exact.id(),hits.getFirst());
+            assertFalse(search.find(work,exact.id(),Set.of(),q.text(),new ConversationFactMemory.Recall()).contains(exact.id()));
+            assertFalse(search.find(work,0,Set.of(exact.id()),q.text(),new ConversationFactMemory.Recall()).contains(exact.id()));
+            var firstReference=contexts.prepare(work,a,KEY).stream().filter(m->m.get("content").startsWith("历史原文检索")).findFirst().orElseThrow();
+            assertTrue(firstReference.get("content").contains(exact.text()));
+        }
+    }
+
+    @Test void multiBatchCompactionStagesVerifiedFactsAndRollsBackOnFailure() throws Exception {
+        var a=agent("staging");String room=chat.group("分批",List.of(a.id())).id();
+        var baseline=send(room,"旧进展");remember(a,baseline,"progress","旧进展",false);
+        jdbc.update("INSERT INTO chat_context_summary(conversation_id,agent_id,epoch,through_id,summary,created_at) VALUES(?,?,0,?,'原始进展',1)",room,a.id(),baseline.id());
+        var first=send(room,"预算是5000元");
+        for(int i=0;i<31;i++)send(room,"短轮次"+i);
+        var correction=send(room,"预算改为8000元");send(room,"保留最后一轮");
+        var calls=new AtomicInteger();
+        doAnswer(call->{
+            List<Map<String,String>> request=call.getArgument(2);String input=request.getLast().get("content");
+            var info=contexts.info(room).agents().getFirst();
+            assertEquals("原始进展",info.summary());assertEquals(1,info.facts().size());
+            int n=calls.incrementAndGet();
+            if(n%2==1){assertTrue(input.contains(first.text()));return factJson(first.id(),"5000元",first.text(),"set");}
+            assertTrue(input.contains("已有结构化事实"));assertTrue(input.contains("5000元"));assertTrue(input.contains(correction.text()));
+            if(n==2)throw new AgentModelClient.Failure("第二批超时");
+            return factJson(correction.id(),"8000元",correction.text(),"set");
+        }).when(model).complete(any(),anyString(),anyList());
+        contexts.enqueueCompression(room,a.id(),UUID.randomUUID().toString());engine.runNext();
+        assertEquals("FAILED",store.page(room,null,null,100).contextOperations().getFirst().status());
+        assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM chat_context_fact WHERE conversation_id=?",Integer.class,room));
+        assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM chat_context_summary WHERE conversation_id=?",Integer.class,room));
+        contexts.enqueueCompression(room,a.id(),UUID.randomUUID().toString());engine.runNext();
+        assertEquals("SUCCEEDED",store.page(room,null,null,100).contextOperations().getFirst().status());assertEquals(4,calls.get());
+        assertEquals(3,jdbc.queryForObject("SELECT COUNT(*) FROM chat_context_fact WHERE conversation_id=?",Integer.class,room));
+        assertEquals(3,jdbc.queryForObject("SELECT COUNT(*) FROM chat_context_summary WHERE conversation_id=?",Integer.class,room));
+        assertTrue(contexts.info(room).agents().getFirst().facts().stream().anyMatch(f->f.value().equals("8000元")));
+    }
+
+    @Test void thirtyTwoTurnsReadOnePageEvenWhenSplitAcrossModelCalls() throws Exception {
+        var a=agent("reads");String room=chat.group("读库",List.of(a.id())).id();
+        for(int i=0;i<33;i++)send(room,"正文-"+i+" "+"中".repeat(120));
+        var counted=spy(store);
+        var manager=new AgentContextManager(counted,jdbc,agents,model,json);
+        var calls=new AtomicInteger();var material=new StringBuilder();
+        doAnswer(call->{
+            List<Map<String,String>> request=call.getArgument(2);
+            assertTrue(AgentContextManager.tokens(request)<=AgentContextManager.inputBudget(a));
+            material.append(request.getLast().get("content"));calls.incrementAndGet();return "进展";
+        }).when(model).complete(any(),anyString(),anyList());
+        manager.enqueueCompression(room,a.id(),UUID.randomUUID().toString());manager.executeCompression(manager.claimCompression());
+        assertEquals("SUCCEEDED",store.page(room,null,null,100).contextOperations().getFirst().status());assertTrue(calls.get()>1);
+        verify(counted,times(1)).contextPage(any(),anyLong(),anyLong(),eq(32),eq(false),eq(false));
+        verify(counted,never()).contextTurn(any(),anyLong());
+        for(int i=0;i<32;i++)assertEquals(2,material.toString().split("正文-"+i+" ",-1).length);
+        assertFalse(material.toString().contains("正文-32 "));
+    }
+
+    private Map<String,Object> change(DeviceMessageStore.Message m,String key,String value,String op){
+        return Map.of("sourceMessageId",m.id(),"kind","fact","key",key,"value",value,"evidence",m.text(),"op",op);
+    }
+    @Test void archiveCombinesCommittedAndNewFactsAcrossBatchesUsingFinalVersionsOnly() throws Exception {
+        var a=agent("exportfacts");String room=chat.group("合同",List.of(a.id())).id();
+        var place=send(room,"已经确认交付地点为青竹园");remember(a,place,"交付地点","青竹园",false);
+        var id=send(room,"合同编号是 ORCHID779");
+        var seat=send(room,"座位代号为 WREN533");
+        for(int i=0;i<29;i++)send(room,"进展"+i);
+        var corrected=send(room,"合同编号改为 MAPLE842");var withdrawn=send(room,"忘记座位代号");
+        var calls=new AtomicInteger();
+        doAnswer(call->{
+            List<Map<String,String>> request=call.getArgument(2);assertFalse(request.toString().contains("FUTURE999"));
+            if(calls.incrementAndGet()==1)return json.writeValueAsString(Map.of("summary","已讨论合同。","facts",List.of(
+                change(id,"合同编号","ORCHID779","set"),change(seat,"座位代号","WREN533","set"))));
+            assertTrue(request.getLast().get("content").contains("ORCHID779"));
+            return json.writeValueAsString(Map.of("summary","已讨论合同 ORCHID779 和座位 WREN533。","facts",List.of(
+                change(corrected,"合同编号","MAPLE842","set"),change(withdrawn,"座位代号","","delete"))));
+        }).when(model).complete(any(),anyString(),anyList());
+        var job=contexts.enqueueArchive(room,a.id(),UUID.randomUUID().toString());send(room,"未来合同 FUTURE999");engine.runNext();
+        var frozenWork=new DeviceMessageStore.Work(withdrawn.id()+1,a.id(),room);
+        var page1=store.contextPage(frozenWork,0,frozenWork.messageId(),32,false,true);
+        var page2=store.contextPage(frozenWork,page1.turns().getLast().getFirst().id(),frozenWork.messageId(),32,false,true);
+        assertEquals(32,page1.turns().size(),"page1 hasMore="+page1.hasMore()+" page2="+page2.turns().size()+" calls="+calls.get());
+        assertTrue(page1.hasMore(),"page2="+page2.turns().size()+" calls="+calls.get());
+        assertEquals(2,page2.turns().size());
+        assertEquals(2,calls.get());
+        var result=contexts.archive(job.id());String summary=result.get("summary").toString();
+        assertEquals("SUCCEEDED",store.page(room,null,null,100).contextOperations().getFirst().status(),result.get("operation").toString());
+        assertTrue(summary.contains("青竹园"),summary);
+        assertTrue(summary.contains("MAPLE842"),summary);
+        assertTrue(summary.contains(corrected.sender()),summary);
+        assertTrue(summary.contains("#"+corrected.id()),summary);
+        assertFalse(summary.contains("ORCHID779"));assertFalse(summary.contains("WREN533"));assertFalse(summary.contains("FUTURE999"));
+        assertTrue(result.get("messages").toString().contains("ORCHID779"));assertEquals(2,calls.get());
+        assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM chat_context_fact WHERE conversation_id=?",Integer.class,room));
+        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM chat_context_summary WHERE conversation_id=?",Integer.class,room));
+    }
+
+    @Test void automaticSecondBatchFailureFallsBackWithNoPartialFactsOrSummary() throws Exception {
+        var a=agent("autobatch");String room=chat.group("自动回退",List.of(a.id())).id();
+        var first=send(room,"盒子编号为 WREN485");
+        for(int i=0;i<100;i++)send(room,"自动轮"+i+"甲".repeat(8));
+        var q=send(room,"继续处理");
+        var calls=new AtomicInteger();
+        doAnswer(call->{
+            List<Map<String,String>> request=call.getArgument(2);assertTrue(compression(request));
+            if(calls.incrementAndGet()==1)return factJson(first.id(),"WREN485",first.text(),"set");
+            assertTrue(request.getLast().get("content").contains("WREN485"));
+            throw new AgentModelClient.Failure("第二批超时");
+        }).when(model).complete(any(),anyString(),anyList());
+        var counted=spy(store);
+        var manager=new AgentContextManager(counted,jdbc,agents,model,json);
+        var request=manager.prepare(new DeviceMessageStore.Work(q.id(),a.id(),room),a,KEY);
+        verify(counted,times(4)).contextPage(any(),anyLong(),anyLong(),eq(32),eq(false),eq(false));
+        verify(counted,times(1)).contextTurn(any(),anyLong());
+        assertEquals(2,calls.get());assertTrue(contexts.info(room).agents().getFirst().compressionFallback());
+        assertTrue(request.toString().contains(first.text()));assertTrue(request.toString().contains("自动轮99"));
+        assertTrue(AgentContextManager.tokens(request)<=AgentContextManager.inputBudget(a));
+        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM chat_context_fact WHERE conversation_id=?",Integer.class,room));
+        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM chat_context_summary WHERE conversation_id=?",Integer.class,room));
+    }
+
+    @Test void abortedTaskRollsBackFactsAndCheckpointsAtPublication() throws Exception {
+        var a=agent("atomicpublish");String room=chat.group("提交",List.of(a.id())).id();
+        var source=send(room,"代号是 MAPLE554");
+        for(int i=0;i<33;i++)send(room,"短消息"+i);
+        var count=new AtomicInteger();
+        doAnswer(call->{
+            if(count.incrementAndGet()==1)return factJson(source.id(),"MAPLE554",source.text(),"set");
+            contexts.recoverCompressions();
+            return "两批都完成";
+        }).when(model).complete(any(),anyString(),anyList());
+        contexts.enqueueCompression(room,a.id(),UUID.randomUUID().toString());engine.runNext();
+        assertEquals(2,count.get());
+        assertEquals("FAILED",store.page(room,null,null,100).contextOperations().getFirst().status());
+        assertTrue(contexts.info(room).agents().getFirst().facts().isEmpty());
+        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM chat_context_summary WHERE conversation_id=?",Integer.class,room));
+    }
+
+    @Test void archiveFactSectionSurvivesBeyondNarrativeColumnSize() throws Exception {
+        var a=agent("longarchive");String room=chat.group("大归档",List.of(a.id())).id();
+        for(int i=0;i<48;i++){
+            String value="reference-"+i+"-"+"x".repeat(160);
+            var source=send(room,value);remember(a,source,"reference"+i,value,false);
+        }
+        doReturn("核对完毕").when(model).complete(any(),anyString(),anyList());
+        var op=contexts.enqueueArchive(room,a.id(),UUID.randomUUID().toString());engine.runNext();
+        String summary=contexts.archive(op.id()).get("summary").toString();
+        assertTrue(summary.startsWith("核对完毕"));assertTrue(summary.length()>8000);
+        for(int i=0;i<48;i++)assertTrue(summary.contains("reference-"+i+"-"+"x".repeat(160)));
     }
 
 }

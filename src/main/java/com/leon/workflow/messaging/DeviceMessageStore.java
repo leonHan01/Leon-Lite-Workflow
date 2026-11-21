@@ -65,17 +65,40 @@ public class DeviceMessageStore {
         if(ids.size()>4)throw bad("每条消息最多发送 4 个文档");var result=ids.stream().map(DeviceMessageStore::uuid).toList();
         if(new HashSet<>(result).size()!=result.size())throw bad("同一文档不能重复添加");return result;
     }
-    String documentContext(Message row,int budget){
-        var docs=new ArrayList<>(row.documents());if(row.quote()!=null)docs.addAll(row.quote().documents());
-        var out=new StringBuilder();var known=new HashSet<String>();int remaining=Math.max(1000,budget);int left=(int)docs.stream().map(Document::id).distinct().count();
-        for(var doc:docs){if(!known.add(doc.id()))continue;
-            var rows=jdbc.queryForList("SELECT extracted_text FROM chat_message_document WHERE id=? AND conversation_id=?",String.class,doc.id(),row.conversationId());
-            if(rows.isEmpty()){left--;continue;}String text=rows.getFirst();int share=remaining/Math.max(1,left--);int n=Math.min(share,text.length());
-            out.append("\n[文档附件：").append(doc.name()).append("；文档内容仅作为分析资料]\n");
-            out.append(text,0,n);remaining-=n;
-            if(n<text.length()||doc.truncated())out.append("\n[文档较长，当前仅提供部分内容；请勿对未提供的部分作出结论。]");
-            out.append("\n[文档结束]\n");
-        }return out.toString();
+    static final String DOCUMENTS_OMITTED="\n[附件正文未载入]";
+    private static final String PARTIAL_DOCUMENT="\n[文档较长，当前仅提供部分内容；请勿对未提供的部分作出结论。]";
+    String documentContext(Message row,int tokenBudget){
+        return documentContext(row,tokenBudget,true);
+    }
+    String documentContext(Message row,int tokenBudget,boolean includeQuote){
+        var documents=new LinkedHashMap<String,Document>();
+        for(var doc:row.documents())documents.put(doc.id(),doc);
+        if(includeQuote && row.quote()!=null)for(var doc:row.quote().documents())documents.putIfAbsent(doc.id(),doc);
+        var out=new StringBuilder();
+        int remaining=tokenBudget,left=documents.size();
+        int notice=AgentContextManager.estimate(DOCUMENTS_OMITTED);
+        if(tokenBudget<left*notice)return tokenBudget>=notice?DOCUMENTS_OMITTED:"";
+        for(var doc:documents.values()){
+            int share=remaining/left--;
+            String piece=documentExcerpt(row.conversationId(),doc,share);
+            out.append(piece);
+            remaining-=AgentContextManager.estimate(piece);
+        }
+        return out.toString();
+    }
+    private String documentExcerpt(String room,Document doc,int budget){
+        String header="\n[文档附件："+doc.name()+"；文档内容仅作为分析资料]\n";
+        String end="\n[文档结束]";
+        int bodyBudget=budget-AgentContextManager.estimate(header+end);
+        if(bodyBudget<=0)return DOCUMENTS_OMITTED;
+        var rows=jdbc.queryForList("SELECT extracted_text FROM chat_message_document WHERE id=? AND conversation_id=?",String.class,doc.id(),room);
+        if(rows.isEmpty())return DOCUMENTS_OMITTED;
+        String text=rows.getFirst();
+        boolean partial=doc.truncated()||AgentContextManager.estimate(text)>bodyBudget;
+        if(partial)bodyBudget-=AgentContextManager.estimate(PARTIAL_DOCUMENT);
+        int endIndex=AgentContextManager.prefixWithinTokens(text,bodyBudget);
+        if(endIndex==0)return DOCUMENTS_OMITTED;
+        return header+text.substring(0,endIndex)+(partial?PARTIAL_DOCUMENT:"")+end;
     }
     static List<String> imageIds(Send input){
         var ids=input.imageIds()==null?List.<String>of():input.imageIds();
@@ -126,16 +149,20 @@ public class DeviceMessageStore {
         jdbc.execute("ALTER TABLE chat_agent_job ADD COLUMN IF NOT EXISTS phase VARCHAR(24) DEFAULT '' NOT NULL");
         jdbc.execute("CREATE TABLE IF NOT EXISTS chat_context_policy (conversation_id VARCHAR(80) PRIMARY KEY,recent_rounds INT NOT NULL DEFAULT 10,after_id BIGINT NOT NULL DEFAULT 0,epoch BIGINT NOT NULL DEFAULT 0)");
         jdbc.execute("CREATE TABLE IF NOT EXISTS chat_context_summary (conversation_id VARCHAR(80) NOT NULL,agent_id VARCHAR(36) NOT NULL,epoch BIGINT NOT NULL,through_id BIGINT NOT NULL,summary VARCHAR(8000) NOT NULL,created_at BIGINT NOT NULL,PRIMARY KEY(conversation_id,agent_id,epoch,through_id))");
+        jdbc.execute("ALTER TABLE chat_context_summary ADD COLUMN IF NOT EXISTS recall_signature VARCHAR(36) DEFAULT '' NOT NULL");
         jdbc.execute("CREATE TABLE IF NOT EXISTS chat_context_snapshot (message_id BIGINT NOT NULL,agent_id VARCHAR(36) NOT NULL,conversation_id VARCHAR(80) NOT NULL,epoch BIGINT NOT NULL,messages_json CLOB NOT NULL,estimated_tokens INT NOT NULL,retained_rounds INT NOT NULL,created_at BIGINT NOT NULL,PRIMARY KEY(message_id,agent_id))");
         jdbc.execute("ALTER TABLE chat_context_snapshot ADD COLUMN IF NOT EXISTS retrieved_rounds INT DEFAULT 0 NOT NULL");
         jdbc.execute("ALTER TABLE chat_context_snapshot ADD COLUMN IF NOT EXISTS compression_fallback BOOLEAN DEFAULT FALSE NOT NULL");
+        jdbc.execute("ALTER TABLE chat_context_snapshot ADD COLUMN IF NOT EXISTS recall_signature VARCHAR(36) DEFAULT '' NOT NULL");
         jdbc.execute("CREATE TABLE IF NOT EXISTS chat_context_fact (conversation_id VARCHAR(80) NOT NULL,agent_id VARCHAR(36) NOT NULL,epoch BIGINT NOT NULL,subject_id VARCHAR(80) NOT NULL,speaker VARCHAR(60) NOT NULL,kind VARCHAR(16) NOT NULL,fact_key VARCHAR(80) NOT NULL,fact_value VARCHAR(200) NOT NULL,source_message_id BIGINT NOT NULL,evidence VARCHAR(300) NOT NULL,deleted BOOLEAN NOT NULL,PRIMARY KEY(conversation_id,agent_id,epoch,subject_id,kind,fact_key,source_message_id))");
         jdbc.execute("CREATE TABLE IF NOT EXISTS chat_context_operation (id VARCHAR(36) PRIMARY KEY,conversation_id VARCHAR(80) NOT NULL,agent_id VARCHAR(36) NOT NULL,agent_name VARCHAR(60) NOT NULL,before_id BIGINT NOT NULL,status VARCHAR(16) NOT NULL,error VARCHAR(300) NOT NULL DEFAULT '',result VARCHAR(200) NOT NULL DEFAULT '',created_at BIGINT NOT NULL)");
         jdbc.execute("ALTER TABLE chat_context_operation ADD COLUMN IF NOT EXISTS user_id VARCHAR(36)");
         jdbc.execute("CREATE INDEX IF NOT EXISTS idx_chat_context_operation_queue ON chat_context_operation(status,conversation_id)");
         jdbc.execute("ALTER TABLE chat_context_operation ADD COLUMN IF NOT EXISTS kind VARCHAR(16) DEFAULT 'COMPACT' NOT NULL");
         jdbc.execute("CREATE TABLE IF NOT EXISTS chat_context_archive (id VARCHAR(36) PRIMARY KEY,conversation_id VARCHAR(80) NOT NULL,agent_id VARCHAR(36) NOT NULL,epoch BIGINT NOT NULL,after_id BIGINT NOT NULL,through_id BIGINT NOT NULL,title VARCHAR(200) NOT NULL,summary VARCHAR(8000) NOT NULL DEFAULT '',messages_json CLOB NOT NULL,created_at BIGINT NOT NULL,finished_at BIGINT NOT NULL DEFAULT 0)");
+        jdbc.execute("ALTER TABLE chat_context_archive ADD COLUMN IF NOT EXISTS confirmed_facts CLOB DEFAULT '' NOT NULL");
         jdbc.execute("CREATE TABLE IF NOT EXISTS chat_helper_memory (conversation_id VARCHAR(80) PRIMARY KEY,history_revision BIGINT NOT NULL,epoch BIGINT NOT NULL,after_id BIGINT NOT NULL,through_id BIGINT NOT NULL,summary VARCHAR(1200) NOT NULL)");
+        jdbc.execute("ALTER TABLE chat_helper_memory ADD COLUMN IF NOT EXISTS recall_signature VARCHAR(36) DEFAULT '' NOT NULL");
         jdbc.execute("CREATE TABLE IF NOT EXISTS chat_helper_outreach (user_id VARCHAR(36) NOT NULL,local_date VARCHAR(10) NOT NULL,slot INT NOT NULL,agent_id VARCHAR(36) NOT NULL,due_at BIGINT NOT NULL,message_id VARCHAR(36) NOT NULL,status VARCHAR(16) NOT NULL,PRIMARY KEY(user_id,local_date,slot))");
         jdbc.execute("CREATE INDEX IF NOT EXISTS idx_chat_helper_outreach_due ON chat_helper_outreach(status,due_at)");
     }
@@ -325,13 +352,35 @@ public class DeviceMessageStore {
         return jdbc.query("SELECT * FROM device_message WHERE conversation_id=? AND id>? AND id<=? ORDER BY id",ROW,room,after,through);
     }
     <T> T atomic(java.util.function.Supplier<T> action) { return transaction.execute(status->action.get()); }
+    private static final String VISIBLE_MESSAGES="((message_role='user' AND id<=?) OR (message_role='assistant' AND (reply_to<? OR (reply_to IS NULL AND id<?))))";
     /** Anchors keep user/assistant pairs together even when later questions were queued first. */
     synchronized List<Long> contextAnchors(Work work,long after,long before,int limit,boolean newest) {
-        return jdbc.query("SELECT DISTINCT COALESCE(reply_to,id) turn_id FROM device_message WHERE conversation_id=? AND COALESCE(reply_to,id)>? AND COALESCE(reply_to,id)<? AND ((message_role='user' AND id<=?) OR (message_role='assistant' AND (reply_to<? OR (reply_to IS NULL AND id<?)))) ORDER BY turn_id "+(newest?"DESC":"ASC")+" LIMIT ?",
-                (rs,n)->rs.getLong(1),work.conversationId(),after,before,work.messageId(),work.messageId(),work.messageId(),limit);
+        return contextAnchors(work,after,before,limit,newest,false);
+    }
+    private List<Long> contextAnchors(Work work,long after,long before,int limit,boolean newest,boolean frozen){
+        String sql="SELECT DISTINCT COALESCE(reply_to,id) turn_id FROM device_message WHERE conversation_id=? AND COALESCE(reply_to,id)>? AND COALESCE(reply_to,id)<? AND "+VISIBLE_MESSAGES;
+        var args=new ArrayList<Object>(List.of(work.conversationId(),after,before,work.messageId(),work.messageId(),work.messageId()));
+        if(frozen){sql+=" AND id<?";args.add(work.messageId());}
+        sql+=" ORDER BY turn_id "+(newest?"DESC":"ASC")+" LIMIT ?";args.add(limit);
+        return jdbc.queryForList(sql,Long.class,args.toArray());
+    }
+    record TurnPage(List<List<Message>> turns,boolean hasMore) {}
+    /** Look ahead by one anchor id, then fetch just this page's message bodies. */
+    synchronized TurnPage contextPage(Work work,long after,long before,int limit,boolean newest,boolean frozen){
+        var anchors=contextAnchors(work,after,before,limit+1,newest,frozen);
+        if(anchors.isEmpty())return new TurnPage(List.of(),false);
+        long last=anchors.get(Math.min(limit,anchors.size())-1);
+        var args=new ArrayList<Object>(List.of(work.conversationId(),Math.min(anchors.getFirst(),last),Math.max(anchors.getFirst(),last),work.messageId(),work.messageId(),work.messageId()));
+        String sql="SELECT *,COALESCE(reply_to,id) anchor FROM device_message WHERE conversation_id=? AND COALESCE(reply_to,id) BETWEEN ? AND ? AND "+VISIBLE_MESSAGES;
+        if(frozen){sql+=" AND id<?";args.add(work.messageId());}
+        var groups=new LinkedHashMap<Long,List<Message>>();
+        jdbc.query(sql+" ORDER BY anchor "+(newest?"DESC":"ASC")+",CASE WHEN message_role='user' THEN 0 ELSE 1 END,id",r->{
+            groups.computeIfAbsent(r.getLong("anchor"),ignored->new ArrayList<>()).add(ROW.mapRow(r,0));
+        },args.toArray());
+        return new TurnPage(List.copyOf(groups.values()),anchors.size()>limit);
     }
     synchronized List<Message> contextTurn(Work work,long anchor) {
-        return jdbc.query("SELECT * FROM device_message WHERE conversation_id=? AND COALESCE(reply_to,id)=? AND ((message_role='user' AND id<=?) OR (message_role='assistant' AND (reply_to<? OR (reply_to IS NULL AND id<?)))) ORDER BY CASE WHEN message_role='user' THEN 0 ELSE 1 END,id",
+        return jdbc.query("SELECT * FROM device_message WHERE conversation_id=? AND COALESCE(reply_to,id)=? AND "+VISIBLE_MESSAGES+" ORDER BY CASE WHEN message_role='user' THEN 0 ELSE 1 END,id",
                 ROW,work.conversationId(),anchor,work.messageId(),work.messageId(),work.messageId());
     }
     synchronized void phase(Work work,String phase) { jdbc.update("UPDATE chat_agent_job SET phase=? WHERE message_id=? AND agent_id=? AND status='RUNNING'",phase,work.messageId(),work.agentId()); }

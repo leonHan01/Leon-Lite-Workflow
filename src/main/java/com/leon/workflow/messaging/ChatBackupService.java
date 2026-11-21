@@ -54,7 +54,18 @@ public class ChatBackupService {
             var memories=jdbc.query("SELECT s.* FROM chat_context_summary s WHERE conversation_id=? AND epoch=? AND through_id=(SELECT MAX(t.through_id) FROM chat_context_summary t WHERE t.conversation_id=s.conversation_id AND t.agent_id=s.agent_id AND t.epoch=s.epoch)",
                 (rs,n)->new Memory(rs.getString("agent_id"),rs.getLong("through_id"),rs.getString("summary"),rs.getLong("created_at")),room,epoch);
             var facts=new ArrayList<ConversationFactMemory.Fact>();
-            for(String agent:conversation.agentIds())facts.addAll(factMemory.latest(room,agent,epoch,after,Long.MAX_VALUE));
+            // Restore needs the source of superseded values too, so they stay out of historical recall.
+            int factBytes=0;
+            for(String agent:conversation.agentIds()){
+                final int pageSize=256;
+                for(int offset=0;;offset+=pageSize){
+                    var page=factMemory.backupPage(room,agent,epoch,after,offset,pageSize);
+                    factBytes+=json.writeValueAsBytes(page).length-2;
+                    if(factBytes>MAX_MANIFEST)throw tooLarge();
+                    facts.addAll(page);
+                    if(page.size()<pageSize)break;
+                }
+            }
             backup=new Backup("leon-chat",docFiles.isEmpty()?1:2,conversation,messages,rounds,after,memories,facts);
         }
         try {
@@ -192,7 +203,6 @@ public class ChatBackupService {
             if(!memoryAgents.add(memory.agentId())||(!ChatAccess.personalRoom(room.id())&&!room.agentIds().contains(memory.agentId()))||memory.throughId()<backup.topicStartedAfter()||memory.throughId()>previous||!text(memory.summary(),8000)||memory.createdAt()<0)throw bad("备份上下文无效");
         }
         if(backup.topicStartedAfter()>previous)throw bad("备份话题边界无效");
-        if(backup.facts().size()>4096)throw bad("备份事实数量无效");
         for(var fact:backup.facts()){
             if(fact==null||fact.sourceMessageId()<=backup.topicStartedAfter()||!room.agentIds().contains(fact.agentId())||!ConversationFactMemory.valid(fact,ids.get(fact.sourceMessageId())))throw bad("备份事实来源无效");
         }
