@@ -350,6 +350,16 @@ OpenAI 默认模型为 `gpt-6.1-sol`，在统一模型配置的「模型名称�
 
 ## Leon 消息客户端与 Agent 工作台
 
+### Agent 联网搜索（2026-11-21，本地实现，待部署）
+
+Agent 管理页新增「允许此 Agent 联网搜索」，默认关闭，旧请求省略字段时保留现值。仅支持具有 Responses `web_search` 权限的 OpenAI 对话模型，复用该 Agent 凭据，可与绘图同时开启。交互回复根据问题按需调用实时搜索，提示词携带北京时间日期，要求最新资料优先查询官方或原始来源；普通聊天可以直接回答。摘要压缩、会话标题、归档总结继续使用文字接口，不开启工具。
+
+来源从 `url_citation` 注解转换为 Markdown 行内链接，末尾追加去重后的来源标题，原文与链接一起持久化；Mac / Android / iOS 沿用现有 Markdown，无客户端更新要求。引用偏移按原始文本处理，保留正文，清理内部标记，转义来源标题并只接受无用户凭据的 HTTP / HTTPS URL。每条回复最多 24 个来源，保持 8,000 字符限制，不截断引用。
+
+搜索任务每次最多 6 次工具调用，同时绘图仍最多生成一张图片。未完成的搜索或没有可用来源的搜索明确失败，不静默退回未经查证的回复，不自动重试付费调用。复用既有直连和 Mac Responses 执行路径、加密队列与 Token 记账；搜索工具费不计入当前仅按文本 Token 的费用估算。
+
+本地 64 项 Java 回归及 9 项 Python 执行器测试通过，Agent 管理 JavaScript 语法检查通过。本机已安装 Mac 执行器的聊天、绘图、搜索及组合工具离线检查通过，无需替换或重启。测试使用模拟模型响应，未真实调用付费搜索。上线需按既有部署流程升级服务端并在管理页面为目标 Agent 开启搜索；本次不部署或重启正式服务。官方协议：[联网搜索指南](https://developers.openai.com/api/docs/guides/tools-web-search)。
+
 ### 同一 Agent 聊天与 GPT Image 绘图（2026-11-21）
 
 Agent 管理页可为 OpenAI Agent 开启「允许此 Agent 绘图」，指定独立的 GPT Image 模型（默认 `gpt-image-2.5-flare`）。原对话模型需支持 Responses API 的 `image_generation` 工具，通常为 GPT-5 及更新模型；复用该 Agent 的 OpenAI API Key，不需要新建另一个 Agent。所有旧 Agent 默认关闭绘图，旧管理请求省略新字段时保留已有设置。

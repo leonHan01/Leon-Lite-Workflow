@@ -86,6 +86,8 @@ function modelHint() {
     $('modelHint').textContent = profile ? `${profile.provider === 'openai' ? 'OpenAI' : 'DeepSeek'} · ${profile.model}。复用模型凭据；修改模型配置会同步影响此 Agent。${profile.enabled ? '' : '所选模型已停用，请重新选择。'}`
         : editing && !editing.modelId ? '现有独立配置仍可使用。选择已保存的模型后，将改用统一模型与凭据。' : models.some(m => m.enabled) ? '请选择一个可用模型，无需另填 API Key。' : '还没有可用模型，请先在模型配置中添加并启用。';
     const provider = profile?.provider || (editing && !editing.modelId ? editing.provider : '');
+    $('webSearchEnabled').disabled = provider !== 'openai';
+    if (provider !== 'openai') $('webSearchEnabled').checked = false;
     $('imageGenerationEnabled').disabled = provider !== 'openai';
     if (provider !== 'openai') $('imageGenerationEnabled').checked = false;
     imageOptions();
@@ -102,6 +104,7 @@ function resetForm(agent = null) {
     selectAvatar(agent?.avatarId || 'alfred');
     for (const key of ['name', 'handle', 'description', 'systemPrompt']) $(key).value = agent?.[key] || '';
     modelOptions(agent?.modelId || ''); $('enabled').checked = agent?.enabled ?? true;
+    $('webSearchEnabled').checked = agent?.webSearchEnabled ?? false;
     $('imageGenerationEnabled').checked = agent?.imageGenerationEnabled ?? false;
     $('imageModel').value = agent?.imageModel || 'gpt-image-2.5-flare'; modelHint();
     $('formTitle').textContent = agent ? `编辑 ${agent.name}` : '新建 Agent';
@@ -133,6 +136,7 @@ $('agentForm').onsubmit = async event => {
     if ($('modelId').value) body.modelId = $('modelId').value;
     if (uploadingAvatar) return; body.avatarId = selectedAvatarId;
     body.enabled = $('enabled').checked; body.version = editing?.version;
+    body.webSearchEnabled = $('webSearchEnabled').checked;
     body.imageGenerationEnabled = $('imageGenerationEnabled').checked; body.imageModel = $('imageModel').value.trim() || 'gpt-image-2.5-flare';
     try {
         const saved = await api('/api/agent-admin' + (editing ? '/' + editing.id : ''), { method: editing ? 'PUT' : 'POST', body: JSON.stringify(body) });

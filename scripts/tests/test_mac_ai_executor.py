@@ -95,6 +95,25 @@ class MacExecutorTest(unittest.TestCase):
         self.assertIn('client_max_body_size 25m;', updated)
         self.assertEqual(updated, proxy.configured(updated))
 
+    def test_web_search_tools_and_citations_survive_transport_without_a_second_request(self):
+        value = self.job()
+        value['api'] = 'responses'
+        value['body'] = {'model': 'test-search-model', 'stream': False,
+                         'input': [{'role': 'user', 'content': '查最新资料'}],
+                         'tools': [{'type': 'web_search', 'external_web_access': True}]}
+        payload = {'status': 'completed', 'output': [
+            {'type': 'web_search_call', 'status': 'completed'},
+            {'type': 'message', 'content': [{'type': 'output_text', 'text': '最新资料',
+                'annotations': [{'type': 'url_citation', 'start_index': 0, 'end_index': 4,
+                                 'url': 'https://example.test/source', 'title': '官方来源'}]}]}]}
+        with patch.object(worker, 'opener') as factory:
+            factory.return_value.open.return_value = Response(json.dumps(payload).encode())
+            self.assertEqual({'status': 200, 'body': payload}, worker.invoke_openai(value))
+            request = factory.return_value.open.call_args.args[0]
+            self.assertEqual(worker.RESPONSES_API, request.full_url)
+            self.assertEqual(value['body'], json.loads(request.data))
+            self.assertEqual(1, factory.return_value.open.call_count)
+
     def test_ambiguous_start_never_executes_the_provider(self):
         instance = worker.Worker({'server': 'https://example.test', 'token': 'test-token'})
         instance.ready.set()

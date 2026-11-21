@@ -73,6 +73,17 @@ class OpenAiExecutorTest {
         executor.complete(worker,id,lease,Map.of("status",401,"body",Map.of("error","echo test-secret")));
         var output=future.get(2,TimeUnit.SECONDS);assertEquals(401,output.get("status"));assertTrue(object(output.get("body")).isEmpty());assertEquals(0,tokens());
     }
+    @Test void searchAnnotationsCrossEncryptedQueueAndDuplicateAcknowledgementsCountUsageOnce() throws Exception {
+        var body=Map.<String,Object>of("model","gpt-6-luna","stream",false,"input",List.of(Map.of("role","user","content","最新资料")),"tools",List.of(Map.of("type","web_search","external_web_access",true)));
+        var future=callers.submit(()->executor.executeResponses(body,"test-secret",5000,null));
+        var job=claim();assertEquals(body,job.get("body"));assertEquals("responses",job.get("api"));
+        String id=text(job.get("id")),lease=text(job.get("lease"));executor.start(worker,id,lease);
+        var annotation=Map.of("type","url_citation","start_index",0,"end_index",4,"url","https://example.test/source","title","官方来源");
+        var payload=Map.<String,Object>of("status",200,"body",Map.of("status","completed","usage",Map.of("input_tokens",20,"output_tokens",5,"total_tokens",25),"output",List.of(Map.of("type","web_search_call","status","completed"),Map.of("type","message","content",List.of(Map.of("type","output_text","text","最新资料","annotations",List.of(annotation)))))));
+        executor.complete(worker,id,lease,payload);executor.complete(worker,id,lease,payload);
+        assertEquals(write(payload),write(future.get(2,TimeUnit.SECONDS)));assertEquals(25,tokens());
+        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM automation_model_usage WHERE model LIKE 'gpt-image-%'",Integer.class));
+    }
     @Test void responsesCarryApiTypeAndLargeImagesAndAccountMainlineAndToolSeparately() throws Exception {
         var body=Map.<String,Object>of("model","gpt-6-luna","stream",false,"input",List.of(Map.of("role","user","content","draw")),"tools",List.of(Map.of("type","image_generation","model","gpt-image-2.5-flare")));
         var future=callers.submit(()->executor.executeResponses(body,"test-secret",5000,null));

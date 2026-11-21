@@ -52,7 +52,7 @@ public class AgentReplyEngine {
             if(!agent.enabled()) { store.fail(work,"Agent 已停用，请启用后手动重试");return; }
             var messages=contexts.prepare(work,agent,config.key);
             store.phase(work,"REPLYING");
-            var reply=agent.imageGenerationEnabled()?model.reply(agent,config.key,messages):new AgentModelClient.Reply(model.complete(agent,config.key,messages),List.of());
+            var reply=agent.imageGenerationEnabled()||agent.webSearchEnabled()?model.reply(agent,config.key,messages):new AgentModelClient.Reply(model.complete(agent,config.key,messages),List.of());
             if(reply==null||reply.images()==null||reply.images().size()>ChatImageService.MAX_PER_MESSAGE)throw new AgentModelClient.Failure("模型返回无效回复");
             String answer=reply.text();
             if(answer==null||answer.isBlank()||answer.length()>8000) throw new AgentModelClient.Failure("模型回复为空或过长");

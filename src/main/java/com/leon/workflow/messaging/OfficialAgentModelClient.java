@@ -26,8 +26,8 @@ public class OfficialAgentModelClient implements AgentModelClient {
     OfficialAgentModelClient(ObjectMapper json,HttpClient http,WorkflowModels models,OpenAiExecutor executor) { this(json,http,models,executor,null); }
     OfficialAgentModelClient(ObjectMapper json,HttpClient http,WorkflowModels models,OpenAiExecutor executor,ChatImageService images) { this.json=json;this.http=http;this.models=models;this.executor=executor;this.images=images; }
     @Override public Reply reply(AgentRegistry.Agent agent,String key,List<Map<String,String>> messages) throws Exception {
-        if(!agent.imageGenerationEnabled()) return AgentModelClient.super.reply(agent,key,messages);
-        return new OpenAiImageReplyClient(json,http,models,executor,images).reply(agent,key,messages);
+        if(!agent.imageGenerationEnabled()&&!agent.webSearchEnabled()) return AgentModelClient.super.reply(agent,key,messages);
+        return new OpenAiToolReplyClient(json,http,models,executor,images).reply(agent,key,messages);
     }
     @Override public String complete(AgentRegistry.Agent agent,String key,List<Map<String,String>> messages) throws Exception {
         boolean openai=agent.provider().equals("openai");

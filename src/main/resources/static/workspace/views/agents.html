@@ -14,6 +14,8 @@
 <div class="fields"><label>显示名称<input id="name" maxlength="60" required placeholder="例如：写作助手"></label><label>@标识<input id="handle" pattern="[a-z][a-z0-9_-]{1,31}" maxlength="32" required placeholder="例如：writer"><small>2–32 位小写字母、数字、_ 或 -，以字母开头</small></label></div>
 <label class="model-field">已保存的模型<select id="modelId" required><option value="">请选择模型</option></select><small id="modelHint">复用模型配置中的服务商与凭据。</small></label>
 <div class="actions model-actions"><button type="button" id="reloadModels">刷新模型列表</button><a href="/advanced-settings.html" target="_blank" rel="noopener">管理模型 ↗</a></div>
+<label class="toggle"><input id="webSearchEnabled" type="checkbox" aria-describedby="webSearchHint">允许此 Agent 联网搜索</label>
+<p id="webSearchHint" class="subtle">查询最新资料时自动搜索，并在回复中附可点击的来源链接。需要支持联网搜索的 OpenAI 模型；搜索会产生额外 API 费用，可与绘图同时开启。</p>
 <label class="toggle"><input id="imageGenerationEnabled" type="checkbox">允许此 Agent 绘图</label>
 <p id="imageGenerationHint" class="subtle">同一 Agent 可聊天、绘图和修改图片。需要支持图片生成工具的 OpenAI 对话模型，通常为 GPT-5 及更新模型；绘图会产生额外 API 费用。</p>
 <label id="imageModelOptions" hidden>绘图模型<input id="imageModel" maxlength="100" list="imageModels" value="gpt-image-2.5-flare" placeholder="gpt-image-2.5-flare"><datalist id="imageModels"><option value="gpt-image-2.5-flare"><option value="gpt-image-2.5-sunburst"><option value="gpt-image-2"><option value="gpt-image-1.5"></datalist><small>复用此 Agent 的 OpenAI 凭据；聊天仍使用上方的对话模型。生成图保存到聊天记录，可继续要求修改。</small></label>
