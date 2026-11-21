@@ -9,10 +9,19 @@ import org.springframework.web.bind.annotation.*;
 public class AgentContextController {
     private final AgentContextManager contexts;
     private final ChatAccess access;
-    public AgentContextController(AgentContextManager contexts,ChatAccess access) { this.contexts=contexts;this.access=access; }
+    private final ConversationDeletionService deletion;
+    public AgentContextController(AgentContextManager contexts,ChatAccess access,ConversationDeletionService deletion) { this.contexts=contexts;this.access=access;this.deletion=deletion; }
     public record Settings(String conversationId,int recentRounds) {}
     public record Compact(String conversationId,String agentId,String requestId) {}
     public record Clear(String conversationId,String requestId,long expectedLatestMessageId,long expectedHistoryRevision,boolean confirm) {}
+    @GetMapping("/api/conversations/context/delete-preview")
+    public ResponseEntity<?> deletePreview(@RequestParam String conversationId,HttpServletRequest request) {
+        return response(deletion.preview(access.user(request),conversationId));
+    }
+    @PostMapping("/api/conversations/context/delete")
+    public ResponseEntity<?> delete(@RequestBody Clear input,HttpServletRequest request) {
+        return response(deletion.delete(access.user(request),input));
+    }
     @GetMapping("/api/conversations/context/clear-preview")
     public ResponseEntity<?> clearPreview(@RequestParam String conversationId,HttpServletRequest request) { return response(contexts.clearPreview(access.room(request,conversationId,true))); }
     @PostMapping("/api/conversations/context/clear")

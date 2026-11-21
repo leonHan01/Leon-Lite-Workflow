@@ -140,6 +140,7 @@ public class DeviceMessageStore {
         jdbc.execute("ALTER TABLE chat_conversation ADD COLUMN IF NOT EXISTS title_through_id BIGINT DEFAULT 0 NOT NULL");
         jdbc.execute("ALTER TABLE chat_conversation ADD COLUMN IF NOT EXISTS last_clear_request_id VARCHAR(36) DEFAULT '' NOT NULL");
         jdbc.execute("ALTER TABLE chat_conversation ADD COLUMN IF NOT EXISTS last_clear_count BIGINT DEFAULT 0 NOT NULL");
+        jdbc.execute("CREATE TABLE IF NOT EXISTS chat_deleted_conversation (id VARCHAR(80) PRIMARY KEY,owner_id VARCHAR(36) NOT NULL,request_id VARCHAR(36) NOT NULL,deleted_messages BIGINT NOT NULL)");
         jdbc.execute("CREATE TABLE IF NOT EXISTS chat_cleared_message (device_id VARCHAR(36) NOT NULL,client_message_id VARCHAR(36) NOT NULL,PRIMARY KEY(device_id,client_message_id))");
         jdbc.execute("CREATE TABLE IF NOT EXISTS chat_cleared_image (id VARCHAR(36) PRIMARY KEY)");
         jdbc.update("INSERT INTO chat_conversation(id,name,kind,agent_ids) SELECT 'shared','设备群聊','group','' WHERE NOT EXISTS(SELECT 1 FROM chat_conversation WHERE id='shared')");
@@ -192,13 +193,22 @@ public class DeviceMessageStore {
     }
     public synchronized Conversation direct(AgentRegistry.Agent agent) { return direct(agent,"direct:"+agent.id()); }
     synchronized Conversation direct(AgentRegistry.Agent agent,String id) {
+        var deleted=jdbc.queryForList("SELECT owner_id FROM chat_deleted_conversation WHERE id=?",String.class,id);
+        if(!deleted.isEmpty()) {
+            var replacement=jdbc.query("SELECT * FROM chat_conversation WHERE kind='direct' AND agent_id=? AND owner_id=? ORDER BY id",CONVERSATION,agent.id(),deleted.getFirst());
+            if(!replacement.isEmpty())return replacement.getFirst();
+            id="thread:"+UUID.randomUUID();
+        }
         jdbc.update("INSERT INTO chat_conversation(id,name,kind,agent_id,agent_ids,initial_name) SELECT ?,?,'direct',?,?,? WHERE NOT EXISTS(SELECT 1 FROM chat_conversation WHERE id=?)",id,agent.name(),agent.id(),agent.id(),agent.name(),id);
+        if(!deleted.isEmpty())jdbc.update("UPDATE chat_conversation SET owner_id=? WHERE id=?",deleted.getFirst(),id);
         return conversation(id);
     }
     public synchronized Conversation createDirect(AgentRegistry.Agent agent,String requestId,String name) {
         return createNamedDirect(agent,"thread:"+uuid(requestId),name);
     }
     synchronized Conversation createNamedDirect(AgentRegistry.Agent agent,String id,String name) {
+        if(jdbc.queryForObject("SELECT COUNT(*) FROM chat_deleted_conversation WHERE id=?",Integer.class,id)>0)
+            throw failure(HttpStatus.CONFLICT,"此会话已永久删除，请重新新建对话");
         name=name==null?"":name.strip();
         if(name.isBlank()||name.length()>60||name.codePoints().anyMatch(Character::isISOControl))throw bad("对话名称应为 1–60 字");
         var existing=jdbc.query("SELECT * FROM chat_conversation WHERE id=?",CONVERSATION,id);

@@ -81,7 +81,7 @@ public class AgentController {
         synchronized(store){
             return response(store.atomic(()->{
                 var room=store.direct(agent,id);
-                access.setOwner(id,user);
+                access.setOwner(room.id(),user);
                 return store.conversation(room.id());
             }));
         }

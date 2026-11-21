@@ -185,7 +185,7 @@ public class HelperOutreachService {
         if(!rooms.isEmpty())return rooms.stream().max(Comparator.comparingLong(c->jdbc.queryForObject(
             "SELECT COALESCE(MAX(id),0) FROM device_message WHERE conversation_id=?",Long.class,c.id()))).orElseThrow().id();
         String id=access.legacy(user)?"direct:"+agent.id():"dm:"+user.id()+":"+agent.id();
-        store.direct(agent,id);access.setOwner(id,user);return id;
+        var room=store.direct(agent,id);access.setOwner(room.id(),user);return room.id();
     }
 
     private void guard(Delivery delivery) {
