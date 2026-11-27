@@ -41,7 +41,7 @@ public class ConversationTitleScheduler {
                        c.title_through_id,SUM(CASE WHEN m.message_role='user' AND m.id>c.title_through_id THEN 1 ELSE 0 END),
                        MAX(m.created_at),c.auto_titled
                 FROM chat_conversation c JOIN device_message m ON m.conversation_id=c.id
-                WHERE c.kind='direct' AND c.title_retry_at<=?
+                WHERE c.kind='direct' AND NOT c.manually_titled AND c.title_retry_at<=?
                   AND NOT EXISTS (SELECT 1 FROM chat_agent_job j WHERE j.conversation_id=c.id AND j.status IN ('PENDING','RUNNING'))
                   AND NOT EXISTS (SELECT 1 FROM chat_context_operation o WHERE o.conversation_id=c.id AND o.status IN ('PENDING','RUNNING'))
                 GROUP BY c.id,c.name,c.initial_name,c.agent_id,c.owner_id,c.history_revision,c.title_through_id,c.auto_titled
@@ -61,7 +61,7 @@ public class ConversationTitleScheduler {
         List<Map<String,String>> input;
         synchronized(store) {
             // Claim before making a paid call, including across restarts and failed attempts.
-            if(jdbc.update("UPDATE chat_conversation SET title_retry_at=? WHERE id=? AND name=? AND title_through_id=? AND title_retry_at<=?",now+RETRY_MS,c.id(),c.name(),c.throughId(),now)!=1)return;
+            if(jdbc.update("UPDATE chat_conversation SET title_retry_at=? WHERE id=? AND NOT manually_titled AND name=? AND title_through_id=? AND title_retry_at<=?",now+RETRY_MS,c.id(),c.name(),c.throughId(),now)!=1)return;
             var lines=jdbc.query("SELECT message_role,body FROM device_message WHERE conversation_id=? AND id<=? AND TRIM(body)<>'' ORDER BY id DESC LIMIT 24",
                 (rs,n)->Map.of("role",rs.getString(1),"content",rs.getString(2)),c.id(),c.lastId());
             if(lines.isEmpty())return;
@@ -85,7 +85,7 @@ public class ConversationTitleScheduler {
                 synchronized(store){
                     jdbc.update("""
                         UPDATE chat_conversation SET initial_name=COALESCE(initial_name,name),name=?,auto_titled=TRUE,title_through_id=?,title_retry_at=0
-                        WHERE id=? AND name=? AND title_through_id=? AND history_revision=?
+                        WHERE id=? AND NOT manually_titled AND name=? AND title_through_id=? AND history_revision=?
                           AND (SELECT MAX(id) FROM device_message WHERE conversation_id=?)=?
                           AND NOT EXISTS (SELECT 1 FROM chat_agent_job WHERE conversation_id=? AND status IN ('PENDING','RUNNING'))
                           AND NOT EXISTS (SELECT 1 FROM chat_context_operation WHERE conversation_id=? AND status IN ('PENDING','RUNNING'))

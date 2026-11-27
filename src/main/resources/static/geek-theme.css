@@ -745,8 +745,7 @@ body.workspace-kv {
     background: #fff !important; border: 0 !important; border-right: 1px solid #eaede9 !important;
 }
 :is(.workspace-home,.workspace-kv) .lw-brand { display:flex; align-items:center; gap:11px; padding:0 9px; text-decoration:none; color:#1f2832 !important; }
-:is(.workspace-home,.workspace-kv) .lw-brand-mark { width:39px; height:39px; display:grid; place-items:center; color:#fff; background:#4669e8; border-radius:12px; box-shadow:0 5px 14px rgba(70,105,232,.2); }
-:is(.workspace-home,.workspace-kv) .lw-brand-mark svg { width:30px; height:30px; }
+:is(.workspace-home,.workspace-kv) .lw-brand-mark { display:block; width:39px; height:39px; }
 :is(.workspace-home,.workspace-kv) .lw-brand-text { display:flex; flex-direction:column; gap:1px; }
 :is(.workspace-home,.workspace-kv) .lw-brand-text strong { font-size:21px; line-height:1; letter-spacing:-1px; }
 :is(.workspace-home,.workspace-kv) .lw-brand-text strong span { color:#4669e8; }

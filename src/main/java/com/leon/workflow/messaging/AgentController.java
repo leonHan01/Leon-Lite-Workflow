@@ -32,6 +32,16 @@ public class AgentController {
         var user=access.user(request);
         return response(chat.conversations().stream().filter(room->access.canRead(user,room.id())).toList());
     }
+    public record Rename(String conversationId, String name) {}
+    @PostMapping("/api/conversations/rename")
+    public ResponseEntity<?> rename(@RequestBody Rename input, HttpServletRequest request) {
+        if (input.conversationId() == null || input.conversationId().isBlank())
+            throw DeviceMessageStore.failure(HttpStatus.BAD_REQUEST, "请选择要重命名的对话");
+        synchronized (store) {
+            String id = access.room(request, input.conversationId(), true);
+            return response(chat.displayConversation(store.renameConversation(id, input.name())));
+        }
+    }
     public record Group(String name,List<String> agentIds,List<String> usernames) {}
     @PostMapping("/api/conversations/groups") public ResponseEntity<?> group(@RequestBody Group input,HttpServletRequest request) {
         var user=access.user(request);

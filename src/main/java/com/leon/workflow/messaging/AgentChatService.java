@@ -12,13 +12,16 @@ public class AgentChatService {
     private static final Pattern MENTION=Pattern.compile("(?<![\\p{L}\\p{N}_])@([a-z][a-z0-9_-]{1,31})(?![\\p{L}\\p{N}_-])",Pattern.CASE_INSENSITIVE);
     public AgentChatService(DeviceMessageStore store,AgentRegistry agents) { this.store=store; this.agents=agents; }
     public List<DeviceMessageStore.Conversation> conversations() {
-        return store.conversations().stream().map(c -> {
-            if(c.kind().equals("direct")&&(c.id().equals("direct:"+c.agentId())||c.id().startsWith("dm:")) && !store.hasAutomaticTitle(c.id())) {
-                var agent=agents.get(c.agentId()); return new DeviceMessageStore.Conversation(c.id(),agent.name(),c.kind(),c.agentId(),c.agentIds(),c.ownerId());
-            }
-            if(ChatAccess.personalRoom(c.id())) return new DeviceMessageStore.Conversation(c.id(),c.name(),c.kind(),null,agents.summaries().stream().filter(AgentRegistry.Summary::enabled).map(AgentRegistry.Summary::id).toList(),c.ownerId());
-            return c;
-        }).toList();
+        synchronized (store) {
+            return store.conversations().stream().map(this::displayConversation).toList();
+        }
+    }
+    DeviceMessageStore.Conversation displayConversation(DeviceMessageStore.Conversation c) {
+        if(c.kind().equals("direct")&&(c.id().equals("direct:"+c.agentId())||c.id().startsWith("dm:")) && !store.usesStoredTitle(c.id())) {
+            var agent=agents.get(c.agentId()); return new DeviceMessageStore.Conversation(c.id(),agent.name(),c.kind(),c.agentId(),c.agentIds(),c.ownerId());
+        }
+        if(ChatAccess.personalRoom(c.id())) return new DeviceMessageStore.Conversation(c.id(),c.name(),c.kind(),null,agents.summaries().stream().filter(AgentRegistry.Summary::enabled).map(AgentRegistry.Summary::id).toList(),c.ownerId());
+        return c;
     }
     public DeviceMessageStore.Conversation group(String name,List<String> ids) {
         List<String> members=ids==null?List.of():ids.stream().map(DeviceMessageStore::uuid).distinct().toList();

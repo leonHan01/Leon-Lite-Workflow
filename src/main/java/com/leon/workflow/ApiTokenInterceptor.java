@@ -67,7 +67,7 @@ public class ApiTokenInterceptor implements HandlerInterceptor {
         if(type==ChatUserController.class)return name.equals("me")||name.equals("logout");
         if(type==AgentAvatarController.class)return name.equals("catalog")||name.equals("image");
         if(type==DevicePresenceController.class)return name.equals("heartbeat");
-        if(type==AgentController.class)return Set.of("agents","usage","conversations","group","members","addMembers","addAgents","direct","thread").contains(name);
+        if(type==AgentController.class)return Set.of("agents","usage","conversations","rename","group","members","addMembers","addAgents","direct","thread").contains(name);
         return false;
     }
 

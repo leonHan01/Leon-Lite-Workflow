@@ -88,15 +88,23 @@ class AgentChatIntegrationTest {
         titles.runOnce(now+300_000);verify(model,times(1)).complete(any(),anyString(),anyList());
     }
 
-    @Test void automaticTitlePreservesConcurrentRenameAndClear() throws Exception {
-        var a=agent("writer");var room=chat.createDirect(a.id(),UUID.randomUUID().toString(),"新对话");
+    @Test void manualRenameWinsOverInFlightAndFutureAutomaticTitles() throws Exception {
+        var a=agent("writer");String request=UUID.randomUUID().toString();var room=chat.createDirect(a.id(),request,"新对话");
         chat.send(send(room.id(),"讨论旅行",List.of()));jdbc.update("UPDATE chat_agent_job SET status='SUCCEEDED'");
         long now=System.currentTimeMillis();jdbc.update("UPDATE device_message SET created_at=?",now-300_000);
         when(model.complete(any(),anyString(),anyList())).thenAnswer(inv->{
-            jdbc.update("UPDATE chat_conversation SET name='手动改名',history_revision=history_revision+1 WHERE id=?",room.id());
+            // Saving the current title also protects it from an in-flight result.
+            store.renameConversation(room.id(),"新对话");
             return "旅行计划";
         });
-        titles.runOnce(now);assertEquals("手动改名",store.conversation(room.id()).name());
+        titles.runOnce(now);assertEquals("新对话",store.conversation(room.id()).name());
+        store.renameConversation(room.id(),"手动改名");
+        for (int i=0; i<10; i++) chat.send(send(room.id(),"继续讨论旅行 "+i,List.of()));
+        jdbc.update("UPDATE chat_agent_job SET status='SUCCEEDED'");
+        titles.runOnce(now+7_200_000);
+        assertEquals("手动改名",chat.createDirect(a.id(),request,"新对话").name());
+        assertEquals(0L,store.historyRevision(room.id()));
+        verify(model,times(1)).complete(any(),anyString(),anyList());
     }
     @Test void automaticTitleIgnoresEmptyRoomsAndRejectsInvalidModelResults() throws Exception {
         var a=agent("writer");var empty=chat.createDirect(a.id(),UUID.randomUUID().toString(),"新对话");

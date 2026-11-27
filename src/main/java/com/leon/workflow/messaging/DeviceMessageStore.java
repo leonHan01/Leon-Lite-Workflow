@@ -136,6 +136,7 @@ public class DeviceMessageStore {
         jdbc.execute("ALTER TABLE chat_conversation ADD COLUMN IF NOT EXISTS history_revision BIGINT DEFAULT 0 NOT NULL");
         jdbc.execute("ALTER TABLE chat_conversation ADD COLUMN IF NOT EXISTS initial_name VARCHAR(60)");
         jdbc.execute("ALTER TABLE chat_conversation ADD COLUMN IF NOT EXISTS auto_titled BOOLEAN DEFAULT FALSE NOT NULL");
+        jdbc.execute("ALTER TABLE chat_conversation ADD COLUMN IF NOT EXISTS manually_titled BOOLEAN DEFAULT FALSE NOT NULL");
         jdbc.execute("ALTER TABLE chat_conversation ADD COLUMN IF NOT EXISTS title_retry_at BIGINT DEFAULT 0 NOT NULL");
         jdbc.execute("ALTER TABLE chat_conversation ADD COLUMN IF NOT EXISTS title_through_id BIGINT DEFAULT 0 NOT NULL");
         jdbc.execute("ALTER TABLE chat_conversation ADD COLUMN IF NOT EXISTS last_clear_request_id VARCHAR(36) DEFAULT '' NOT NULL");
@@ -168,12 +169,25 @@ public class DeviceMessageStore {
         jdbc.execute("CREATE INDEX IF NOT EXISTS idx_chat_helper_outreach_due ON chat_helper_outreach(status,due_at)");
     }
     public synchronized List<Conversation> conversations() { return jdbc.query("SELECT * FROM chat_conversation ORDER BY CASE WHEN id='shared' THEN 0 ELSE 1 END,name,id",CONVERSATION); }
-    synchronized boolean hasAutomaticTitle(String id) {
-        return Boolean.TRUE.equals(jdbc.queryForObject("SELECT auto_titled FROM chat_conversation WHERE id=?",Boolean.class,id));
+    synchronized boolean usesStoredTitle(String id) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT auto_titled OR manually_titled FROM chat_conversation WHERE id=?", Boolean.class, id));
     }
     public synchronized Conversation conversation(String id) {
         var rows=jdbc.query("SELECT * FROM chat_conversation WHERE id=?",CONVERSATION,id);
         if(rows.isEmpty()) throw failure(HttpStatus.NOT_FOUND,"会话不存在"); return rows.getFirst();
+    }
+    synchronized Conversation renameConversation(String id, String name) {
+        String title = name == null ? "" : name.strip();
+        if (title.isBlank() || title.length() > 60 || title.codePoints().anyMatch(Character::isISOControl))
+            throw bad("对话名称应为 1–60 字且不能含控制字符");
+        int updated = jdbc.update("""
+            UPDATE chat_conversation
+            SET initial_name=COALESCE(initial_name, name), name=?, manually_titled=TRUE
+            WHERE id=?
+            """, title, id);
+        if (updated != 1) throw failure(HttpStatus.NOT_FOUND, "会话不存在");
+        return conversation(id);
     }
     public synchronized Conversation createGroup(String name,List<String> agentIds) {
         name=name==null?"":name.strip();

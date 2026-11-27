@@ -9,6 +9,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.context.WebApplicationContext;
 import tools.jackson.databind.ObjectMapper;
@@ -104,6 +105,47 @@ class ChatAccountIntegrationTest {
         mvc.perform(get("/api/device-messages").param("conversationId",group).header("Authorization",eve.authorization())).andExpect(status().isOk());
         mvc.perform(post("/api/conversations/account/logout").header("Authorization",eve.authorization())).andExpect(status().isOk());
         mvc.perform(get("/api/conversations").header("Authorization",eve.authorization())).andExpect(status().isUnauthorized());
+    }
+
+    @Test void onlyOwnersCanRenameConversationsAndMembersSeeTheNewName() throws Exception {
+        var owner = login("RenameOwner");
+        var member = login("RenameMember");
+        var outsider = login("RenameVisitor");
+        var agent = groupAgent("rename");
+        String group = room(owner, "/api/conversations/groups", Map.of("name","原群名称","usernames",List.of("RenameMember")));
+        String direct = room(owner, "/api/conversations/direct/"+agent.id(), Map.of());
+        long message = send(member, message(group,"保留的群聊记录",List.of()), "RenameMember");
+        mvc.perform(rename(group, "未认证")).andExpect(status().isUnauthorized());
+        for (var denied : List.of(member, outsider))
+            mvc.perform(rename(group, "不能重命名").header("Authorization",denied.authorization())).andExpect(status().isNotFound());
+        for (var invalid : List.of("  ", "两行\n名称", "字".repeat(61)))
+            mvc.perform(rename(group, invalid).header("Authorization",owner.authorization())).andExpect(status().isBadRequest());
+        mvc.perform(rename(group, "  新群名称  ").header("Authorization",owner.authorization()))
+            .andExpect(status().isOk()).andExpect(header().string("Cache-Control","no-store"))
+            .andExpect(jsonPath("$.id").value(group)).andExpect(jsonPath("$.name").value("新群名称"));
+        mvc.perform(rename(direct, "私聊新名称").header("Authorization",owner.authorization())).andExpect(status().isOk());
+        mvc.perform(rename("shared", "我的设备").header("Authorization",owner.authorization()))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.id").value("home:"+owner.id()));
+        assertEquals("私聊新名称", conversationNames(owner).get(direct));
+        var memberRooms = conversationNames(member);
+        assertEquals("新群名称", memberRooms.get(group));
+        assertEquals("设备群聊", memberRooms.get("home:"+member.id()));
+        mvc.perform(get("/api/device-messages").param("conversationId",group).header("Authorization",member.authorization()))
+            .andExpect(jsonPath("$.messages[0].id").value(message)).andExpect(jsonPath("$.historyRevision").value(0));
+    }
+
+    private MockHttpServletRequestBuilder rename(String id, String name) {
+        return post("/api/conversations/rename").contentType("application/json")
+            .content(json.writeValueAsString(Map.of("conversationId",id,"name",name)));
+    }
+
+    private Map<String,String> conversationNames(Account account) throws Exception {
+        var result = mvc.perform(get("/api/conversations").header("Authorization",account.authorization()))
+            .andExpect(status().isOk()).andReturn().getResponse();
+        var names = new HashMap<String,String>();
+        for (var conversation : json.readTree(result.getContentAsByteArray()))
+            names.put(conversation.path("id").asText(), conversation.path("name").asText());
+        return names;
     }
 
     private AgentRegistry.Agent groupAgent(String label){
