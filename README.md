@@ -1,52 +1,91 @@
 # Leon Lite Workflow
 
-Java 21 / Spring Boot 的本机 Alfred 工作流服务。兼容原项目的 `/alfred/query` 协议，并继续提供 `/hello`。默认只监听 `127.0.0.1:8080`。
+[English](README.en.md)
 
-管理首页：<http://127.0.0.1:8080/>
+Leon Lite Workflow 是为 Alfred、Leon Tools Pro 和 Leon App 提供共用后端的可自托管服务。Web 工作台可管理资料、编排和发布工作流，并查看每次运行的状态和节点日志。相关项目 Leon Workflow 提供本地工作流与开发工具台。
 
-## LeonBook 归档标题
+[快速开始](#快速开始) · [功能](#功能) · [RSS 日报示例](#自动化示例) · [技术架构](#技术架构) · [配置与运维](#配置与运维)
 
-导出时由所选 Agent 在同一次归档总结调用中生成文章标题和摘要，综合此前摘要、已确认事实与本批历史。长对话使用最后一批结果中的完整主题标题；不再使用会话名、分支名与日期时间拼接标题。标题与摘要在同一事务中保存，重复请求复用已生成结果，不额外发起标题模型调用。
+## 快速开始
 
-标题必须是有效的单行文本，最多 80 个字符。缺失、空白、过长、多行、通用占位标题或重新带入已撤销信息时，归档失败并保留原对话；不会用旧会话名冒充 AI 标题，也不会重置上下文。普通记忆压缩仍兼容原有摘要格式。
-
-现有 Mac 客户端已直接使用归档接口的 `title` 保存 LeonBook 草稿及完整原文附件，无需更换客户端。此功能需升级服务端后生效；当前仅完成本地实现，尚未部署或重启正式服务。
-
-## App 对话分支
-
-macOS / Android / iOS 的消息菜单支持「从这里创建分支」。`POST /api/conversations/{id}/branches` 接收 `messageId`、UUID `requestId` 和 `name`，复制源会话从开头至该消息（含）的历史，返回独立会话。保留 Agent、消息作者与时间，深拷贝图片和文档，重映射回复 / 引用关联。群聊分支仅创建者可见，可再邀请成员。源会话和草稿保留。
-
-沿用聊天账号与会话权限、Bearer / 管理 Cookie 来源校验；复制事务按账号和请求标识去重，不重放 Agent 任务、不调用模型。最多 10,000 条消息、128 MB 附件。分支独立重建上下文，不复制可能带有分支点之后内容的摘要、事实和请求快照。新增 `chat_conversation_branch` 记录来源和幂等请求，旧数据保留。客户端兼容补丁在 `LeonApp/ios/ServerCompatibility/conversation-branches.patch`。本次仅本地构建测试，未部署或重启正式服务。
-
-## 功能
-
-在 Alfred 中可以直接使用：
-
-- **帮助**：`help` 或 `帮助` 列出全部能力。后面可以加关键词，例如 `help 日历`、`help 翻译`。回车复制示例命令
-- **快捷项、书签、配置**：`kv-` 配置和 `WebUrlDiamond` 书签
-- **Leon Tools Pro 链接**：按网页或工具名称、网址、所属集合、分组、备注检索；多个关键词可组合。结果来自当前库，修改或删除后立即生效，回车打开网页
-- **时间**：`now`、`time`、`时间`、`shijian` 返回当前北京时间及秒级、毫秒级时间戳，后面可以接 `+1d`、`-30m` 这类偏移。输入 10 位秒级或 13 位毫秒级 Unix 时间戳（例如 `1735689600`），显示并可复制北京时间与 UTC，精确到秒。输入北京时间 `2026-10-31 12:00:00`，可复制对应的秒级和毫秒级时间戳
-- **日历**：`cal` 或 `日历` 输出当月日历，一行一周，周一开头。今天用方括号标出，最后一行是今天的日期
-- **Markdown**：`md` 列出常用语法和原有 callout，`md 表格`、`md 代码`、`md 链接` 按关键词筛选，回车复制
-- **计算器、代码片段、LeetCode 名称**
-- **JSON 记录**：输入 JSON 会保存记录并返回 `/json-record.html?id=...`，可在 `/json-record-search.html` 搜索
-- **有道翻译**：`fy 内容`。需要 `YOUDAO_APP_KEY` 和 `YOUDAO_APP_SECRET`
-- **重启**：`restart` 只提示改用服务管理工具。原服务器专用脚本未迁移
-
-Leon Tools Pro 插件继续走原来的 `/api`。见 [插件接口](#插件接口)。
-
-## 本地启动
-
-需要 Java 21 和 Maven。macOS 上选择 JDK 后启动：
+需要 **JDK 21** 和 **Maven**。在仓库根目录确认 Maven 使用 Java 21，再启动服务。macOS 可以先用 `export JAVA_HOME=$(/usr/libexec/java_home -v 21)` 选择 JDK。
 
 ```bash
-export JAVA_HOME=$(/usr/libexec/java_home -v 21)
+mvn -version
 mvn spring-boot:run
 ```
 
-H2 把数据写到运行目录下的 `data/leon-workflow.mv.db`。该目录不提交 Git。首次启动自动建表。更换工作目录前先确认文件位置；停止服务后备份整个 `data` 目录。
+服务启动后，打开 [Web 工作台](http://127.0.0.1:8080/)，或在另一个终端验证健康检查和 Alfred 查询。
 
-`LEON_DB_PASSWORD` 设置的是数据库用户密码，文件本身不加密。
+```bash
+curl --noproxy 127.0.0.1 -fsS http://127.0.0.1:8080/hello
+curl --noproxy 127.0.0.1 -fsS http://127.0.0.1:8080/alfred/query \
+  -H 'Content-Type: application/json' \
+  -d '{"param":"1+2"}'
+```
+
+预期分别返回 `你好` 和包含计算结果 `3` 的 Alfred JSON 数组。
+
+**运行第一个工作流**
+
+1. 打开「工作流编排」，点击「新建工作流」，取名 `Quickstart`。保留默认的「开始 → 结束」连线。
+2. 点击「发布版本」，在「手动运行 / 调试输入」填入下方 JSON，再点击「运行 v1」。
+3. 打开「运行实例」，找到这次成功运行，查看结束节点。输出应和输入相同。
+
+```json
+{"items":[{"json":{"message":"hello"}}]}
+```
+
+这个示例只用内置节点，无需模型、机器人凭据或脚本沙箱。默认开发实例仅监听 `127.0.0.1:8080`，在未配置认证时用于可信本机。首次启动会建表，H2 默认写入 `data/leon-workflow.mv.db`。更换运行目录前确认数据位置，停服后可备份整个 `data` 目录。配置远程访问时参见[认证与公网](#认证与公网)。
+
+## 功能
+
+| 入口 | 用途 |
+| --- | --- |
+| Alfred | 用键盘搜索书签和快捷项，计算、翻译、换算时间戳或保存 JSON。输入 `help` 可查看命令。 |
+| Leon Tools Pro | 在 Chrome 扩展中收藏网页、记录便签和待办，再在 Web 中集中整理。 |
+| Web 工作台 | 在画布中组合 HTTP、RSS、GitHub Trending、AI 总结、JavaScript、Groovy 和条件分支。发布后手动或定时运行，再查看实例详情。 |
+| Leon App | 在 macOS、Android 或 iOS 与 OpenAI 或 DeepSeek Agent 私聊、群聊。长对话支持上下文压缩和历史检索，Mac 端可归档到 LeonBook。 |
+| 声屿 | 在 Web 上传音频和管理在线歌单。客户端同步歌单并能离线播放已缓存的歌曲。 |
+
+独立的 [Android 管理客户端](android/README.md)在手机上提供同一 Web 工作台的管理入口。
+
+## 自动化示例
+
+**RSS 科技资讯日报**在配置模型、飞书机器人并启用定时后，于每天 09:00（北京时间）执行当前已发布版本。RSS 节点读取 7 个订阅源并筛出新条目，AI 节点精选最多 10 篇并为其余条目生成速览，飞书节点发送带原文链接的卡片。
+
+```mermaid
+flowchart LR
+    Start["开始 · 北京时间 09:00"] --> RSS["RSS 采集与去重"]
+    RSS --> AI["AI 精选与总结"]
+    AI --> Send["飞书卡片"]
+    Send --> End["结束 · 成功后确认去重"]
+```
+
+没有新增条目时，AI 节点跳过模型调用，飞书节点跳过发送。遇到失败可在「运行实例」按节点查看错误和日志。查看[示例流程定义](scripts/create_rss_workflow.py)和[工作流配置参考](#工作流编排一期)。
+
+## 技术架构
+
+```mermaid
+flowchart TB
+    Clients["Alfred · Leon Tools Pro · Web 工作台 · Leon App"] --> Proxy["生产入口 · HTTPS 代理"]
+    Proxy --> Server["Spring Boot · Java 21"]
+    Server --> Data[("H2 与本地音频文件")]
+    Server -->|工作流脚本| Sandbox["隔离 JVM · GraalJS / Groovy"]
+    Server -->|工作流与 Agent| Models["OpenAI / DeepSeek"]
+    Server -->|工作流通知| Channels["飞书 / QQ / SMTP"]
+```
+
+- **接入与鉴权**　Alfred 和插件使用 Bearer 令牌。启用认证后，工作流管理使用安全 Cookie 会话，写请求还会校验来源。
+- **执行与集成**　工作流以有向无环图执行，节点通过 JSON 条目数组传递数据。定时器运行最新发布版，同一流程有实例排队或运行时跳过本次触发，停机错过的触发点跳过。工作流凭据以 AES-256-GCM 加密保存。
+- **存储与运维**　H2 保存业务数据、会话、工作流版本和运行记录。生产服务在阿里云 ECS 由 systemd 管理，发布流程包含校验、备份、重启和验收，验收失败时回滚程序。
+
+## 配置与运维
+
+- [环境变量](#环境变量)和[公网访问](#认证与公网)
+- [Alfred 协议](#alfred)、[插件接口](#插件接口)和[数据迁移](#数据迁移)
+- [管理入口、监控和部署](#管理页面)、[工作流编排](#工作流编排一期)和[回归检查](#检查)
+- [Agent 与消息客户端](#leon-消息客户端与-agent-工作台)和[声屿曲库](#声屿在线歌曲)
 
 ## 环境变量
 
@@ -55,13 +94,15 @@ H2 把数据写到运行目录下的 `data/leon-workflow.mv.db`。该目录不�
 | 变量 | 作用 |
 | --- | --- |
 | `LEON_DB_URL` | 覆盖 JDBC 地址，例如 `jdbc:h2:file:/绝对路径/leon-workflow` |
-| `LEON_DB_PASSWORD` | H2 用户 `sa` 的密码 |
+| `LEON_DB_PASSWORD` | H2 用户 `sa` 的登录密码。文件加密需另行配置。 |
 | `LEON_ALFRED_API_KEY` | 设置后校验 Alfred 请求签名；留空则跳过 |
 | `LEON_ALFRED_ICONS_DIR` | Alfred workflow 的 `icons` 目录。默认是当前用户的 `~/Library/Application Support/Alfred/Alfred.alfredpreferences/workflows/leon_workflow/icons` |
 | `YOUDAO_APP_KEY` / `YOUDAO_APP_SECRET` | 有道翻译。真实凭据不要写入源码 |
 | `LEON_AUTH_TOKEN_SHA256` | 访问令牌 UTF-8 字节的 SHA-256 十六进制摘要。设置合法摘要后即启用令牌认证 |
 | `LEON_AUTH_REQUIRED` | 设为 `true` 时，摘要缺失或格式错误会拒绝启动 |
 | `LEON_AUTH_ADMIN_ORIGIN` | 管理页写请求必须匹配的准确 `Origin` |
+| `LEON_WORKFLOW_CREDENTIAL_KEY` | 工作流凭据加密主密钥，Base64 编码的 32 字节随机值 |
+| `LEON_WORKFLOW_SCHEDULING_ENABLED` | 工作流定时调度开关，默认 `true` |
 | `LEON_MUSIC_DIRECTORY` | 歌曲音频目录，默认 `./data/music`。正式部署应设为 `/var/lib/leon-lite-workflow/music` 并给予服务用户读写权限 |
 | `LEON_PLUGIN_DIGEST_SCHEDULING_ENABLED` | `true` 时启用定时统计和日结，默认 `false` |
 | `PLAYWRIGHT_MODULE_PATH` / `CHROME_PATH` | 浏览器回归测试使用的本机依赖 |
@@ -69,6 +110,22 @@ H2 把数据写到运行目录下的 `data/leon-workflow.mv.db`。该目录不�
 正式环境的有道密钥放在 `/etc/leon-lite-workflow-youdao.env`（root 所有，权限 `0600`），由 systemd 的 `97-youdao.conf` 加载。升级时保留该文件。检查时只确认变量已经设置，不要输出文件内容或进程的完整环境。
 
 ## Alfred
+
+### 常用命令
+
+| 命令 | 行为 |
+| --- | --- |
+| `help` / `帮助` | 列出能力，支持 `help 日历` 等关键词。回车复制示例命令。 |
+| `kv-` 配置与 `WebUrlDiamond` | 管理快捷项和书签。Leon Tools Pro 链接支持按名称、网址、集合、分组及备注组合检索，回车打开。 |
+| `now` / `time` / `时间` / `shijian` | 显示北京时间和秒、毫秒时间戳，支持 `+1d`、`-30m`。输入 10 位或 13 位时间戳可换算北京时间与 UTC，输入北京时间可生成时间戳。 |
+| `cal` / `日历` | 输出当月日历，从周一开始每周一行，并标记今天。 |
+| `md` | 查询 Markdown 语法或 callout，支持关键词，回车复制。 |
+| 计算式、代码片段、LeetCode 名称 | 直接输入对应内容。 |
+| JSON | 保存记录并返回 `/json-record.html?id=...`，可以在 `/json-record-search.html` 检索。 |
+| `fy 内容` | 调用有道翻译，需要配置 `YOUDAO_APP_KEY` 与 `YOUDAO_APP_SECRET`。 |
+| `restart` | 显示服务管理提示。 |
+
+### 查询协议
 
 `POST /alfred/query` 的请求体：
 
@@ -191,7 +248,7 @@ curl -X POST http://127.0.0.1:8080/api/diamond -H 'Content-Type: application/jso
 
 公网必须使用 HTTPS，并在反向代理上限制公开路径。令牌、摘要和敏感配置不要写入日志或版本库。
 
-HTTPS 代理通过内部 `/auth/check` 校验管理页面和静态资源的会话，只公开登录和退出接口。管理接口同时接受 Cookie 和 Bearer。Cookie 以及兼容的 Basic 写请求，必须来自 `LEON_AUTH_ADMIN_ORIGIN` 指定的准确来源，并携带 `X-Requested-With: XMLHttpRequest`。公网 Cookie 只通过 HTTPS 发送。页面返回 `Cache-Control: no-store`。浏览器缓存不是登录凭证。
+HTTPS 代理通过内部 `/auth/check` 校验管理页面和静态资源的会话。启用认证后，工作流、Agent 管理和监控页一键部署要求管理会话。兼容接口按自身规则接受 Bearer 或 Cookie。Cookie 以及兼容的 Basic 写请求必须来自 `LEON_AUTH_ADMIN_ORIGIN` 指定的准确来源，并携带 `X-Requested-With: XMLHttpRequest`。管理会话 Cookie 通过 HTTPS 发送，管理页面返回 `Cache-Control: no-store`。
 
 插件接口默认允许 Chrome 扩展和本机网页跨域访问，包括读取插件设置中的敏感值。请只在可信的本机环境使用。
 
@@ -358,6 +415,12 @@ OpenAI 默认模型为 `gpt-6.1-sol`，在统一模型配置的「模型名称�
 
 ## Leon 消息客户端与 Agent 工作台
 
+### App 对话分支
+
+macOS / Android / iOS 的消息菜单支持「从这里创建分支」。`POST /api/conversations/{id}/branches` 接收 `messageId`、UUID `requestId` 和 `name`，复制源会话从开头至该消息（含）的历史，返回独立会话。保留 Agent、消息作者与时间，深拷贝图片和文档，重映射回复 / 引用关联。群聊分支仅创建者可见，可再邀请成员。源会话和草稿保留。
+
+沿用聊天账号与会话权限、Bearer / 管理 Cookie 来源校验；复制事务按账号和请求标识去重，不重放 Agent 任务、不调用模型。最多 10,000 条消息、128 MB 附件。分支独立重建上下文，不复制可能带有分支点之后内容的摘要、事实和请求快照。新增 `chat_conversation_branch` 记录来源和幂等请求，旧数据保留。客户端兼容补丁在 `LeonApp/ios/ServerCompatibility/conversation-branches.patch`。本次仅本地构建测试，未部署或重启正式服务。
+
 ### Agent 联网搜索（2026-11-21，本地实现，待部署）
 
 Agent 管理页新增「允许此 Agent 联网搜索」，默认关闭，旧请求省略字段时保留现值。仅支持具有 Responses `web_search` 权限的 OpenAI 对话模型，复用该 Agent 凭据，可与绘图同时开启。交互回复根据问题按需调用实时搜索，提示词携带北京时间日期，要求最新资料优先查询官方或原始来源；普通聊天可以直接回答。摘要压缩、会话标题、归档总结继续使用文字接口，不开启工具。
@@ -480,6 +543,14 @@ Mac 聊天输入 `/` 呼出命令菜单，支持方向键、Enter/Tab 和 Esc。
 Mac 经已安装的 `leonbook` CLI 通信：先固定 `workspace.info` 返回的 root/user，调用 `media.upload` 复制图片和完整原文附件，再 `articles.create` 保存草稿并 `articles.get` 读回校验。文章先展示 AI 总结，再展示原始对话；内容过长时原文完整保存在 Markdown 附件中。文章 slug 和归档标识固定，重复导出不覆盖用户改动或重复创建文章；不直接写 LeonBook 内部数据库或文章文件。
 
 仅在本机确认文章保存后调用 `POST /api/conversations/context/archive/{id}/finish` 开启全新上下文。服务器比较冻结边界与当前话题，若期间收到新消息或已切换话题，则保留文章并拒绝重置，防止丢失未归档上下文。归档失败不重置，历史聊天保留。CLI 集成验收只使用临时资料库，不创建真实测试文章。归档与普通对话、主动压缩均沿用已有认证、OpenAI Mac 执行路径及模型用量统计。
+
+### LeonBook 归档标题
+
+导出时由所选 Agent 在同一次归档总结调用中生成文章标题和摘要，综合此前摘要、已确认事实与本批历史。长对话使用最后一批结果中的完整主题标题；不再使用会话名、分支名与日期时间拼接标题。标题与摘要在同一事务中保存，重复请求复用已生成结果，不额外发起标题模型调用。
+
+标题必须是有效的单行文本，最多 80 个字符。缺失、空白、过长、多行、通用占位标题或重新带入已撤销信息时，归档失败并保留原对话；不会用旧会话名冒充 AI 标题，也不会重置上下文。普通记忆压缩仍兼容原有摘要格式。
+
+现有 Mac 客户端已直接使用归档接口的 `title` 保存 LeonBook 草稿及完整原文附件，无需更换客户端。此功能需升级服务端后生效；当前仅完成本地实现，尚未部署或重启正式服务。
 
 ### OpenAI 执行端安装
 
